@@ -1,0 +1,17 @@
+apiVersion: v2
+name: novastor
+description: NovaStor - Unified Kubernetes-native storage system
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - storage
+  - csi
+  - block
+  - file
+  - object
+  - s3
+  - nfs
+home: https://github.com/piwi3910/novastor
+sources:
+  - https://github.com/piwi3910/novastor

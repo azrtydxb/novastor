@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "novastor.fullname" . }}-csi-node
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: csi-node
+spec:
+  selector:
+    matchLabels:
+      {{- include "novastor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: csi-node
+  template:
+    metadata:
+      labels:
+        {{- include "novastor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: csi-node
+    spec:
+      serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      containers:
+        - name: csi-plugin
+          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.csi.node.image.repository }}:{{ include "novastor.imageTag" . }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          args:
+            - --endpoint=unix:///csi/csi.sock
+            - --node-id=$(NODE_NAME)
+            - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            - name: dev
+              mountPath: /dev
+          resources:
+            {{- toYaml .Values.csi.node.resources | nindent 12 }}
+        - name: node-driver-registrar
+          image: {{ .Values.csi.registrar.image }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path=/var/lib/kubelet/plugins/novastor.csi.novastor.io/csi.sock
+            - --v=5
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          resources:
+            {{- toYaml .Values.csi.registrar.resources | nindent 12 }}
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/novastor.csi.novastor.io
+            type: DirectoryOrCreate
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: dev
+          hostPath:
+            path: /dev

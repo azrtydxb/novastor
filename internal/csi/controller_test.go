@@ -138,6 +138,40 @@ func TestCreateVolumeDefaultSize(t *testing.T) {
 	}
 }
 
+func TestCreateVolume_RWX(t *testing.T) {
+	cs, _ := setupController()
+	req := &csi.CreateVolumeRequest{
+		Name: "rwx-vol",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 4 * 1024 * 1024,
+		},
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+				},
+			},
+		},
+	}
+
+	resp, err := cs.CreateVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume RWX failed: %v", err)
+	}
+
+	vol := resp.GetVolume()
+	volCtx := vol.GetVolumeContext()
+	if volCtx["accessMode"] != "RWX" {
+		t.Errorf("expected accessMode RWX in volume context, got %q", volCtx["accessMode"])
+	}
+	if volCtx["nfsServer"] == "" {
+		t.Error("expected nfsServer in volume context for RWX volume")
+	}
+	if volCtx["nfsShare"] == "" {
+		t.Error("expected nfsShare in volume context for RWX volume")
+	}
+}
+
 func TestCreateVolumeNoNodes(t *testing.T) {
 	store := newMockMetadataStore()
 	placer := &mockPlacer{nodes: nil}
@@ -235,6 +269,35 @@ func TestValidateVolumeCapabilities_RWO(t *testing.T) {
 	}
 }
 
+func TestValidateVolumeCapabilities_RWX(t *testing.T) {
+	cs, _ := setupController()
+
+	createResp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		Name:          "validate-rwx",
+		CapacityRange: &csi.CapacityRange{RequiredBytes: 4 * 1024 * 1024},
+	})
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
+
+	resp, err := cs.ValidateVolumeCapabilities(context.Background(), &csi.ValidateVolumeCapabilitiesRequest{
+		VolumeId: createResp.GetVolume().GetVolumeId(),
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ValidateVolumeCapabilities failed: %v", err)
+	}
+	if resp.GetConfirmed() == nil {
+		t.Error("expected confirmed capabilities for RWX")
+	}
+}
+
 func TestValidateVolumeCapabilities_Unsupported(t *testing.T) {
 	cs, _ := setupController()
 
@@ -251,7 +314,7 @@ func TestValidateVolumeCapabilities_Unsupported(t *testing.T) {
 		VolumeCapabilities: []*csi.VolumeCapability{
 			{
 				AccessMode: &csi.VolumeCapability_AccessMode{
-					Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+					Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
 				},
 			},
 		},

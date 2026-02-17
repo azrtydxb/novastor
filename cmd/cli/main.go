@@ -1,17 +1,13 @@
 package main
 
 import (
-	"fmt"
 	"os"
-)
 
-var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
+	"github.com/piwi3910/novastor/internal/cli"
 )
 
 func main() {
-	fmt.Fprintf(os.Stderr, "novactl %s (commit: %s, built: %s)\n", version, commit, date)
-	fmt.Fprintln(os.Stderr, "CLI not yet implemented")
+	if err := cli.Execute(); err != nil {
+		os.Exit(1)
+	}
 }

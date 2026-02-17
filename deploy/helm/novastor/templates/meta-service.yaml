@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "novastor.fullname" . }}-meta-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: meta
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: grpc
+      port: 7000
+      targetPort: grpc
+      protocol: TCP
+  selector:
+    {{- include "novastor.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: meta
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "novastor.fullname" . }}-meta
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: meta
+spec:
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: 7000
+      targetPort: grpc
+      protocol: TCP
+  selector:
+    {{- include "novastor.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: meta

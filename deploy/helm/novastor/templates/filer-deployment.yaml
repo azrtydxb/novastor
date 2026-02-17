@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "novastor.fullname" . }}-filer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: filer
+spec:
+  replicas: {{ .Values.filer.replicas }}
+  selector:
+    matchLabels:
+      {{- include "novastor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: filer
+  template:
+    metadata:
+      labels:
+        {{- include "novastor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: filer
+    spec:
+      serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      containers:
+        - name: filer
+          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.filer.image.repository }}:{{ include "novastor.imageTag" . }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          args:
+            - --listen=:2049
+            - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+          ports:
+            - name: nfs
+              containerPort: 2049
+              protocol: TCP
+          livenessProbe:
+            tcpSocket:
+              port: nfs
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket:
+              port: nfs
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.filer.resources | nindent 12 }}
+      {{- with .Values.filer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.filer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.filer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

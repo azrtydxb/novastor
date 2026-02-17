@@ -59,11 +59,12 @@ type ErasureCodingSpec struct {
 }
 
 type StoragePoolStatus struct {
-	Phase         string             `json:"phase,omitempty"`
-	NodeCount     int                `json:"nodeCount,omitempty"`
-	TotalCapacity string             `json:"totalCapacity,omitempty"`
-	UsedCapacity  string             `json:"usedCapacity,omitempty"`
-	Conditions    []metav1.Condition `json:"conditions,omitempty"`
+	Phase          string             `json:"phase,omitempty"`
+	NodeCount      int                `json:"nodeCount,omitempty"`
+	TotalCapacity  string             `json:"totalCapacity,omitempty"`
+	UsedCapacity   string             `json:"usedCapacity,omitempty"`
+	DataProtection string             `json:"dataProtection,omitempty"`
+	Conditions     []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -97,6 +98,8 @@ type BlockVolumeSpec struct {
 
 type BlockVolumeStatus struct {
 	Phase      string             `json:"phase,omitempty"`
+	Pool       string             `json:"pool,omitempty"`
+	AccessMode string             `json:"accessMode,omitempty"`
 	NodeID     string             `json:"nodeID,omitempty"`
 	ChunkCount int                `json:"chunkCount,omitempty"`
 	Conditions []metav1.Condition `json:"conditions,omitempty"`

@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "novastor.fullname" . }}-csi-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: csi-controller
+spec:
+  replicas: {{ .Values.csi.controller.replicas }}
+  selector:
+    matchLabels:
+      {{- include "novastor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: csi-controller
+  template:
+    metadata:
+      labels:
+        {{- include "novastor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: csi-controller
+    spec:
+      serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      containers:
+        - name: csi-plugin
+          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.csi.controller.image.repository }}:{{ include "novastor.imageTag" . }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          args:
+            - --endpoint=unix:///csi/csi.sock
+            - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources:
+            {{- toYaml .Values.csi.controller.resources | nindent 12 }}
+        - name: csi-provisioner
+          image: {{ .Values.csi.provisioner.image }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --v=5
+            - --feature-gates=Topology=true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources:
+            {{- toYaml .Values.csi.provisioner.resources | nindent 12 }}
+        - name: csi-snapshotter
+          image: {{ .Values.csi.snapshotter.image }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --v=5
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources:
+            {{- toYaml .Values.csi.snapshotter.resources | nindent 12 }}
+        - name: csi-resizer
+          image: {{ .Values.csi.resizer.image }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --v=5
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources:
+            {{- toYaml .Values.csi.resizer.resources | nindent 12 }}
+      volumes:
+        - name: socket-dir
+          emptyDir: {}

@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "novastor.fullname" . }}-meta
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: meta
+spec:
+  serviceName: {{ include "novastor.fullname" . }}-meta-headless
+  replicas: {{ .Values.meta.replicas }}
+  selector:
+    matchLabels:
+      {{- include "novastor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: meta
+  template:
+    metadata:
+      labels:
+        {{- include "novastor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: meta
+    spec:
+      serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      containers:
+        - name: meta
+          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.meta.image.repository }}:{{ include "novastor.imageTag" . }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          args:
+            - --node-id=$(POD_NAME)
+            - --data-dir=/data
+            - --bind-addr=0.0.0.0:7000
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - name: grpc
+              containerPort: 7000
+              protocol: TCP
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.meta.resources | nindent 12 }}
+      {{- with .Values.meta.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.meta.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.meta.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.meta.storageClassName }}
+        storageClassName: {{ .Values.meta.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.meta.storage }}

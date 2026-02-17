@@ -47,6 +47,19 @@ func NewControllerServer(meta MetadataStore, placer PlacementEngine) *Controller
 	}
 }
 
+// hasRWXCapability checks whether any of the volume capabilities request
+// MULTI_NODE_MULTI_WRITER (ReadWriteMany) access.
+func hasRWXCapability(caps []*csi.VolumeCapability) bool {
+	for _, cap := range caps {
+		if am := cap.GetAccessMode(); am != nil {
+			if am.GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // CreateVolume provisions a new volume by computing chunks and persisting metadata.
 func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	if req.GetName() == "" {
@@ -94,11 +107,20 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		},
 	}
 
+	// Set volume context for RWX (NFS-backed) volumes.
+	volContext := map[string]string{}
+	if hasRWXCapability(req.GetVolumeCapabilities()) {
+		volContext["nfsServer"] = nodeIDs[0]
+		volContext["nfsShare"] = fmt.Sprintf("/exports/%s", volumeID)
+		volContext["accessMode"] = "RWX"
+	}
+
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
 			VolumeId:           volumeID,
 			CapacityBytes:      int64(requiredBytes),
 			AccessibleTopology: []*csi.Topology{topology},
+			VolumeContext:      volContext,
 		},
 	}, nil
 }
@@ -144,7 +166,9 @@ func (cs *ControllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 		}
 		switch accessMode.GetMode() {
 		case csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER:
-			// Supported — ReadWriteOnce.
+			// Supported -- ReadWriteOnce.
+		case csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER:
+			// Supported -- ReadWriteMany via NFS.
 		default:
 			return &csi.ValidateVolumeCapabilitiesResponse{
 				Message: fmt.Sprintf("unsupported access mode: %v", accessMode.GetMode()),

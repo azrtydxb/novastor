@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "novastor.fullname" . }}-s3gw
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: s3gw
+spec:
+  replicas: {{ .Values.s3gw.replicas }}
+  selector:
+    matchLabels:
+      {{- include "novastor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: s3gw
+  template:
+    metadata:
+      labels:
+        {{- include "novastor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: s3gw
+    spec:
+      serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      containers:
+        - name: s3gw
+          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.s3gw.image.repository }}:{{ include "novastor.imageTag" . }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          args:
+            - --listen=:9000
+            - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+          env:
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "novastor.fullname" . }}-s3gw
+                  key: access-key
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "novastor.fullname" . }}-s3gw
+                  key: secret-key
+          ports:
+            - name: s3
+              containerPort: 9000
+              protocol: TCP
+          livenessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.s3gw.resources | nindent 12 }}
+      {{- with .Values.s3gw.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.s3gw.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.s3gw.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

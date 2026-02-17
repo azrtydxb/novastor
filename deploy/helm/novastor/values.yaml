@@ -1,3 +1,153 @@
+global:
+  image:
+    registry: ghcr.io/piwi3910
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+namespace:
+  create: false
+  name: ""
+
+controller:
+  replicas: 1
+  image:
+    repository: novastor-controller
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  leaderElect: true
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+meta:
+  replicas: 3
+  image:
+    repository: novastor-meta
+  storage: 10Gi
+  storageClassName: ""
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+agent:
+  image:
+    repository: novastor-agent
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+
+csi:
+  controller:
+    replicas: 1
+    image:
+      repository: novastor-csi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+  node:
+    image:
+      repository: novastor-csi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+  provisioner:
+    image: registry.k8s.io/sig-storage/csi-provisioner:v5.0.1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+  snapshotter:
+    image: registry.k8s.io/sig-storage/csi-snapshotter:v8.0.1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+  resizer:
+    image: registry.k8s.io/sig-storage/csi-resizer:v1.11.1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+  registrar:
+    image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.11.1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+
+s3gw:
+  replicas: 2
+  image:
+    repository: novastor-s3gw
+  accessKey: ""
+  secretKey: ""
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+filer:
+  replicas: 1
+  image:
+    repository: novastor-filer
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 storageClass:
   name: novastor-block
   isDefault: false
@@ -5,3 +155,11 @@ storageClass:
   dataProtection: replication
   reclaimPolicy: Delete
   volumeBindingMode: WaitForFirstConsumer
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "novastor.fullname" . }}-s3gw
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: s3gw
+spec:
+  type: ClusterIP
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: s3
+      protocol: TCP
+  selector:
+    {{- include "novastor.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: s3gw

@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package metadata;
+
+option go_package = "github.com/piwi3910/novastor/api/proto/metadata";
+
+// MetadataService provides gRPC access to the NovaStor metadata store.
+// It uses a generic request/response envelope that carries JSON-encoded
+// domain objects as opaque payloads. This avoids duplicating the rich Go
+// type definitions in protobuf and keeps the wire protocol simple.
+service MetadataService {
+  // Execute performs a single metadata operation identified by the
+  // operation field in MetadataRequest. The payload carries
+  // JSON-encoded arguments; the response payload carries the
+  // JSON-encoded result.
+  rpc Execute(MetadataRequest) returns (MetadataResponse);
+}
+
+// MetadataRequest is the envelope sent by clients for every metadata
+// operation.
+message MetadataRequest {
+  // operation is the method name, e.g. "PutVolumeMeta",
+  // "GetObjectMeta", "ListDirectory", etc.
+  string operation = 1;
+
+  // payload is the JSON-encoded argument(s) for the operation.
+  bytes payload = 2;
+}
+
+// MetadataResponse is the envelope returned by the server.
+message MetadataResponse {
+  // payload is the JSON-encoded result of the operation (may be empty
+  // for void operations that only return an error).
+  bytes payload = 1;
+
+  // error is non-empty when the operation failed. Clients should check
+  // this field before attempting to unmarshal payload.
+  string error = 2;
+}

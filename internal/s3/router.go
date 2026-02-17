@@ -29,14 +29,20 @@ func NewGateway(buckets BucketStore, objects ObjectStore, chunks ChunkStore, mul
 
 // ServeHTTP dispatches incoming requests to the appropriate S3 handler.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Parse path-style bucket and key from the URL path.
+	bucket, key := parsePath(r.URL.Path)
+
+	// Check for presigned URL access (query-string authentication).
+	if r.URL.Query().Has("X-Amz-Algorithm") && bucket != "" && key != "" {
+		g.handlePresignedURL(w, r, bucket, key)
+		return
+	}
+
 	// Authenticate every request.
 	if err := g.authenticate(r); err != nil {
 		writeS3Error(w, "AccessDenied", err.Error(), http.StatusForbidden)
 		return
 	}
-
-	// Parse path-style bucket and key from the URL path.
-	bucket, key := parsePath(r.URL.Path)
 
 	switch {
 	// Service-level operations (no bucket).

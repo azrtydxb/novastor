@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "novastor.fullname" . }}-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      {{- include "novastor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        {{- include "novastor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      hostPID: true
+      containers:
+        - name: agent
+          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.agent.image.repository }}:{{ include "novastor.imageTag" . }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          args:
+            - --listen=0.0.0.0:9100
+            - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+          securityContext:
+            privileged: true
+          ports:
+            - name: grpc
+              containerPort: 9100
+              protocol: TCP
+            - name: metrics
+              containerPort: 9101
+              protocol: TCP
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: dev
+              mountPath: /dev
+            - name: sys
+              mountPath: /sys
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+      volumes:
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: sys
+          hostPath:
+            path: /sys
+      {{- with .Values.agent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

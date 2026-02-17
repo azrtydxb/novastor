@@ -7,12 +7,16 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
 
+	"github.com/piwi3910/novastor/internal/agent"
 	novcsi "github.com/piwi3910/novastor/internal/csi"
+	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/piwi3910/novastor/internal/placement"
 )
 
 var (
@@ -24,15 +28,43 @@ var (
 func main() {
 	endpoint := flag.String("endpoint", "unix:///var/lib/kubelet/plugins/novastor.csi.novastor.io/csi.sock", "CSI endpoint")
 	nodeID := flag.String("node-id", "", "Node ID for this CSI node")
-	metaAddr := flag.String("meta-addr", "localhost:7000", "Metadata service address")
+	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
+	agentAddrs := flag.String("agent-addrs", "", "Comma-separated list of agent addresses (nodeID=addr,...)")
 	flag.Parse()
 
 	log.Printf("novastor-csi %s (commit: %s, built: %s)", version, commit, date)
 
-	// For Phase 2, metadata and placement are stubbed — the controller runs
-	// with nil dependencies until the full cluster wiring is implemented.
-	// Only the identity and node services are fully functional at this stage.
-	_ = *metaAddr
+	// Connect to the metadata service.
+	metaClient, err := metadata.Dial(*metaAddr)
+	if err != nil {
+		log.Fatalf("Failed to connect to metadata service at %s: %v", *metaAddr, err)
+	}
+	defer metaClient.Close()
+
+	// Build the NodeChunkClient from agent addresses.
+	nodeChunkClient := agent.NewNodeChunkClient()
+	var nodeIDs []string
+	if *agentAddrs != "" {
+		for _, entry := range strings.Split(*agentAddrs, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			parts := strings.SplitN(entry, "=", 2)
+			if len(parts) != 2 {
+				log.Fatalf("Invalid agent address format %q, expected nodeID=addr", entry)
+			}
+			nID, addr := parts[0], parts[1]
+			if err := nodeChunkClient.AddNode(nID, addr); err != nil {
+				log.Fatalf("Failed to connect to agent node %s at %s: %v", nID, addr, err)
+			}
+			nodeIDs = append(nodeIDs, nID)
+			log.Printf("Connected to agent node %s at %s", nID, addr)
+		}
+	}
+
+	// Create placement engine with known nodes.
+	placer := placement.NewRoundRobin(nodeIDs)
 
 	// Parse endpoint scheme and address.
 	scheme, addr, err := parseEndpoint(*endpoint)
@@ -61,12 +93,13 @@ func main() {
 
 	// Register CSI Node service (requires node ID).
 	if *nodeID != "" {
-		node := novcsi.NewNodeService(*nodeID, nil, nil)
+		mounter := &novcsi.RealMounter{}
+		node := novcsi.NewNodeService(*nodeID, nodeChunkClient, mounter)
 		csi.RegisterNodeServer(srv, node)
 	}
 
-	// Register CSI Controller service (nil deps until wired to real metadata/placement).
-	controller := novcsi.NewControllerServer(nil, nil)
+	// Register CSI Controller service with real metadata + placement.
+	controller := novcsi.NewControllerServer(metaClient, placer)
 	csi.RegisterControllerServer(srv, controller)
 
 	log.Printf("CSI driver listening on %s://%s", scheme, addr)

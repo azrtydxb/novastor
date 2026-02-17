@@ -1,0 +1,86 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "novastor.fullname" . }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+rules:
+  # NovaStor CRDs
+  - apiGroups: ["novastor.io"]
+    resources:
+      - storagepools
+      - blockvolumes
+      - sharedfilesystems
+      - objectstores
+    verbs: ["*"]
+  - apiGroups: ["novastor.io"]
+    resources:
+      - storagepools/status
+      - blockvolumes/status
+      - sharedfilesystems/status
+      - objectstores/status
+    verbs: ["get", "patch", "update"]
+  # Core resources - read/write
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "secrets", "configmaps", "events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Core resources - read
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # CSI-related
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments/status"]
+    verbs: ["patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csidrivers"]
+    verbs: ["get", "list", "watch"]
+  # Snapshot support
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots/status", "volumesnapshotcontents/status"]
+    verbs: ["get", "update", "patch"]
+  # Leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "novastor.fullname" . }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "novastor.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "novastor.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

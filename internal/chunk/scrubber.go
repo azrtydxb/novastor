@@ -127,6 +127,19 @@ func (s *Scrubber) ScrubOnce(ctx context.Context) (ok, bad int64, err error) {
 		} else {
 			ok++
 		}
+
+		// Apply rate limiting if configured.
+		if s.rateLimit > 0 {
+			chunkBytes := int64(len(c.Data))
+			if chunkBytes > 0 {
+				sleepDuration := time.Duration(float64(chunkBytes) / float64(s.rateLimit) * float64(time.Second))
+				select {
+				case <-ctx.Done():
+					return ok, bad, ctx.Err()
+				case <-time.After(sleepDuration):
+				}
+			}
+		}
 	}
 
 	s.mu.Lock()
@@ -136,6 +149,13 @@ func (s *Scrubber) ScrubOnce(ctx context.Context) (ok, bad int64, err error) {
 	s.mu.Unlock()
 
 	return ok, bad, nil
+}
+
+// SetRateLimit sets the maximum bytes per second for scrubbing. 0 means unlimited.
+func (s *Scrubber) SetRateLimit(bytesPerSecond int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rateLimit = bytesPerSecond
 }
 
 // Stats returns the results of the last completed scrub.
