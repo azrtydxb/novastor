@@ -1,0 +1,150 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  nightly-build:
+    name: Nightly Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64]
+        binary:
+          - controller
+          - agent
+          - meta
+          - csi
+          - filer
+          - s3gw
+          - cli
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          BINARY_NAME: ${{ matrix.binary }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          VERSION="nightly-$(date -u +%Y%m%d)"
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
+            -o "bin/novastor-${BINARY_NAME}-${GOOS}-${GOARCH}" \
+            "./cmd/${BINARY_NAME}/"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: novastor-${{ matrix.binary }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/
+
+  nightly-release:
+    name: Nightly Release
+    needs: nightly-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum novastor-* > SHA256SUMS
+      - name: Generate changelog
+        id: changelog
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            RANGE="${LAST_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+
+          {
+            echo "body<<CHANGELOG_EOF"
+            echo "## Nightly Build $(date -u +%Y-%m-%d)"
+            echo ""
+            echo "### Changes since ${LAST_TAG:-initial commit}"
+            echo ""
+
+            for TYPE in Feature Fix Performance Security Test Docs Chore Refactor; do
+              COMMITS=$(git log "$RANGE" --oneline --grep="\[${TYPE}\]" 2>/dev/null || true)
+              if [ -n "$COMMITS" ]; then
+                echo "#### ${TYPE}"
+                echo "$COMMITS" | while read -r line; do echo "- $line"; done
+                echo ""
+              fi
+            done
+
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Create or update nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          body: ${{ steps.changelog.outputs.body }}
+          prerelease: true
+          files: |
+            artifacts/novastor-*
+            artifacts/SHA256SUMS
+
+  nightly-docker:
+    name: Nightly Docker
+    needs: nightly-build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component:
+          - name: controller
+            dockerfile: Dockerfile.controller
+          - name: agent
+            dockerfile: Dockerfile.agent
+          - name: meta
+            dockerfile: Dockerfile.meta
+          - name: csi
+            dockerfile: Dockerfile.csi
+          - name: filer
+            dockerfile: Dockerfile.filer
+          - name: s3gw
+            dockerfile: Dockerfile.s3gw
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.component.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/piwi3910/novastor-${{ matrix.component.name }}:nightly
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

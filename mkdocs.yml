@@ -1,0 +1,81 @@
+site_name: NovaStor
+site_description: Unified Kubernetes-Native Storage — Block, File, and Object
+site_url: https://piwi3910.github.io/novastor
+repo_url: https://github.com/piwi3910/novastor
+repo_name: piwi3910/novastor
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - toc.follow
+
+plugins:
+  - search
+  - git-revision-date-localized:
+      enable_creation_date: true
+
+markdown_extensions:
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.details
+  - admonition
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Chunk Engine: architecture/chunk-engine.md
+      - Data Protection: architecture/data-protection.md
+      - Metadata Service: architecture/metadata-service.md
+  - Getting Started:
+      - Quick Start: getting-started/quickstart.md
+      - Installation: getting-started/installation.md
+  - User Guide:
+      - Block Storage: user-guide/block-storage.md
+      - File Storage: user-guide/file-storage.md
+      - Object Storage: user-guide/object-storage.md
+      - Storage Pools: user-guide/storage-pools.md
+  - Operations:
+      - Monitoring: operations/monitoring.md
+      - Troubleshooting: operations/troubleshooting.md
+  - Reference:
+      - CRD Reference: reference/crd.md
+      - CLI Reference: reference/cli.md
+      - Helm Values: reference/helm-values.md
+  - Development:
+      - Contributing: development/contributing.md

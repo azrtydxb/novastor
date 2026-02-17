@@ -1,0 +1,10 @@
+apiVersion: novastor.io/v1alpha1
+kind: SharedFilesystem
+metadata:
+  name: ml-datasets
+spec:
+  pool: ssd-erasurecoded
+  capacity: "1Ti"
+  accessMode: ReadWriteMany
+  export:
+    protocol: nfs

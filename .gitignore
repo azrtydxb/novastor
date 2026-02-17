@@ -1,0 +1,54 @@
+# Binaries
+bin/
+/controller
+/csi
+/filer
+/s3gw
+/agent
+/meta
+/novactl
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test
+cover.out
+coverage.out
+coverage.html
+*.test
+
+# Build dependencies
+/bin/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+# Protobuf generated
+internal/proto/gen/
+
+# Documentation build
+site/
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+
+# Secrets (never commit)
+.env
+.env.*
+*.pem
+*.key
+credentials.json

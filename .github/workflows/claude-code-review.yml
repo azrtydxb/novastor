@@ -1,0 +1,35 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  review:
+    name: Code Review
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_oauth: true
+          allowed_tools: "Read,Glob,Grep,WebFetch,WebSearch"
+          direct_prompt: |
+            Review this pull request for:
+            1. Code correctness and potential bugs
+            2. Security vulnerabilities (injection, auth issues, secrets exposure)
+            3. Go best practices and idiomatic patterns
+            4. Kubernetes/storage-specific concerns (data integrity, fault tolerance, race conditions)
+            5. Test coverage for new functionality
+            6. Documentation updates for behavior changes
+
+            Focus on substantive issues. Do not comment on style preferences already covered by golangci-lint.

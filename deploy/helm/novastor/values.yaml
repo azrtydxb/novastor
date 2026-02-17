@@ -1,0 +1,7 @@
+storageClass:
+  name: novastor-block
+  isDefault: false
+  pool: nvme-replicated
+  dataProtection: replication
+  reclaimPolicy: Delete
+  volumeBindingMode: WaitForFirstConsumer

@@ -1,0 +1,8 @@
+apiVersion: novastor.io/v1alpha1
+kind: BlockVolume
+metadata:
+  name: postgres-data
+spec:
+  pool: nvme-replicated
+  size: "100Gi"
+  accessMode: ReadWriteOnce

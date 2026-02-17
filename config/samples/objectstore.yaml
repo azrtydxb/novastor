@@ -1,0 +1,12 @@
+apiVersion: novastor.io/v1alpha1
+kind: ObjectStore
+metadata:
+  name: app-assets
+spec:
+  pool: ssd-erasurecoded
+  endpoint:
+    service:
+      port: 9000
+  bucketPolicy:
+    maxBuckets: 100
+    versioning: enabled

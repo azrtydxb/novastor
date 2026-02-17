@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package chunk;
+
+option go_package = "github.com/piwi3910/novastor/api/proto/chunk";
+
+// ChunkService provides gRPC access to the chunk storage layer.
+service ChunkService {
+  // PutChunk stores a chunk. The client streams data fragments which the
+  // server assembles into a complete chunk.
+  rpc PutChunk(stream PutChunkRequest) returns (PutChunkResponse);
+
+  // GetChunk retrieves a chunk. The server streams the chunk data back
+  // in fragments.
+  rpc GetChunk(GetChunkRequest) returns (stream GetChunkResponse);
+
+  // DeleteChunk removes a chunk from the store.
+  rpc DeleteChunk(DeleteChunkRequest) returns (DeleteChunkResponse);
+
+  // HasChunk checks whether a chunk exists in the store.
+  rpc HasChunk(HasChunkRequest) returns (HasChunkResponse);
+}
+
+// PutChunkRequest is sent as a stream. The first message MUST contain
+// chunk_id and checksum; subsequent messages carry data fragments.
+message PutChunkRequest {
+  string chunk_id = 1;
+  bytes  data     = 2;
+  uint32 checksum = 3;
+}
+
+message PutChunkResponse {
+  string chunk_id      = 1;
+  int64  bytes_written = 2;
+}
+
+message GetChunkRequest {
+  string chunk_id = 1;
+}
+
+// GetChunkResponse is streamed back to the caller. The first message
+// includes chunk_id, checksum and the first data fragment. Subsequent
+// messages carry the remaining data fragments.
+message GetChunkResponse {
+  string chunk_id = 1;
+  bytes  data     = 2;
+  uint32 checksum = 3;
+}
+
+message DeleteChunkRequest {
+  string chunk_id = 1;
+}
+
+message DeleteChunkResponse {}
+
+message HasChunkRequest {
+  string chunk_id = 1;
+}
+
+message HasChunkResponse {
+  bool exists = 1;
+}

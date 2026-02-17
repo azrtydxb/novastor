@@ -1,0 +1,47 @@
+groups:
+  - name: novastor.rules
+    rules:
+      - alert: NodeDown
+        expr: novastor_controller_pool_node_count < 3
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Storage node count below minimum"
+          description: "Pool {{ $labels.pool }} has only {{ $value }} node(s), expected at least 3."
+
+      - alert: UnderReplicated
+        expr: novastor_controller_recovery_chunks_pending > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chunks pending recovery"
+          description: "{{ $value }} chunk(s) are waiting for re-replication."
+
+      - alert: DiskAlmostFull
+        expr: novastor_agent_disk_bytes_free / novastor_agent_disk_bytes_total < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk almost full"
+          description: "Device {{ $labels.device }} on {{ $labels.instance }} has less than 10% free space."
+
+      - alert: ScrubErrors
+        expr: rate(novastor_agent_scrub_errors_total[1h]) > 0
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrub checksum errors detected"
+          description: "Scrubber on {{ $labels.instance }} is finding corrupt chunks."
+
+      - alert: HighS3Latency
+        expr: histogram_quantile(0.99, rate(novastor_s3_request_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High S3 gateway latency"
+          description: "p99 S3 request latency exceeds 1 second on {{ $labels.instance }}."

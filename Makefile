@@ -1,0 +1,197 @@
+# NovaStor Build System
+
+# Get the currently used golang install path
+ifeq (,$(shell go env GOBIN))
+GOBIN=$(shell go env GOPATH)/bin
+else
+GOBIN=$(shell go env GOBIN)
+endif
+
+SHELL = /usr/bin/env bash -o pipefail
+.SHELLFLAGS = -ec
+
+# All binaries
+BINARIES = controller agent meta csi filer s3gw cli
+
+.PHONY: all
+all: build-all
+
+##@ General
+
+.PHONY: help
+help: ## Display this help.
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+##@ Development
+
+.PHONY: generate
+generate: controller-gen ## Generate deepcopy methods for CRD types.
+	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+
+.PHONY: manifests
+manifests: controller-gen ## Generate CRD manifests.
+	$(CONTROLLER_GEN) rbac:roleName=novastor-controller-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd
+
+.PHONY: generate-proto
+generate-proto: protoc-gen-go protoc-gen-go-grpc ## Generate Go code from protobuf definitions.
+	mkdir -p internal/proto/gen
+	PATH=$(LOCALBIN):$$PATH protoc --go_out=internal/proto/gen --go_opt=paths=source_relative \
+		--go-grpc_out=internal/proto/gen --go-grpc_opt=paths=source_relative \
+		--proto_path=api/proto \
+		api/proto/*.proto
+
+.PHONY: fmt
+fmt: ## Run go fmt against code.
+	go fmt ./...
+
+.PHONY: vet
+vet: ## Run go vet against code.
+	go vet ./...
+
+.PHONY: lint
+lint: golangci-lint ## Run golangci-lint linter.
+	$(GOLANGCI_LINT) run
+
+.PHONY: check
+check: fmt vet lint ## Run all code quality checks.
+
+.PHONY: test
+test: fmt vet ## Run tests with race detection.
+	go test -v -race -coverprofile=coverage.out ./...
+
+.PHONY: test-coverage
+test-coverage: test ## Run tests and open coverage report.
+	go tool cover -html=coverage.out -o coverage.html
+
+.PHONY: test-bench
+test-bench: ## Run benchmarks.
+	go test -bench=. -benchmem ./internal/chunk/... ./internal/placement/...
+
+##@ Build
+
+.PHONY: build-all
+build-all: fmt vet ## Build all binaries.
+	$(foreach bin,$(BINARIES),go build -o bin/novastor-$(bin) ./cmd/$(bin)/;)
+
+.PHONY: build-controller
+build-controller: fmt vet ## Build controller binary.
+	go build -o bin/novastor-controller ./cmd/controller/
+
+.PHONY: build-agent
+build-agent: fmt vet ## Build agent binary.
+	go build -o bin/novastor-agent ./cmd/agent/
+
+.PHONY: build-meta
+build-meta: fmt vet ## Build metadata service binary.
+	go build -o bin/novastor-meta ./cmd/meta/
+
+.PHONY: build-csi
+build-csi: fmt vet ## Build CSI driver binary.
+	go build -o bin/novastor-csi ./cmd/csi/
+
+.PHONY: build-filer
+build-filer: fmt vet ## Build file gateway binary.
+	go build -o bin/novastor-filer ./cmd/filer/
+
+.PHONY: build-s3gw
+build-s3gw: fmt vet ## Build S3 gateway binary.
+	go build -o bin/novastor-s3gw ./cmd/s3gw/
+
+.PHONY: build-cli
+build-cli: fmt vet ## Build novactl CLI tool.
+	go build -o bin/novactl ./cmd/cli/
+
+##@ Docker
+
+.PHONY: docker-build
+docker-build: ## Build all docker images.
+	$(foreach comp,controller agent meta csi filer s3gw,docker build -t novastor-$(comp):latest -f Dockerfile.$(comp) .;)
+
+##@ Deployment
+
+.PHONY: install-crds
+install-crds: manifests ## Install CRDs into the K8s cluster.
+	kubectl apply -f config/crd/
+
+.PHONY: uninstall-crds
+uninstall-crds: ## Uninstall CRDs from the K8s cluster.
+	kubectl delete -f config/crd/
+
+##@ Helm
+
+.PHONY: helm-lint
+helm-lint: ## Lint Helm chart.
+	helm lint deploy/helm/novastor/
+
+.PHONY: helm-install
+helm-install: ## Install NovaStor using Helm.
+	helm install novastor deploy/helm/novastor/ -n novastor-system --create-namespace
+
+.PHONY: helm-upgrade
+helm-upgrade: ## Upgrade NovaStor using Helm.
+	helm upgrade novastor deploy/helm/novastor/ -n novastor-system
+
+.PHONY: helm-uninstall
+helm-uninstall: ## Uninstall NovaStor using Helm.
+	helm uninstall novastor -n novastor-system
+
+.PHONY: helm-template
+helm-template: ## Generate Helm templates for debugging.
+	helm template novastor deploy/helm/novastor/ -n novastor-system
+
+##@ Documentation
+
+.PHONY: docs-build
+docs-build: ## Build documentation (strict mode).
+	mkdocs build --strict
+
+.PHONY: docs-serve
+docs-serve: ## Serve documentation locally.
+	mkdocs serve
+
+##@ Clean
+
+.PHONY: clean
+clean: ## Clean build artifacts.
+	rm -rf bin/
+	rm -rf $(LOCALBIN)/
+	rm -rf internal/proto/gen/
+	rm -f coverage.out coverage.html
+
+##@ Build Dependencies
+
+LOCALBIN ?= $(shell pwd)/bin
+$(LOCALBIN):
+	mkdir -p $(LOCALBIN)
+
+## Tool Binaries
+CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
+GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+PROTOC_GEN_GO ?= $(LOCALBIN)/protoc-gen-go
+PROTOC_GEN_GO_GRPC ?= $(LOCALBIN)/protoc-gen-go-grpc
+
+## Tool Versions
+CONTROLLER_TOOLS_VERSION ?= v0.16.5
+GOLANGCI_LINT_VERSION ?= v1.62.0
+PROTOC_GEN_GO_VERSION ?= v1.35.1
+PROTOC_GEN_GO_GRPC_VERSION ?= v1.5.1
+
+.PHONY: controller-gen
+controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
+$(CONTROLLER_GEN): $(LOCALBIN)
+	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
+
+.PHONY: golangci-lint
+golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
+$(GOLANGCI_LINT): $(LOCALBIN)
+	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+.PHONY: protoc-gen-go
+protoc-gen-go: $(PROTOC_GEN_GO) ## Download protoc-gen-go locally if necessary.
+$(PROTOC_GEN_GO): $(LOCALBIN)
+	GOBIN=$(LOCALBIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+
+.PHONY: protoc-gen-go-grpc
+protoc-gen-go-grpc: $(PROTOC_GEN_GO_GRPC) ## Download protoc-gen-go-grpc locally if necessary.
+$(PROTOC_GEN_GO_GRPC): $(LOCALBIN)
+	GOBIN=$(LOCALBIN) go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
