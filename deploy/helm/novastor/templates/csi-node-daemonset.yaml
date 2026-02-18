@@ -25,7 +25,7 @@ spec:
       initContainers:
         - name: load-nvme-tcp
           image: busybox:1.36
-          command: ["sh", "-c", "modprobe nvme-tcp"]
+          command: ["sh", "-c", "modprobe nvme-tcp || true"]
           securityContext:
             privileged: true
           volumeMounts:

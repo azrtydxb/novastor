@@ -26,7 +26,7 @@ spec:
       initContainers:
         - name: load-nvme-modules
           image: busybox:1.36
-          command: ["sh", "-c", "modprobe nvmet; modprobe nvmet-tcp"]
+          command: ["sh", "-c", "modprobe nvmet || true; modprobe nvmet-tcp || true"]
           securityContext:
             privileged: true
           volumeMounts:
@@ -51,6 +51,8 @@ spec:
               protocol: TCP
             - name: nvmeof
               containerPort: 4420
+              # hostPort 4420 is required to be free on each node; if another
+              # process is using this port on the host, the agent pod will fail to start.
               hostPort: 4420
               protocol: TCP
           env:
