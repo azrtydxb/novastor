@@ -34,7 +34,18 @@ func init() {
 }
 
 func main() {
-	listenAddr := flag.String("listen", ":2049", "NFS listen address")
+	// Operation mode flags.
+	mode := flag.String("mode", "nfs", "Server mode: 'nfs' or 'fuse'")
+
+	// NFS-specific flags.
+	nfsListenAddr := flag.String("nfs-listen", ":2049", "NFS listen address")
+
+	// FUSE-specific flags.
+	fuseMountPoint := flag.String("fuse-mount", "/mnt/novastor", "FUSE mount point")
+	fuseAllowOther := flag.Bool("fuse-allow-other", false, "Allow other users to access FUSE mount")
+	fuseFsName := flag.String("fuse-fsname", "novastor", "Filesystem name for FUSE")
+
+	// Common flags.
 	metricsAddr := flag.String("metrics-addr", ":8080", "Metrics HTTP listen address")
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
 	agentAddr := flag.String("agent-addr", "localhost:9100", "Chunk agent address")
@@ -44,7 +55,7 @@ func main() {
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	flag.Parse()
 
-	log.Printf("novastor-filer %s (commit: %s, built: %s)", version, commit, date)
+	log.Printf("novastor-filer %s (commit: %s, built: %s) mode=%s", version, commit, date, *mode)
 
 	// Main context for the filer lifetime.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -86,9 +97,8 @@ func main() {
 	metaAdapter := filer.NewMetadataAdapter(metaClient)
 	chunkAdapter := filer.NewChunkAdapter(chunkClient)
 
-	locker := filer.NewLockManager()
+	// Create the filesystem.
 	fs := filer.NewFileSystem(metaAdapter, chunkAdapter)
-	nfsSrv := filer.NewNFSServer(fs, locker)
 
 	// Start metrics server.
 	mux := http.NewServeMux()
@@ -107,18 +117,29 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 
-	// Start NFS server.
-	go func() {
-		if err := nfsSrv.Serve(*listenAddr); err != nil {
-			logging.L.Error("NFS server failed", zap.Error(err))
-		}
-	}()
-
 	// Start metrics server.
 	go func() {
 		logging.L.Info("metrics server listening", zap.String("addr", *metricsAddr))
 		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logging.L.Error("metrics server failed", zap.Error(err))
+		}
+	}()
+
+	// Start the appropriate server based on mode.
+	go func() {
+		switch *mode {
+		case "nfs":
+			runNFSServer(ctx, fs, *nfsListenAddr, stop)
+		case "fuse":
+			fuseConfig := &filer.FUSEConfig{
+				MountPoint: *fuseMountPoint,
+				AllowOther: *fuseAllowOther,
+				FsName:     *fuseFsName,
+				Debug:      false,
+			}
+			runFUSEServer(ctx, fs, fuseConfig, stop)
+		default:
+			log.Fatalf("Unknown mode: %s (valid: nfs, fuse)", *mode)
 		}
 	}()
 
@@ -132,10 +153,52 @@ func main() {
 	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
 		logging.L.Error("metrics server shutdown failed", zap.Error(err))
 	}
+}
 
-	// Stop NFS server.
+// runNFSServer starts and manages the NFS server.
+func runNFSServer(ctx context.Context, fs *filer.FileSystem, listenAddr string, stop chan os.Signal) {
+	locker := filer.NewLockManager()
+	nfsSrv := filer.NewNFSServer(fs, locker)
+
+	go func() {
+		if err := nfsSrv.Serve(listenAddr); err != nil {
+			log.Printf("NFS server failed: %v", err)
+		}
+	}()
+
+	<-stop
+	log.Println("Shutting down NFS server...")
 	if err := nfsSrv.Stop(); err != nil {
-		logging.L.Error("Error stopping NFS server", zap.Error(err))
+		log.Printf("Error stopping NFS server: %v", err)
 	}
-	logging.L.Info("NFS server stopped")
+	log.Println("NFS server stopped")
+}
+
+// runFUSEServer starts and manages the FUSE server.
+func runFUSEServer(ctx context.Context, fs *filer.FileSystem, config *filer.FUSEConfig, stop chan os.Signal) {
+	fuseSrv := filer.NewFUSEServer(fs, config)
+
+	// Run FUSE server in a goroutine.
+	serverErr := make(chan error, 1)
+	go func() {
+		if err := fuseSrv.Serve(); err != nil {
+			serverErr <- err
+		}
+		close(serverErr)
+	}()
+
+	// Wait for shutdown signal or server error.
+	select {
+	case <-stop:
+		log.Println("Shutting down FUSE server...")
+	case err := <-serverErr:
+		if err != nil {
+			log.Printf("FUSE server error: %v", err)
+		}
+	}
+
+	if err := fuseSrv.Stop(); err != nil {
+		log.Printf("Error stopping FUSE server: %v", err)
+	}
+	log.Println("FUSE server stopped")
 }
