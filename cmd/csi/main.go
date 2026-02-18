@@ -215,6 +215,36 @@ func main() {
 	// Create placement engine with known nodes.
 	placer := placement.NewRoundRobin(nodeIDs)
 
+	// Sync node list from metadata service: discover ready agents dynamically.
+	// This runs once at startup and every 30 seconds thereafter so that nodes
+	// joining or leaving the cluster are reflected without a CSI restart.
+	syncNodes := func() {
+		nodes, err := metaClient.ListNodeMetas(ctx)
+		if err != nil {
+			log.Printf("Warning: failed to list node metas: %v", err)
+			return
+		}
+		for _, n := range nodes {
+			if n.Status == "ready" && n.Address != "" {
+				placer.AddNode(n.Address)
+				log.Printf("Discovered storage node %s at %s", n.NodeID, n.Address)
+			}
+		}
+	}
+	syncNodes()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				syncNodes()
+			}
+		}
+	}()
+
 	// Parse endpoint scheme and address.
 	scheme, addr, err := parseEndpoint(*endpoint)
 	if err != nil {
