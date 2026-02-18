@@ -122,6 +122,22 @@ func (s *GRPCServer) Execute(ctx context.Context, req *pb.MetadataRequest) (*pb.
 	case "ListNodeMetas":
 		return s.listNodeMetas(ctx)
 
+	// ---- Lock operations ----
+	case "AcquireLock":
+		return s.acquireLock(ctx, req.Payload)
+	case "RenewLock":
+		return s.renewLock(ctx, req.Payload)
+	case "ReleaseLock":
+		return s.releaseLock(ctx, req.Payload)
+	case "TestLock":
+		return s.testLock(ctx, req.Payload)
+	case "GetLock":
+		return s.getLock(ctx, req.Payload)
+	case "ListLocks":
+		return s.listLocks(ctx, req.Payload)
+	case "CleanupExpiredLocks":
+		return s.cleanupExpiredLocks(ctx)
+
 	default:
 		return &pb.MetadataResponse{Error: fmt.Sprintf("unknown operation: %s", req.Operation)}, nil
 	}
@@ -597,3 +613,91 @@ func (s *GRPCServer) listNodeMetas(ctx context.Context) (*pb.MetadataResponse, e
 	}
 	return okResp(metas)
 }
+
+// ---- Lock operations ----
+
+func (s *GRPCServer) acquireLock(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args AcquireLockArgs
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal AcquireLockArgs: %w", err)), nil
+	}
+	result, err := s.store.AcquireLock(ctx, &args)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(result)
+}
+
+func (s *GRPCServer) renewLock(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args RenewLockArgs
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal RenewLockArgs: %w", err)), nil
+	}
+	lease, err := s.store.RenewLock(ctx, &args)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(lease)
+}
+
+func (s *GRPCServer) releaseLock(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args ReleaseLockArgs
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal ReleaseLockArgs: %w", err)), nil
+	}
+	if err := s.store.ReleaseLock(ctx, &args); err != nil {
+		return errResp(err), nil
+	}
+	return &pb.MetadataResponse{}, nil
+}
+
+func (s *GRPCServer) testLock(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args TestLockArgs
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal TestLockArgs: %w", err)), nil
+	}
+	lease, err := s.store.TestLock(ctx, &args)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(lease)
+}
+
+func (s *GRPCServer) getLock(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args struct {
+		LeaseID string `json:"leaseID"`
+	}
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal args: %w", err)), nil
+	}
+	lease, err := s.store.GetLock(ctx, args.LeaseID)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(lease)
+}
+
+func (s *GRPCServer) listLocks(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args struct {
+		VolumeID string `json:"volumeID,omitempty"`
+	}
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal args: %w", err)), nil
+	}
+	locks, err := s.store.ListLocks(ctx, args.VolumeID)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(locks)
+}
+
+func (s *GRPCServer) cleanupExpiredLocks(ctx context.Context) (*pb.MetadataResponse, error) {
+	count, err := s.store.CleanupExpiredLocks(ctx)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(struct {
+		Cleaned int `json:"cleaned"`
+	}{Cleaned: count})
+}
+

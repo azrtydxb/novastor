@@ -450,6 +450,40 @@ var (
 		Name:      "bandwidth_limit_bytes",
 		Help:      "Current bandwidth limit in bytes per second",
 	})
+
+	// --------------- Lock metrics ---------------
+
+	// DistributedLockLeases is the number of active distributed lock leases.
+	DistributedLockLeases = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "filer",
+		Name:      "distributed_lock_leases",
+		Help:      "Number of active distributed lock leases",
+	})
+
+	// LockOperationsTotal counts lock operations by type.
+	LockOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "filer",
+		Name:      "lock_operations_total",
+		Help:      "Total lock operations",
+	}, []string{"operation", "result"})
+
+	// LockRenewalFailures counts lock renewal failures.
+	LockRenewalFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "filer",
+		Name:      "lock_renewal_failures_total",
+		Help:      "Total lock renewal failures",
+	})
+
+	// LockLeaseExpirations counts expired lock leases.
+	LockLeaseExpirations = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "filer",
+		Name:      "lock_lease_expirations_total",
+		Help:      "Total expired lock leases",
+	})
 )
 
 // Register registers all NovaStor metrics with the default Prometheus registry.
@@ -523,4 +557,10 @@ func Register() {
 	prometheus.MustRegister(DataMoverTaskDuration)
 	prometheus.MustRegister(DataMoverBytesTransferred)
 	prometheus.MustRegister(DataMoverBandwidthLimit)
+
+	// Lock metrics
+	prometheus.MustRegister(DistributedLockLeases)
+	prometheus.MustRegister(LockOperationsTotal)
+	prometheus.MustRegister(LockRenewalFailures)
+	prometheus.MustRegister(LockLeaseExpirations)
 }
