@@ -5,12 +5,18 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/piwi3910/novastor/internal/metadata"
+)
+
+const (
+	accessTypeBlock  = "block"
+	accessTypeNVMeoF = "nvmeof"
 )
 
 // --- mock metadata store ---
@@ -484,7 +490,7 @@ func TestControllerPublishVolume_Success(t *testing.T) {
 	if pubCtx["volumeId"] != volumeID {
 		t.Errorf("expected volumeId %s in publish context, got %q", volumeID, pubCtx["volumeId"])
 	}
-	if pubCtx["accessType"] != "block" {
+	if pubCtx["accessType"] != accessTypeBlock {
 		t.Errorf("expected accessType block, got %q", pubCtx["accessType"])
 	}
 }
@@ -521,10 +527,10 @@ func TestControllerPublishVolume_RWX(t *testing.T) {
 		t.Fatalf("ControllerPublishVolume RWX failed: %v", err)
 	}
 
-	// RWX volumes without NVMe-oF targets get "block" accessType by default
+	// RWX volumes without NVMe-oF targets get accessTypeBlock by default
 	// since the node will handle NFS mounting based on volume context.
 	pubCtx := resp.GetPublishContext()
-	if pubCtx["accessType"] != "block" {
+	if pubCtx["accessType"] != accessTypeBlock {
 		t.Errorf("expected accessType block, got %q", pubCtx["accessType"])
 	}
 	if pubCtx["volumeId"] != volumeID {
@@ -693,14 +699,6 @@ func TestControllerUnpublishVolume_NonexistentVolume(t *testing.T) {
 	}
 }
 
-func TestGetCapacityUnimplemented(t *testing.T) {
-	cs, _ := setupController()
-	_, err := cs.GetCapacity(context.Background(), &csi.GetCapacityRequest{})
-	if st, ok := status.FromError(err); !ok || st.Code() != codes.Unimplemented {
-		t.Errorf("expected Unimplemented, got %v", err)
-	}
-}
-
 // --- ControllerGetCapabilities ---
 
 func TestControllerGetCapabilities(t *testing.T) {
@@ -711,10 +709,13 @@ func TestControllerGetCapabilities(t *testing.T) {
 	}
 
 	expected := map[csi.ControllerServiceCapability_RPC_Type]bool{
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME:     false,
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT:   false,
-		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME:            false,
-		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME: false,
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME:         false,
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT:       false,
+		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME:                false,
+		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME:     false,
+		csi.ControllerServiceCapability_RPC_GET_CAPACITY:                 false,
+		csi.ControllerServiceCapability_RPC_LIST_VOLUMES:                 false,
+		csi.ControllerServiceCapability_RPC_LIST_VOLUMES_PUBLISHED_NODES: false,
 	}
 
 	for _, cap := range resp.GetCapabilities() {
@@ -733,4 +734,83 @@ func TestControllerGetCapabilities(t *testing.T) {
 			t.Errorf("missing expected capability: %v", capType)
 		}
 	}
+}
+
+func TestControllerGetCapabilities_IncludesGetCapacity(t *testing.T) {
+	cs, _ := setupController()
+
+	resp, err := cs.ControllerGetCapabilities(context.Background(), &csi.ControllerGetCapabilitiesRequest{})
+	if err != nil {
+		t.Fatalf("ControllerGetCapabilities failed: %v", err)
+	}
+
+	caps := resp.GetCapabilities()
+	if len(caps) == 0 {
+		t.Fatal("expected at least one capability")
+	}
+
+	foundGetCapacity := false
+	for _, cap := range caps {
+		rpc := cap.GetRpc()
+		if rpc == nil {
+			continue
+		}
+		if rpc.GetType() == csi.ControllerServiceCapability_RPC_GET_CAPACITY {
+			foundGetCapacity = true
+			break
+		}
+	}
+	if !foundGetCapacity {
+		t.Error("GET_CAPACITY capability not found")
+	}
+}
+
+func TestGetCapacity_WithoutNodeMeta(t *testing.T) {
+	cs, _ := setupController()
+
+	resp, err := cs.GetCapacity(context.Background(), &csi.GetCapacityRequest{})
+	if err != nil {
+		t.Fatalf("GetCapacity failed: %v", err)
+	}
+
+	if resp.AvailableCapacity != 0 {
+		t.Errorf("expected 0 capacity without nodeMeta, got %d", resp.AvailableCapacity)
+	}
+}
+
+func TestGetCapacity_WithNodeMeta(t *testing.T) {
+	store := newMockMetadataStore()
+	nodeStore := &mockNodeMetaStore{
+		nodes: []*metadata.NodeMeta{
+			{NodeID: "node-1", AvailableCapacity: 100 * 1024 * 1024 * 1024}, // 100GB
+			{NodeID: "node-2", AvailableCapacity: 200 * 1024 * 1024 * 1024}, // 200GB
+			{NodeID: "node-3", AvailableCapacity: 50 * 1024 * 1024 * 1024},  // 50GB
+		},
+	}
+
+	cs := NewControllerServerWithNodeMeta(store, nodeStore, &mockPlacer{}, nil)
+
+	resp, err := cs.GetCapacity(context.Background(), &csi.GetCapacityRequest{})
+	if err != nil {
+		t.Fatalf("GetCapacity failed: %v", err)
+	}
+
+	// Total: 350GB, divided by 3 = ~116GB
+	expectedCapacity := (100 + 200 + 50) * 1024 * 1024 * 1024 / 3
+	if resp.AvailableCapacity < int64(expectedCapacity-1000) || resp.AvailableCapacity > int64(expectedCapacity+1000) {
+		t.Errorf("capacity around %d, got %d", expectedCapacity, resp.AvailableCapacity)
+	}
+}
+
+// --- mock node metadata store ---
+
+type mockNodeMetaStore struct {
+	mu    sync.Mutex
+	nodes []*metadata.NodeMeta
+}
+
+func (m *mockNodeMetaStore) ListLiveNodeMetas(_ context.Context, ttl time.Duration) ([]*metadata.NodeMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.nodes, nil
 }
