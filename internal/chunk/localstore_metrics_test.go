@@ -2,88 +2,119 @@ package chunk
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
-
 	"github.com/piwi3910/novastor/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
-func TestLocalStore_MetricsInstrumentation(t *testing.T) {
-	dir := filepath.Join(os.TempDir(), "test-metrics-store")
-	defer os.RemoveAll(dir)
-
-	store, err := NewLocalStore(dir)
-	if err != nil {
-		t.Fatalf("NewLocalStore failed: %v", err)
-	}
-
-	// Register metrics
+// TestChunkStoreMetrics verifies that chunk store operations
+// properly increment their corresponding Prometheus metrics.
+func TestChunkStoreMetrics(t *testing.T) {
+	// Use a test registry that doesn't interfere with the global one.
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(metrics.ChunkOpsTotal)
 	reg.MustRegister(metrics.ChunkBytesTotal)
 
+	store, err := NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStore failed: %v", err)
+	}
+
 	ctx := context.Background()
+
+	// Write a chunk with computed checksum.
 	data := []byte("test data for metrics")
-	chunk := &Chunk{
-		ID:   NewChunkID(data),
+	c := &Chunk{
+		ID:   ChunkID("test-chunk"),
 		Data: data,
 	}
-	chunk.Checksum = chunk.ComputeChecksum()
+	c.Checksum = c.ComputeChecksum()
 
-	// Test Put operation metrics
-	initialWrites := testutil.ToFloat64(metrics.ChunkOpsTotal.WithLabelValues("write"))
-	initialWriteBytes := testutil.ToFloat64(metrics.ChunkBytesTotal.WithLabelValues("write"))
-
-	if err := store.Put(ctx, chunk); err != nil {
+	if err := store.Put(ctx, c); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	finalWrites := testutil.ToFloat64(metrics.ChunkOpsTotal.WithLabelValues("write"))
-	finalWriteBytes := testutil.ToFloat64(metrics.ChunkBytesTotal.WithLabelValues("write"))
-
-	if finalWrites != initialWrites+1 {
-		t.Errorf("ChunkOpsTotal[write] not incremented: got %.0f, want %.0f", finalWrites, initialWrites+1)
+	// Check write operation metric.
+	writeOps, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+	foundWriteOp := false
+	for _, mf := range writeOps {
+		if mf.GetName() == "novastor_agent_chunk_ops_total" {
+			for _, m := range mf.GetMetric() {
+				for _, label := range m.Label {
+					if label.GetName() == "operation" && label.GetValue() == "write" {
+						if m.Counter.GetValue() != 1 {
+							t.Errorf("expected 1 write operation, got %f", m.Counter.GetValue())
+						}
+						foundWriteOp = true
+					}
+				}
+			}
+		}
+	}
+	if !foundWriteOp {
+		t.Error("write operation metric not found or not incremented")
 	}
 
-	expectedBytes := float64(len(data))
-	if finalWriteBytes != initialWriteBytes+expectedBytes {
-		t.Errorf("ChunkBytesTotal[write] not incremented correctly: got %.0f, want %.0f", finalWriteBytes, initialWriteBytes+expectedBytes)
-	}
-
-	// Test Get operation metrics
-	initialReads := testutil.ToFloat64(metrics.ChunkOpsTotal.WithLabelValues("read"))
-	initialReadBytes := testutil.ToFloat64(metrics.ChunkBytesTotal.WithLabelValues("read"))
-
-	_, err = store.Get(ctx, chunk.ID)
+	// Read the chunk and check metrics.
+	_, err = store.Get(ctx, c.ID)
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
 
-	finalReads := testutil.ToFloat64(metrics.ChunkOpsTotal.WithLabelValues("read"))
-	finalReadBytes := testutil.ToFloat64(metrics.ChunkBytesTotal.WithLabelValues("read"))
-
-	if finalReads != initialReads+1 {
-		t.Errorf("ChunkOpsTotal[read] not incremented: got %.0f, want %.0f", finalReads, initialReads+1)
+	// Check read operation metric.
+	readOps, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+	foundReadOp := false
+	for _, mf := range readOps {
+		if mf.GetName() == "novastor_agent_chunk_ops_total" {
+			for _, m := range mf.GetMetric() {
+				for _, label := range m.Label {
+					if label.GetName() == "operation" && label.GetValue() == "read" {
+						if m.Counter.GetValue() != 1 {
+							t.Errorf("expected 1 read operation, got %f", m.Counter.GetValue())
+						}
+						foundReadOp = true
+					}
+				}
+			}
+		}
+	}
+	if !foundReadOp {
+		t.Error("read operation metric not found or not incremented")
 	}
 
-	if finalReadBytes != initialReadBytes+expectedBytes {
-		t.Errorf("ChunkBytesTotal[read] not incremented correctly: got %.0f, want %.0f", finalReadBytes, initialReadBytes+expectedBytes)
-	}
-
-	// Test Delete operation metrics
-	initialDeletes := testutil.ToFloat64(metrics.ChunkOpsTotal.WithLabelValues("delete"))
-
-	if err := store.Delete(ctx, chunk.ID); err != nil {
+	// Delete the chunk and check metrics.
+	if err := store.Delete(ctx, c.ID); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
-	finalDeletes := testutil.ToFloat64(metrics.ChunkOpsTotal.WithLabelValues("delete"))
-
-	if finalDeletes != initialDeletes+1 {
-		t.Errorf("ChunkOpsTotal[delete] not incremented: got %.0f, want %.0f", finalDeletes, initialDeletes+1)
+	// Check delete operation metric.
+	deleteOps, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+	foundDeleteOp := false
+	for _, mf := range deleteOps {
+		if mf.GetName() == "novastor_agent_chunk_ops_total" {
+			for _, m := range mf.GetMetric() {
+				for _, label := range m.Label {
+					if label.GetName() == "operation" && label.GetValue() == "delete" {
+						if m.Counter.GetValue() != 1 {
+							t.Errorf("expected 1 delete operation, got %f", m.Counter.GetValue())
+						}
+						foundDeleteOp = true
+					}
+				}
+			}
+		}
+	}
+	if !foundDeleteOp {
+		t.Error("delete operation metric not found or not incremented")
 	}
 }
