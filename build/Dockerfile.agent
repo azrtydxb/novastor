@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1.7
+
+# ============================================================
+# Build stage
+# ============================================================
+FROM golang:1.24-alpine AS builder
+
+LABEL stage=builder
+
+# Install build tools required for CGO-free static compilation.
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /src
+
+# Copy dependency manifests first for layer caching.
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy the full source tree.
+COPY . .
+
+# Build arguments for version injection.
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
+
+# Compile a fully static binary with version metadata injected via ldflags.
+# GOTOOLCHAIN=local prevents Go from attempting to download toolchain 1.25.
+RUN GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build \
+      -trimpath \
+      -ldflags="-s -w \
+        -X main.version=${VERSION} \
+        -X main.commit=${COMMIT} \
+        -X main.date=${BUILD_DATE}" \
+      -o /out/novastor-agent \
+      ./cmd/agent
+
+# ============================================================
+# Runtime stage
+# ============================================================
+FROM gcr.io/distroless/static-debian12:nonroot
+
+LABEL org.opencontainers.image.title="novastor-agent" \
+      org.opencontainers.image.description="NovaStor node chunk storage agent (DaemonSet)" \
+      org.opencontainers.image.source="https://github.com/piwi3910/novastor" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+# Copy the compiled binary from the builder stage.
+COPY --from=builder /out/novastor-agent /usr/local/bin/novastor-agent
+
+# Copy CA certificates for outbound TLS (e.g. gRPC to meta service).
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# gRPC listener
+EXPOSE 9100
+# Prometheus metrics
+EXPOSE 9101
+
+ENTRYPOINT ["/usr/local/bin/novastor-agent"]

@@ -203,7 +203,7 @@ func TestFSM_DirEntry_ListDirectory(t *testing.T) {
 
 // applyToFSMRaw is a helper for applying raw log data to the FSM in tests
 // that need to construct raft.Log manually.
-func applyToFSMRaw(t *testing.T, f *FSM, data []byte) {
+func applyToFSMRaw(t *testing.T, f MetadataFSM, data []byte) {
 	t.Helper()
 	resp := f.Apply(&raft.Log{Data: data})
 	if resp != nil {

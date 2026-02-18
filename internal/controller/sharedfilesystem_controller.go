@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	nfsFilerImage = "novastor/nfs-filer:latest"
-	nfsPort       = int32(2049)
+	defaultNFSFilerImage = "novastor/novastor-filer:v0.1.0"
+	nfsPort              = int32(2049)
 )
 
 // SharedFilesystemReconciler reconciles SharedFilesystem objects.
@@ -150,6 +150,11 @@ func (r *SharedFilesystemReconciler) reconcileNFSDeployment(ctx context.Context,
 			"app.kubernetes.io/managed-by": "novastor-controller",
 		}
 
+		image := fs.Spec.Image
+		if image == "" {
+			image = defaultNFSFilerImage
+		}
+
 		deploy.Spec = appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
@@ -163,7 +168,7 @@ func (r *SharedFilesystemReconciler) reconcileNFSDeployment(ctx context.Context,
 					Containers: []corev1.Container{
 						{
 							Name:  "nfs-filer",
-							Image: nfsFilerImage,
+							Image: image,
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          "nfs",

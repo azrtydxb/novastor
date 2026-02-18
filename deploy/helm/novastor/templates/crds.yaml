@@ -1,0 +1,672 @@
+{{- if .Values.crds.install }}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: storagepools.novastor.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+spec:
+  group: novastor.io
+  names:
+    kind: StoragePool
+    listKind: StoragePoolList
+    plural: storagepools
+    singular: storagepool
+    shortNames:
+      - sp
+    categories:
+      - novastor
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Mode
+          type: string
+          jsonPath: .spec.dataProtection.mode
+        - name: Nodes
+          type: integer
+          jsonPath: .status.nodeCount
+        - name: Capacity
+          type: string
+          jsonPath: .status.totalCapacity
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: StoragePool defines a set of storage nodes and their data protection policy.
+          type: object
+          properties:
+            apiVersion:
+              description: >-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+              type: string
+            kind:
+              description: >-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated. In CamelCase.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: StoragePoolSpec defines the desired state of StoragePool.
+              type: object
+              required:
+                - dataProtection
+              properties:
+                nodeSelector:
+                  description: NodeSelector selects which nodes belong to this pool.
+                  type: object
+                  properties:
+                    matchExpressions:
+                      description: matchExpressions is a list of label selector requirements.
+                      type: array
+                      items:
+                        description: A label selector requirement is a selector that contains values, a key, and an operator.
+                        type: object
+                        required:
+                          - key
+                          - operator
+                        properties:
+                          key:
+                            description: key is the label key that the selector applies to.
+                            type: string
+                          operator:
+                            description: >-
+                              operator represents a key's relationship to a set of values.
+                              Valid operators are In, NotIn, Exists and DoesNotExist.
+                            type: string
+                          values:
+                            description: >-
+                              values is an array of string values. If the operator is In or NotIn,
+                              the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                              the values array must be empty.
+                            type: array
+                            items:
+                              type: string
+                    matchLabels:
+                      description: matchLabels is a map of {key,value} pairs.
+                      type: object
+                      additionalProperties:
+                        type: string
+                deviceFilter:
+                  description: DeviceFilter specifies which devices on selected nodes to use.
+                  type: object
+                  properties:
+                    type:
+                      description: Type of storage device to use.
+                      type: string
+                      enum:
+                        - nvme
+                        - ssd
+                        - hdd
+                    minSize:
+                      description: MinSize is the minimum device size to include.
+                      type: string
+                dataProtection:
+                  description: DataProtection configures how data is protected in this pool.
+                  type: object
+                  required:
+                    - mode
+                  properties:
+                    mode:
+                      description: Mode defines the data protection strategy.
+                      type: string
+                      enum:
+                        - replication
+                        - erasureCoding
+                    replication:
+                      description: Replication holds replication-specific configuration.
+                      type: object
+                      required:
+                        - factor
+                      properties:
+                        factor:
+                          description: Factor is the number of replicas to maintain.
+                          type: integer
+                          default: 3
+                          minimum: 1
+                          maximum: 5
+                        writeQuorum:
+                          description: WriteQuorum is the minimum number of replicas that must acknowledge a write.
+                          type: integer
+                    erasureCoding:
+                      description: ErasureCoding holds erasure-coding-specific configuration.
+                      type: object
+                      required:
+                        - dataShards
+                        - parityShards
+                      properties:
+                        dataShards:
+                          description: DataShards is the number of data shards.
+                          type: integer
+                          default: 4
+                          minimum: 2
+                        parityShards:
+                          description: ParityShards is the number of parity shards.
+                          type: integer
+                          default: 2
+                          minimum: 1
+            status:
+              description: StoragePoolStatus defines the observed state of StoragePool.
+              type: object
+              properties:
+                phase:
+                  description: Phase represents the current lifecycle phase of the pool.
+                  type: string
+                nodeCount:
+                  description: NodeCount is the number of storage nodes currently in the pool.
+                  type: integer
+                totalCapacity:
+                  description: TotalCapacity is the aggregate raw capacity of all devices in the pool.
+                  type: string
+                usedCapacity:
+                  description: UsedCapacity is the amount of capacity currently in use.
+                  type: string
+                dataProtection:
+                  description: DataProtection summarises the active data protection configuration.
+                  type: string
+                conditions:
+                  description: Conditions reflect the current reconciliation state of the pool.
+                  type: array
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        description: lastTransitionTime is the last time the condition transitioned from one status to another.
+                        type: string
+                        format: date-time
+                      message:
+                        description: message is a human readable message indicating details about the transition.
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        description: observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        description: reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        type: string
+                        maxLength: 316
+                        pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$'
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: blockvolumes.novastor.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+spec:
+  group: novastor.io
+  names:
+    kind: BlockVolume
+    listKind: BlockVolumeList
+    plural: blockvolumes
+    singular: blockvolume
+    shortNames:
+      - bv
+    categories:
+      - novastor
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Pool
+          type: string
+          jsonPath: .spec.pool
+        - name: Size
+          type: string
+          jsonPath: .spec.size
+        - name: Access
+          type: string
+          jsonPath: .spec.accessMode
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: BlockVolume represents a block storage volume.
+          type: object
+          properties:
+            apiVersion:
+              description: >-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+              type: string
+            kind:
+              description: >-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated. In CamelCase.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: BlockVolumeSpec defines the desired state of BlockVolume.
+              type: object
+              required:
+                - pool
+                - size
+                - accessMode
+              properties:
+                pool:
+                  description: Pool is the name of the StoragePool from which to provision the volume.
+                  type: string
+                size:
+                  description: Size is the requested capacity of the volume (e.g. "100Gi").
+                  type: string
+                accessMode:
+                  description: AccessMode controls how the volume may be mounted.
+                  type: string
+                  enum:
+                    - ReadWriteOnce
+                    - ReadOnlyMany
+            status:
+              description: BlockVolumeStatus defines the observed state of BlockVolume.
+              type: object
+              properties:
+                phase:
+                  description: Phase represents the current lifecycle phase of the volume.
+                  type: string
+                pool:
+                  description: Pool is the name of the StoragePool the volume was provisioned from.
+                  type: string
+                accessMode:
+                  description: AccessMode is the access mode the volume was provisioned with.
+                  type: string
+                nodeID:
+                  description: NodeID is the identifier of the storage node currently serving the volume.
+                  type: string
+                chunkCount:
+                  description: ChunkCount is the number of chunks that compose this volume.
+                  type: integer
+                conditions:
+                  description: Conditions reflect the current reconciliation state of the volume.
+                  type: array
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        description: lastTransitionTime is the last time the condition transitioned from one status to another.
+                        type: string
+                        format: date-time
+                      message:
+                        description: message is a human readable message indicating details about the transition.
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        description: observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        description: reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        type: string
+                        maxLength: 316
+                        pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$'
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sharedfilesystems.novastor.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+spec:
+  group: novastor.io
+  names:
+    kind: SharedFilesystem
+    listKind: SharedFilesystemList
+    plural: sharedfilesystems
+    singular: sharedfilesystem
+    shortNames:
+      - sfs
+    categories:
+      - novastor
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Pool
+          type: string
+          jsonPath: .spec.pool
+        - name: Capacity
+          type: string
+          jsonPath: .spec.capacity
+        - name: Protocol
+          type: string
+          jsonPath: .spec.export.protocol
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: SharedFilesystem represents a shared filesystem.
+          type: object
+          properties:
+            apiVersion:
+              description: >-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+              type: string
+            kind:
+              description: >-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated. In CamelCase.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: SharedFilesystemSpec defines the desired state of SharedFilesystem.
+              type: object
+              required:
+                - pool
+                - capacity
+                - accessMode
+              properties:
+                pool:
+                  description: Pool is the name of the StoragePool from which to provision the filesystem.
+                  type: string
+                capacity:
+                  description: Capacity is the maximum usable size of the filesystem (e.g. "500Gi").
+                  type: string
+                accessMode:
+                  description: AccessMode controls how the filesystem may be mounted.
+                  type: string
+                  enum:
+                    - ReadWriteMany
+                    - ReadOnlyMany
+                export:
+                  description: Export defines how the filesystem is exposed to clients.
+                  type: object
+                  required:
+                    - protocol
+                  properties:
+                    protocol:
+                      description: Protocol is the network filesystem protocol used for client access.
+                      type: string
+                      enum:
+                        - nfs
+            status:
+              description: SharedFilesystemStatus defines the observed state of SharedFilesystem.
+              type: object
+              properties:
+                phase:
+                  description: Phase represents the current lifecycle phase of the filesystem.
+                  type: string
+                endpoint:
+                  description: Endpoint is the network address at which clients can mount the filesystem.
+                  type: string
+                conditions:
+                  description: Conditions reflect the current reconciliation state of the filesystem.
+                  type: array
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        description: lastTransitionTime is the last time the condition transitioned from one status to another.
+                        type: string
+                        format: date-time
+                      message:
+                        description: message is a human readable message indicating details about the transition.
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        description: observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        description: reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        type: string
+                        maxLength: 316
+                        pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$'
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: objectstores.novastor.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+spec:
+  group: novastor.io
+  names:
+    kind: ObjectStore
+    listKind: ObjectStoreList
+    plural: objectstores
+    singular: objectstore
+    shortNames:
+      - os
+    categories:
+      - novastor
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Pool
+          type: string
+          jsonPath: .spec.pool
+        - name: Port
+          type: integer
+          jsonPath: .spec.endpoint.service.port
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: ObjectStore represents an S3-compatible object store.
+          type: object
+          properties:
+            apiVersion:
+              description: >-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+              type: string
+            kind:
+              description: >-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated. In CamelCase.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: ObjectStoreSpec defines the desired state of ObjectStore.
+              type: object
+              required:
+                - pool
+                - endpoint
+              properties:
+                pool:
+                  description: Pool is the name of the StoragePool backing this object store.
+                  type: string
+                endpoint:
+                  description: Endpoint configures how the S3-compatible API is exposed.
+                  type: object
+                  required:
+                    - service
+                  properties:
+                    service:
+                      description: Service defines the Kubernetes service configuration for the S3 endpoint.
+                      type: object
+                      required:
+                        - port
+                      properties:
+                        port:
+                          description: Port is the port on which the S3 API listens.
+                          type: integer
+                          format: int32
+                bucketPolicy:
+                  description: BucketPolicy defines default policies applied to buckets in this store.
+                  type: object
+                  properties:
+                    maxBuckets:
+                      description: MaxBuckets is the maximum number of buckets permitted in this store.
+                      type: integer
+                    versioning:
+                      description: Versioning controls whether object versioning is enabled by default.
+                      type: string
+                      enum:
+                        - enabled
+                        - disabled
+                        - suspended
+            status:
+              description: ObjectStoreStatus defines the observed state of ObjectStore.
+              type: object
+              properties:
+                phase:
+                  description: Phase represents the current lifecycle phase of the object store.
+                  type: string
+                endpoint:
+                  description: Endpoint is the URL at which the S3-compatible API is reachable.
+                  type: string
+                conditions:
+                  description: Conditions reflect the current reconciliation state of the object store.
+                  type: array
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        description: lastTransitionTime is the last time the condition transitioned from one status to another.
+                        type: string
+                        format: date-time
+                      message:
+                        description: message is a human readable message indicating details about the transition.
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        description: observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        description: reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        type: string
+                        maxLength: 316
+                        pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$'
+{{- end }}

@@ -1,0 +1,16 @@
+apiVersion: novastor.io/v1alpha1
+kind: StoragePool
+metadata:
+  name: nvme-replicated
+spec:
+  nodeSelector:
+    matchLabels:
+      novastor.io/storage-tier: nvme
+  deviceFilter:
+    type: nvme
+    minSize: "100Gi"
+  dataProtection:
+    mode: replication
+    replication:
+      factor: 3
+      writeQuorum: 2

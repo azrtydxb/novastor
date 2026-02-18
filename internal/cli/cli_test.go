@@ -11,7 +11,7 @@ func TestRootCommand_HasSubcommands(t *testing.T) {
 	for _, c := range cmds {
 		names[c.Name()] = true
 	}
-	for _, name := range []string{"version", "pool", "volume", "bucket", "status"} {
+	for _, name := range []string{"version", "pool", "volume", "bucket", "status", "node", "snapshot"} {
 		if !names[name] {
 			t.Errorf("missing subcommand: %s", name)
 		}
@@ -65,11 +65,67 @@ func TestBucketCommand_HasSubcommands(t *testing.T) {
 	}
 }
 
+func TestNodeCommand_HasSubcommands(t *testing.T) {
+	names := make(map[string]bool)
+	for _, c := range nodeCmd.Commands() {
+		names[c.Name()] = true
+	}
+	for _, name := range []string{"list", "get"} {
+		if !names[name] {
+			t.Errorf("node missing subcommand: %s", name)
+		}
+	}
+}
+
+func TestSnapshotCommand_HasSubcommands(t *testing.T) {
+	names := make(map[string]bool)
+	for _, c := range snapshotCmd.Commands() {
+		names[c.Name()] = true
+	}
+	for _, name := range []string{"list", "get", "create", "delete"} {
+		if !names[name] {
+			t.Errorf("snapshot missing subcommand: %s", name)
+		}
+	}
+}
+
 func TestVolumeCommand_Aliases(t *testing.T) {
 	if len(volumeCmd.Aliases) == 0 {
 		t.Fatal("volume command should have aliases")
 	}
 	if volumeCmd.Aliases[0] != "vol" {
 		t.Errorf("expected alias 'vol', got %q", volumeCmd.Aliases[0])
+	}
+}
+
+func TestSnapshotCommand_Aliases(t *testing.T) {
+	if len(snapshotCmd.Aliases) == 0 {
+		t.Fatal("snapshot command should have aliases")
+	}
+	if snapshotCmd.Aliases[0] != "snap" {
+		t.Errorf("expected alias 'snap', got %q", snapshotCmd.Aliases[0])
+	}
+}
+
+func TestFormatBytes(t *testing.T) {
+	tests := []struct {
+		input    int64
+		expected string
+	}{
+		{0, "0 B"},
+		{512, "512 B"},
+		{1024, "1.0 KiB"},
+		{1048576, "1.0 MiB"},
+		{1073741824, "1.0 GiB"},
+		{1099511627776, "1.0 TiB"},
+		{1536, "1.5 KiB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			got := formatBytes(tt.input)
+			if got != tt.expected {
+				t.Errorf("formatBytes(%d) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
 	}
 }

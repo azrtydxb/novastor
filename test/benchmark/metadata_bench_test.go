@@ -29,7 +29,11 @@ func newTestRaftStore(b *testing.B) *metadata.RaftStore {
 	dir := b.TempDir()
 	bindAddr := getFreePort(b)
 
-	store, err := metadata.NewRaftStore("bench-node", dir, bindAddr, true)
+	store, err := metadata.NewRaftStore(metadata.RaftConfig{
+		NodeID:   "bench-node",
+		DataDir:  dir,
+		RaftAddr: bindAddr,
+	})
 	if err != nil {
 		b.Fatal(err)
 	}

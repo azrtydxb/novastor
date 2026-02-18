@@ -103,6 +103,19 @@ func (c *GRPCClient) DeleteVolumeMeta(ctx context.Context, volumeID string) erro
 	return err
 }
 
+// ListVolumesMeta returns all volume metadata entries.
+func (c *GRPCClient) ListVolumesMeta(ctx context.Context) ([]*VolumeMeta, error) {
+	data, err := c.exec(ctx, "ListVolumesMeta", nil)
+	if err != nil {
+		return nil, err
+	}
+	var metas []*VolumeMeta
+	if err := json.Unmarshal(data, &metas); err != nil {
+		return nil, fmt.Errorf("unmarshaling []*VolumeMeta: %w", err)
+	}
+	return metas, nil
+}
+
 // ---- Placement operations ----
 
 // PutPlacementMap stores a placement map via the remote metadata service.
@@ -124,6 +137,19 @@ func (c *GRPCClient) GetPlacementMap(ctx context.Context, chunkID string) (*Plac
 		return nil, fmt.Errorf("unmarshaling PlacementMap: %w", err)
 	}
 	return &pm, nil
+}
+
+// ListPlacementMaps returns all placement map entries.
+func (c *GRPCClient) ListPlacementMaps(ctx context.Context) ([]*PlacementMap, error) {
+	data, err := c.exec(ctx, "ListPlacementMaps", nil)
+	if err != nil {
+		return nil, err
+	}
+	var pms []*PlacementMap
+	if err := json.Unmarshal(data, &pms); err != nil {
+		return nil, fmt.Errorf("unmarshaling []*PlacementMap: %w", err)
+	}
+	return pms, nil
 }
 
 // ---- Object operations ----
@@ -252,6 +278,50 @@ func (c *GRPCClient) DeleteMultipartUpload(ctx context.Context, uploadID string)
 	return err
 }
 
+// ---- Snapshot operations ----
+
+// PutSnapshot stores snapshot metadata via the remote metadata service.
+func (c *GRPCClient) PutSnapshot(ctx context.Context, meta *SnapshotMeta) error {
+	_, err := c.exec(ctx, "PutSnapshot", meta)
+	return err
+}
+
+// GetSnapshot retrieves snapshot metadata by snapshot ID.
+func (c *GRPCClient) GetSnapshot(ctx context.Context, snapshotID string) (*SnapshotMeta, error) {
+	data, err := c.exec(ctx, "GetSnapshot", struct {
+		SnapshotID string `json:"snapshotID"`
+	}{SnapshotID: snapshotID})
+	if err != nil {
+		return nil, err
+	}
+	var meta SnapshotMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("unmarshaling SnapshotMeta: %w", err)
+	}
+	return &meta, nil
+}
+
+// DeleteSnapshot removes snapshot metadata by snapshot ID.
+func (c *GRPCClient) DeleteSnapshot(ctx context.Context, snapshotID string) error {
+	_, err := c.exec(ctx, "DeleteSnapshot", struct {
+		SnapshotID string `json:"snapshotID"`
+	}{SnapshotID: snapshotID})
+	return err
+}
+
+// ListSnapshots returns all snapshot metadata entries.
+func (c *GRPCClient) ListSnapshots(ctx context.Context) ([]*SnapshotMeta, error) {
+	data, err := c.exec(ctx, "ListSnapshots", nil)
+	if err != nil {
+		return nil, err
+	}
+	var metas []*SnapshotMeta
+	if err := json.Unmarshal(data, &metas); err != nil {
+		return nil, fmt.Errorf("unmarshaling []*SnapshotMeta: %w", err)
+	}
+	return metas, nil
+}
+
 // ---- Inode operations ----
 
 // CreateInode stores inode metadata via the remote metadata service.
@@ -338,4 +408,48 @@ func (c *GRPCClient) ListDirectory(ctx context.Context, parentIno uint64) ([]*Di
 		return nil, fmt.Errorf("unmarshaling []*DirEntry: %w", err)
 	}
 	return entries, nil
+}
+
+// ---- Node registration operations ----
+
+// PutNodeMeta stores or updates node metadata via the remote metadata service.
+func (c *GRPCClient) PutNodeMeta(ctx context.Context, meta *NodeMeta) error {
+	_, err := c.exec(ctx, "PutNodeMeta", meta)
+	return err
+}
+
+// GetNodeMeta retrieves node metadata by node ID.
+func (c *GRPCClient) GetNodeMeta(ctx context.Context, nodeID string) (*NodeMeta, error) {
+	data, err := c.exec(ctx, "GetNodeMeta", struct {
+		NodeID string `json:"nodeID"`
+	}{NodeID: nodeID})
+	if err != nil {
+		return nil, err
+	}
+	var meta NodeMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("unmarshaling NodeMeta: %w", err)
+	}
+	return &meta, nil
+}
+
+// DeleteNodeMeta removes node metadata by node ID.
+func (c *GRPCClient) DeleteNodeMeta(ctx context.Context, nodeID string) error {
+	_, err := c.exec(ctx, "DeleteNodeMeta", struct {
+		NodeID string `json:"nodeID"`
+	}{NodeID: nodeID})
+	return err
+}
+
+// ListNodeMetas returns all registered storage nodes.
+func (c *GRPCClient) ListNodeMetas(ctx context.Context) ([]*NodeMeta, error) {
+	data, err := c.exec(ctx, "ListNodeMetas", nil)
+	if err != nil {
+		return nil, err
+	}
+	var metas []*NodeMeta
+	if err := json.Unmarshal(data, &metas); err != nil {
+		return nil, fmt.Errorf("unmarshaling []*NodeMeta: %w", err)
+	}
+	return metas, nil
 }

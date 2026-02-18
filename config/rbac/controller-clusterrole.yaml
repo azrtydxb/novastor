@@ -1,0 +1,134 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: novastor-controller
+  labels:
+    app.kubernetes.io/name: novastor
+    app.kubernetes.io/component: controller
+rules:
+  # Full CRUD on all NovaStor custom resources
+  - apiGroups:
+      - novastor.io
+    resources:
+      - storagepools
+      - blockvolumes
+      - sharedfilesystems
+      - objectstores
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Status subresource updates for all NovaStor CRDs
+  - apiGroups:
+      - novastor.io
+    resources:
+      - storagepools/status
+      - blockvolumes/status
+      - sharedfilesystems/status
+      - objectstores/status
+    verbs:
+      - get
+      - update
+      - patch
+  # Finalizer management for all NovaStor CRDs
+  - apiGroups:
+      - novastor.io
+    resources:
+      - storagepools/finalizers
+      - blockvolumes/finalizers
+      - sharedfilesystems/finalizers
+      - objectstores/finalizers
+    verbs:
+      - update
+  # Node discovery and topology awareness
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+  # PersistentVolume and PersistentVolumeClaim management
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumes
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Workload management for NFS filer and S3 gateway
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Service management for NFS and S3 endpoints
+  - apiGroups:
+      - ""
+    resources:
+      - services
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Secret management for S3 access credentials
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Event emission for controller status reporting
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+  # Leader election via coordination leases
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete

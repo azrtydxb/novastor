@@ -23,10 +23,10 @@ import (
 )
 
 const (
-	s3GatewayImage      = "novastor/s3-gateway:latest"
-	defaultS3Replicas   = int32(2)
-	accessKeyLength     = 20
-	secretKeyLength     = 40
+	defaultS3GatewayImage = "novastor/novastor-s3gw:v0.1.0"
+	defaultS3Replicas     = int32(2)
+	accessKeyLength       = 20
+	secretKeyLength       = 40
 )
 
 // ObjectStoreReconciler reconciles ObjectStore objects.
@@ -214,6 +214,11 @@ func (r *ObjectStoreReconciler) reconcileS3Deployment(ctx context.Context, store
 
 		port := store.Spec.Endpoint.Service.Port
 
+		image := store.Spec.Image
+		if image == "" {
+			image = defaultS3GatewayImage
+		}
+
 		deploy.Spec = appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
@@ -227,7 +232,7 @@ func (r *ObjectStoreReconciler) reconcileS3Deployment(ctx context.Context, store
 					Containers: []corev1.Container{
 						{
 							Name:  "s3-gateway",
-							Image: s3GatewayImage,
+							Image: image,
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          "s3",

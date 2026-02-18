@@ -2,9 +2,12 @@ package chunk
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/piwi3910/novastor/internal/logging"
 )
 
 // ScrubReporter receives reports of corrupt chunks.
@@ -71,9 +74,9 @@ func (s *Scrubber) loop(ctx context.Context) {
 	// Run an initial scrub immediately.
 	ok, bad, err := s.ScrubOnce(ctx)
 	if err != nil {
-		log.Printf("scrub error: %v", err)
+		logging.L.Error("scrub error", zap.Error(err))
 	} else {
-		log.Printf("scrub completed: %d ok, %d bad", ok, bad)
+		logging.L.Info("scrub completed", zap.Int64("ok", ok), zap.Int64("bad", bad))
 	}
 
 	for {
@@ -83,9 +86,9 @@ func (s *Scrubber) loop(ctx context.Context) {
 		case <-ticker.C:
 			ok, bad, err := s.ScrubOnce(ctx)
 			if err != nil {
-				log.Printf("scrub error: %v", err)
+				logging.L.Error("scrub error", zap.Error(err))
 			} else {
-				log.Printf("scrub completed: %d ok, %d bad", ok, bad)
+				logging.L.Info("scrub completed", zap.Int64("ok", ok), zap.Int64("bad", bad))
 			}
 		}
 	}
@@ -110,19 +113,19 @@ func (s *Scrubber) ScrubOnce(ctx context.Context) (ok, bad int64, err error) {
 		if getErr != nil {
 			// Get failed — treat as corrupt since the store's own integrity
 			// check (inside Get) may have caught the corruption.
-			log.Printf("scrub: error reading chunk %s: %v", id, getErr)
+			logging.L.Error("scrub: error reading chunk", zap.String("chunkID", string(id)), zap.Error(getErr))
 			bad++
 			if reportErr := s.reporter.ReportCorruptChunk(ctx, id); reportErr != nil {
-				log.Printf("scrub: error reporting corrupt chunk %s: %v", id, reportErr)
+				logging.L.Error("scrub: error reporting corrupt chunk", zap.String("chunkID", string(id)), zap.Error(reportErr))
 			}
 			continue
 		}
 
 		if verifyErr := c.VerifyChecksum(); verifyErr != nil {
-			log.Printf("scrub: corrupt chunk %s: %v", id, verifyErr)
+			logging.L.Error("scrub: corrupt chunk", zap.String("chunkID", string(id)), zap.Error(verifyErr))
 			bad++
 			if reportErr := s.reporter.ReportCorruptChunk(ctx, id); reportErr != nil {
-				log.Printf("scrub: error reporting corrupt chunk %s: %v", id, reportErr)
+				logging.L.Error("scrub: error reporting corrupt chunk", zap.String("chunkID", string(id)), zap.Error(reportErr))
 			}
 		} else {
 			ok++

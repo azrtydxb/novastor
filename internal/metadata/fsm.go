@@ -18,7 +18,18 @@ const (
 	bucketObjects    = "objects"
 	bucketBuckets    = "buckets"    // S3 buckets, not FSM buckets
 	bucketMultipart  = "multipart"
+	bucketSnapshots  = "snapshots"
 )
+
+// MetadataFSM defines the interface that both the in-memory FSM and the
+// BadgerDB-backed FSM implement. It extends raft.FSM with typed read
+// accessors and a Close method for resource cleanup.
+type MetadataFSM interface {
+	raft.FSM
+	Get(bucket, key string) ([]byte, error)
+	GetAll(bucket string) (map[string][]byte, error)
+	Close() error
+}
 
 type fsmOp struct {
 	Op     string `json:"op"`
@@ -27,16 +38,29 @@ type fsmOp struct {
 	Value  []byte `json:"value,omitempty"`
 }
 
+// FSM is the in-memory implementation of MetadataFSM. It stores all metadata
+// in nested maps protected by a read-write mutex. Suitable for testing and
+// small deployments where persistence is handled entirely by Raft snapshots.
 type FSM struct {
 	mu      sync.RWMutex
 	buckets map[string]map[string][]byte
 }
+
+// Compile-time check that FSM implements MetadataFSM.
+var _ MetadataFSM = (*FSM)(nil)
 
 func NewFSM() *FSM {
 	return &FSM{
 		buckets: map[string]map[string][]byte{
 			bucketVolumes:    {},
 			bucketPlacements: {},
+			bucketObjects:    {},
+			bucketBuckets:    {},
+			bucketMultipart:  {},
+			bucketSnapshots:  {},
+			"nodes":           {},
+			"inodes":          {},
+			"dirents":         {},
 		},
 	}
 }
@@ -140,3 +164,8 @@ func (s *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
 }
 
 func (s *fsmSnapshot) Release() {}
+
+// Close is a no-op for the in-memory FSM since there are no resources to release.
+func (f *FSM) Close() error {
+	return nil
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
@@ -17,7 +19,127 @@ import (
 	novcsi "github.com/piwi3910/novastor/internal/csi"
 	"github.com/piwi3910/novastor/internal/metadata"
 	"github.com/piwi3910/novastor/internal/placement"
+	"github.com/piwi3910/novastor/internal/transport"
 )
+
+// compositeController is a CSI ControllerServer that delegates each RPC group
+// to a focused sub-controller. CreateVolume/DeleteVolume/ValidateVolumeCapabilities
+// go to volume, snapshot RPCs go to snapshot, and ControllerExpandVolume goes to
+// expand. All three embed csi.UnimplementedControllerServer, so RPCs not covered
+// by any sub-controller return an Unimplemented status automatically.
+type compositeController struct {
+	csi.UnimplementedControllerServer
+	volume   *novcsi.ControllerServer
+	snapshot *novcsi.SnapshotController
+	expand   *novcsi.ExpandController
+}
+
+func (c *compositeController) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+	return c.volume.CreateVolume(ctx, req)
+}
+
+func (c *compositeController) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
+	return c.volume.DeleteVolume(ctx, req)
+}
+
+func (c *compositeController) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
+	return c.volume.ValidateVolumeCapabilities(ctx, req)
+}
+
+func (c *compositeController) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
+	return c.volume.ListVolumes(ctx, req)
+}
+
+func (c *compositeController) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+	return c.volume.ControllerGetCapabilities(ctx, req)
+}
+
+func (c *compositeController) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+	return c.snapshot.CreateSnapshot(ctx, req)
+}
+
+func (c *compositeController) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+	return c.snapshot.DeleteSnapshot(ctx, req)
+}
+
+func (c *compositeController) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+	return c.snapshot.ListSnapshots(ctx, req)
+}
+
+func (c *compositeController) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
+	return c.expand.ControllerExpandVolume(ctx, req)
+}
+
+// snapshotStoreAdapter bridges *metadata.GRPCClient to the novcsi.SnapshotStore
+// interface. It converts between metadata.SnapshotMeta and novcsi.SnapshotMeta
+// so that the CSI SnapshotController can use the remote metadata service without
+// creating an import cycle between the csi and metadata packages.
+type snapshotStoreAdapter struct {
+	client *metadata.GRPCClient
+}
+
+func (a *snapshotStoreAdapter) PutVolumeMeta(ctx context.Context, meta *metadata.VolumeMeta) error {
+	return a.client.PutVolumeMeta(ctx, meta)
+}
+
+func (a *snapshotStoreAdapter) GetVolumeMeta(ctx context.Context, volumeID string) (*metadata.VolumeMeta, error) {
+	return a.client.GetVolumeMeta(ctx, volumeID)
+}
+
+func (a *snapshotStoreAdapter) DeleteVolumeMeta(ctx context.Context, volumeID string) error {
+	return a.client.DeleteVolumeMeta(ctx, volumeID)
+}
+
+func (a *snapshotStoreAdapter) ListVolumesMeta(ctx context.Context) ([]*metadata.VolumeMeta, error) {
+	return a.client.ListVolumesMeta(ctx)
+}
+
+func (a *snapshotStoreAdapter) PutSnapshotMeta(ctx context.Context, meta *novcsi.SnapshotMeta) error {
+	return a.client.PutSnapshot(ctx, &metadata.SnapshotMeta{
+		SnapshotID:     meta.SnapshotID,
+		SourceVolumeID: meta.SourceVolumeID,
+		SizeBytes:      meta.SizeBytes,
+		ChunkIDs:       meta.ChunkIDs,
+		CreationTime:   meta.CreationTime,
+		ReadyToUse:     true,
+	})
+}
+
+func (a *snapshotStoreAdapter) GetSnapshotMeta(ctx context.Context, snapshotID string) (*novcsi.SnapshotMeta, error) {
+	m, err := a.client.GetSnapshot(ctx, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	return &novcsi.SnapshotMeta{
+		SnapshotID:     m.SnapshotID,
+		SourceVolumeID: m.SourceVolumeID,
+		SizeBytes:      m.SizeBytes,
+		ChunkIDs:       m.ChunkIDs,
+		CreationTime:   m.CreationTime,
+	}, nil
+}
+
+func (a *snapshotStoreAdapter) DeleteSnapshotMeta(ctx context.Context, snapshotID string) error {
+	return a.client.DeleteSnapshot(ctx, snapshotID)
+}
+
+func (a *snapshotStoreAdapter) ListSnapshotMetas(ctx context.Context) ([]*novcsi.SnapshotMeta, error) {
+	all, err := a.client.ListSnapshots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*novcsi.SnapshotMeta, 0, len(all))
+	for _, m := range all {
+		result = append(result, &novcsi.SnapshotMeta{
+			SnapshotID:     m.SnapshotID,
+			SourceVolumeID: m.SourceVolumeID,
+			SizeBytes:      m.SizeBytes,
+			ChunkIDs:       m.ChunkIDs,
+			CreationTime:   m.CreationTime,
+		})
+	}
+	return result, nil
+}
 
 var (
 	version = "dev"
@@ -30,19 +152,45 @@ func main() {
 	nodeID := flag.String("node-id", "", "Node ID for this CSI node")
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
 	agentAddrs := flag.String("agent-addrs", "", "Comma-separated list of agent addresses (nodeID=addr,...)")
+	tlsCA := flag.String("tls-ca", "", "Path to CA certificate for mTLS")
+	tlsCert := flag.String("tls-cert", "", "Path to client certificate for mTLS")
+	tlsKey := flag.String("tls-key", "", "Path to client key for mTLS")
+	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	flag.Parse()
 
 	log.Printf("novastor-csi %s (commit: %s, built: %s)", version, commit, date)
 
+	// Main context for the CSI driver lifetime.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Build TLS dial option when TLS flags are provided.
+	var dialOpts []grpc.DialOption
+	if *tlsCA != "" && *tlsCert != "" && *tlsKey != "" {
+		rotator := transport.NewCertRotator(*tlsCert, *tlsKey, *tlsRotationInterval)
+		rotator.Start(ctx)
+		log.Printf("TLS certificate rotation enabled (cert=%s, key=%s, interval=%s)",
+			*tlsCert, *tlsKey, *tlsRotationInterval)
+		tlsOpt, tlsErr := transport.NewClientTLSWithRotation(transport.TLSConfig{
+			CACertPath: *tlsCA,
+			CertPath:   *tlsCert,
+			KeyPath:    *tlsKey,
+		}, rotator)
+		if tlsErr != nil {
+			log.Fatalf("Failed to configure TLS: %v", tlsErr)
+		}
+		dialOpts = append(dialOpts, tlsOpt)
+	}
+
 	// Connect to the metadata service.
-	metaClient, err := metadata.Dial(*metaAddr)
+	metaClient, err := metadata.Dial(*metaAddr, dialOpts...)
 	if err != nil {
 		log.Fatalf("Failed to connect to metadata service at %s: %v", *metaAddr, err)
 	}
 	defer metaClient.Close()
 
 	// Build the NodeChunkClient from agent addresses.
-	nodeChunkClient := agent.NewNodeChunkClient()
+	nodeChunkClient := agent.NewNodeChunkClient(dialOpts...)
 	var nodeIDs []string
 	if *agentAddrs != "" {
 		for _, entry := range strings.Split(*agentAddrs, ",") {
@@ -98,9 +246,22 @@ func main() {
 		csi.RegisterNodeServer(srv, node)
 	}
 
-	// Register CSI Controller service with real metadata + placement.
+	// Build sub-controllers.
 	controller := novcsi.NewControllerServer(metaClient, placer)
-	csi.RegisterControllerServer(srv, controller)
+	snapAdapter := &snapshotStoreAdapter{client: metaClient}
+	snapshotCtrl := novcsi.NewSnapshotController(snapAdapter)
+	expandCtrl := novcsi.NewExpandController(metaClient, placer)
+
+	// Register a composite ControllerServer that delegates volume, snapshot,
+	// and expand RPCs to their respective sub-controllers. All three embed
+	// csi.UnimplementedControllerServer so any RPC not handled by a specific
+	// sub-controller falls back to the unimplemented stub automatically.
+	composite := &compositeController{
+		volume:   controller,
+		snapshot: snapshotCtrl,
+		expand:   expandCtrl,
+	}
+	csi.RegisterControllerServer(srv, composite)
 
 	log.Printf("CSI driver listening on %s://%s", scheme, addr)
 
@@ -110,6 +271,7 @@ func main() {
 	go func() {
 		<-stop
 		log.Println("Shutting down CSI driver...")
+		cancel() // cancel main context: stops cert rotator
 		srv.GracefulStop()
 	}()
 

@@ -1,0 +1,159 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: novastor-csi
+  labels:
+    app.kubernetes.io/name: novastor
+    app.kubernetes.io/component: csi
+rules:
+  # PersistentVolume lifecycle management
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumes
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # PersistentVolumeClaim lifecycle management
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # StorageClass read access for provisioning parameters
+  - apiGroups:
+      - storage.k8s.io
+    resources:
+      - storageclasses
+    verbs:
+      - get
+      - list
+      - watch
+  # Event emission for CSI driver status reporting
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+  # VolumeAttachment tracking for attach/detach operations
+  - apiGroups:
+      - storage.k8s.io
+    resources:
+      - volumeattachments
+    verbs:
+      - get
+      - list
+      - watch
+  # VolumeAttachment status updates
+  - apiGroups:
+      - storage.k8s.io
+    resources:
+      - volumeattachments/status
+    verbs:
+      - get
+      - update
+      - patch
+  # CSI node and driver topology information
+  - apiGroups:
+      - storage.k8s.io
+    resources:
+      - csinodes
+      - csidrivers
+    verbs:
+      - get
+      - list
+      - watch
+  # Node read access for topology-aware scheduling
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+  # VolumeSnapshot lifecycle management
+  - apiGroups:
+      - snapshot.storage.k8s.io
+    resources:
+      - volumesnapshots
+      - volumesnapshotcontents
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # VolumeSnapshot status updates
+  - apiGroups:
+      - snapshot.storage.k8s.io
+    resources:
+      - volumesnapshots/status
+      - volumesnapshotcontents/status
+    verbs:
+      - get
+      - update
+      - patch
+  # VolumeSnapshotClass read access
+  - apiGroups:
+      - snapshot.storage.k8s.io
+    resources:
+      - volumesnapshotclasses
+    verbs:
+      - get
+      - list
+      - watch
+  # NovaStor BlockVolume access for CSI provisioning
+  - apiGroups:
+      - novastor.io
+    resources:
+      - blockvolumes
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # BlockVolume status updates
+  - apiGroups:
+      - novastor.io
+    resources:
+      - blockvolumes/status
+    verbs:
+      - get
+      - update
+      - patch
+  # Leader election for CSI controller
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete

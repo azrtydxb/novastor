@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 // NVMeInitiator abstracts NVMe-oF connect/disconnect operations for testability.
@@ -47,7 +49,11 @@ func (s *StubInitiator) Disconnect(_ context.Context, nqn string) error {
 // This is the production implementation for Linux hosts.
 type LinuxInitiator struct{}
 
-// Connect runs `nvme connect` to attach an NVMe-oF target over TCP.
+// nvmeFabricsRoot is the sysfs path for NVMe fabrics controllers.
+const nvmeFabricsRoot = "/sys/class/nvme"
+
+// Connect runs `nvme connect` to attach an NVMe-oF target over TCP and
+// discovers the actual block device path by scanning sysfs.
 func (l *LinuxInitiator) Connect(ctx context.Context, addr, port, nqn string) (string, error) {
 	cmd := exec.CommandContext(ctx, "nvme", "connect",
 		"-t", "tcp",
@@ -59,10 +65,83 @@ func (l *LinuxInitiator) Connect(ctx context.Context, addr, port, nqn string) (s
 	if err != nil {
 		return "", fmt.Errorf("nvme connect failed: %w: %s", err, string(output))
 	}
-	// The device path is typically /dev/nvmeXnY. In a real implementation,
-	// we would parse the nvme-cli output or scan /sys to find the new device.
-	// For now, return a conventional path.
-	return fmt.Sprintf("/dev/nvme-fabrics/%s", nqn), nil
+
+	// Poll sysfs until the new controller appears (up to 10 seconds).
+	devicePath, err := discoverNVMeDevice(ctx, nqn)
+	if err != nil {
+		return "", fmt.Errorf("discovering nvme device for nqn %s: %w", nqn, err)
+	}
+	return devicePath, nil
+}
+
+// discoverNVMeDevice scans /sys/class/nvme for a controller whose subsystem
+// NQN matches the requested nqn, then derives the block device path from the
+// controller name (e.g. nvme0 -> /dev/nvme0n1).
+func discoverNVMeDevice(ctx context.Context, nqn string) (string, error) {
+	const (
+		pollInterval = 200 * time.Millisecond
+		timeout      = 10 * time.Second
+	)
+
+	deadline := time.Now().Add(timeout)
+	for {
+		path, err := findNVMeDeviceByNQN(nqn)
+		if err == nil {
+			return path, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("timed out waiting for nvme device with nqn %s", nqn)
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
+// findNVMeDeviceByNQN reads /sys/class/nvme/*/subsysnqn files to find a
+// controller whose NQN matches, then returns the first namespace device path.
+func findNVMeDeviceByNQN(nqn string) (string, error) {
+	entries, err := os.ReadDir(nvmeFabricsRoot)
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", nvmeFabricsRoot, err)
+	}
+
+	for _, entry := range entries {
+		ctrlName := entry.Name() // e.g. "nvme0"
+		nqnFile := filepath.Join(nvmeFabricsRoot, ctrlName, "subsysnqn")
+		data, err := os.ReadFile(nqnFile)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(data)) != nqn {
+			continue
+		}
+
+		// The controller directory contains namespace entries (nvme0n1, nvme0n2, …).
+		// Return the path for the first namespace.
+		ctrlDir := filepath.Join(nvmeFabricsRoot, ctrlName)
+		nsEntries, err := os.ReadDir(ctrlDir)
+		if err != nil {
+			return "", fmt.Errorf("reading controller dir %s: %w", ctrlDir, err)
+		}
+		for _, ns := range nsEntries {
+			nsName := ns.Name()
+			// Namespace entries follow the pattern "<ctrlName>n<num>".
+			if strings.HasPrefix(nsName, ctrlName+"n") {
+				return filepath.Join("/dev", nsName), nil
+			}
+		}
+
+		// Controller found but no namespaces yet; signal not-ready.
+		return "", fmt.Errorf("controller %s found but no namespaces available", ctrlName)
+	}
+
+	return "", fmt.Errorf("no nvme controller found for nqn %s", nqn)
 }
 
 // Disconnect runs `nvme disconnect` to detach an NVMe-oF target.

@@ -1,9 +1,9 @@
 package metrics
 
 // AgentCollector collects metrics from a storage agent and updates the
-// corresponding Prometheus gauges and counters. The fields will be wired
-// to real data sources (chunk store, disk manager, etc.) once those
-// components expose the necessary interfaces.
+// corresponding Prometheus gauges and counters. The function fields are
+// wired to real data sources (chunk store, disk manager, etc.) by the
+// caller.
 type AgentCollector struct {
 	// ChunkCountFn returns the current number of chunks stored locally.
 	ChunkCountFn func() int64
@@ -11,6 +11,7 @@ type AgentCollector struct {
 	// DiskStatsFn returns per-device disk statistics: device name, total
 	// bytes, used bytes, and free bytes.
 	DiskStatsFn func() []DiskStats
+
 }
 
 // DiskStats holds capacity information for a single storage device.
@@ -26,8 +27,8 @@ type DiskStats struct {
 // before invoking Collect.
 func NewAgentCollector() *AgentCollector {
 	return &AgentCollector{
-		ChunkCountFn: func() int64 { return 0 },
-		DiskStatsFn:  func() []DiskStats { return nil },
+		ChunkCountFn:  func() int64 { return 0 },
+		DiskStatsFn: func() []DiskStats { return nil },
 	}
 }
 

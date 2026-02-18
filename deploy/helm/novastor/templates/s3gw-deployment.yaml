@@ -42,12 +42,14 @@ spec:
               containerPort: 9000
               protocol: TCP
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /
               port: s3
             initialDelaySeconds: 15
             periodSeconds: 20
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /
               port: s3
             initialDelaySeconds: 5
             periodSeconds: 10

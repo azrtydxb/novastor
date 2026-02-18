@@ -1,0 +1,52 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: novastor-agent
+  labels:
+    app.kubernetes.io/name: novastor
+    app.kubernetes.io/component: agent
+rules:
+  # Node discovery and status reporting
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+  # Node status updates for disk capacity reporting
+  - apiGroups:
+      - ""
+    resources:
+      - nodes/status
+    verbs:
+      - get
+      - update
+      - patch
+  # StoragePool read access for pool membership
+  - apiGroups:
+      - novastor.io
+    resources:
+      - storagepools
+    verbs:
+      - get
+      - list
+      - watch
+  # StoragePool status updates for node count and capacity
+  - apiGroups:
+      - novastor.io
+    resources:
+      - storagepools/status
+    verbs:
+      - get
+      - update
+      - patch
+  # Event emission for agent status reporting
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch

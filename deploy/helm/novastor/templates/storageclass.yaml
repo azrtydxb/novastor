@@ -1,13 +1,41 @@
+{{- if .Values.storageClasses.enabled }}
+---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: {{ .Values.storageClass.name | default "novastor-block" }}
+  name: novastor-block-replicated
   annotations:
     storageclass.kubernetes.io/is-default-class: "{{ .Values.storageClass.isDefault | default false }}"
 provisioner: novastor.csi.novastor.io
 parameters:
-  pool: {{ .Values.storageClass.pool | default "nvme-replicated" }}
-  dataProtection: {{ .Values.storageClass.dataProtection | default "replication" }}
-reclaimPolicy: {{ .Values.storageClass.reclaimPolicy | default "Delete" }}
+  protection: replication
+  replicas: "3"
+reclaimPolicy: Delete
 allowVolumeExpansion: true
-volumeBindingMode: {{ .Values.storageClass.volumeBindingMode | default "WaitForFirstConsumer" }}
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: novastor-block-erasure
+provisioner: novastor.csi.novastor.io
+parameters:
+  protection: erasure-coding
+  dataShards: "4"
+  parityShards: "2"
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: novastor-block-replicated-retain
+provisioner: novastor.csi.novastor.io
+parameters:
+  protection: replication
+  replicas: "3"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+{{- end }}

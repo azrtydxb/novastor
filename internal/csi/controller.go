@@ -25,6 +25,7 @@ type MetadataStore interface {
 	PutVolumeMeta(ctx context.Context, meta *metadata.VolumeMeta) error
 	GetVolumeMeta(ctx context.Context, volumeID string) (*metadata.VolumeMeta, error)
 	DeleteVolumeMeta(ctx context.Context, volumeID string) error
+	ListVolumesMeta(ctx context.Context) ([]*metadata.VolumeMeta, error)
 }
 
 // PlacementEngine selects storage nodes for new chunks.
@@ -183,9 +184,54 @@ func (cs *ControllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 	}, nil
 }
 
-// ListVolumes is not supported.
-func (cs *ControllerServer) ListVolumes(_ context.Context, _ *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListVolumes is not supported")
+// ListVolumes returns all volumes known to the metadata store.
+// It supports the optional max_entries and starting_token pagination fields
+// from the CSI spec, but the token is a simple volume-ID cursor.
+func (cs *ControllerServer) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
+	vols, err := cs.meta.ListVolumesMeta(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "listing volumes: %v", err)
+	}
+
+	// Apply starting_token offset (token is a volumeID; start after it).
+	startIdx := 0
+	if token := req.GetStartingToken(); token != "" {
+		found := false
+		for i, v := range vols {
+			if v.VolumeID == token {
+				startIdx = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, status.Errorf(codes.Aborted, "invalid starting_token: volume %s not found", token)
+		}
+	}
+	vols = vols[startIdx:]
+
+	// Apply max_entries limit.
+	var nextToken string
+	maxEntries := int(req.GetMaxEntries())
+	if maxEntries > 0 && len(vols) > maxEntries {
+		nextToken = vols[maxEntries].VolumeID
+		vols = vols[:maxEntries]
+	}
+
+	entries := make([]*csi.ListVolumesResponse_Entry, 0, len(vols))
+	for _, vm := range vols {
+		entries = append(entries, &csi.ListVolumesResponse_Entry{
+			Volume: &csi.Volume{
+				VolumeId:      vm.VolumeID,
+				CapacityBytes: int64(vm.SizeBytes),
+			},
+		})
+	}
+
+	return &csi.ListVolumesResponse{
+		Entries:   entries,
+		NextToken: nextToken,
+	}, nil
 }
 
 // ControllerPublishVolume is handled at the node level.

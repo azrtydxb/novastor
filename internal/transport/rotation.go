@@ -3,9 +3,12 @@ package transport
 import (
 	"context"
 	"crypto/tls"
-	"log"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/piwi3910/novastor/internal/logging"
 )
 
 // CertRotator watches for certificate file changes and reloads them
@@ -28,7 +31,7 @@ func NewCertRotator(certPath, keyPath string, interval time.Duration) *CertRotat
 	}
 	// Attempt an initial load.
 	if err := r.reload(); err != nil {
-		log.Printf("CertRotator: initial certificate load failed: %v", err)
+		logging.L.Error("CertRotator: initial certificate load failed", zap.Error(err))
 	}
 	return r
 }
@@ -58,9 +61,9 @@ func (r *CertRotator) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				if err := r.reload(); err != nil {
-					log.Printf("CertRotator: failed to reload certificate: %v", err)
+					logging.L.Error("CertRotator: failed to reload certificate", zap.Error(err))
 				} else {
-					log.Printf("CertRotator: certificate reloaded successfully")
+					logging.L.Info("CertRotator: certificate reloaded successfully")
 				}
 			}
 		}

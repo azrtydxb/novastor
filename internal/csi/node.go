@@ -5,14 +5,16 @@ package csi
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/piwi3910/novastor/internal/logging"
 )
 
 // ChunkClient is the interface for fetching and writing chunks to remote nodes.
@@ -92,7 +94,7 @@ func (ns *NodeService) NodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to connect NVMe-oF target: %v", err)
 		}
-		log.Printf("NodeStageVolume: connected NVMe-oF device at %s for volume %s", devicePath, req.GetVolumeId())
+		logging.L.Info("NodeStageVolume: connected NVMe-oF device", zap.String("devicePath", devicePath), zap.String("volumeID", req.GetVolumeId()))
 
 		// Write device path marker so NodeUnstageVolume knows what to disconnect.
 		markerPath := filepath.Join(stagingPath, "nvme-device")
@@ -100,7 +102,7 @@ func (ns *NodeService) NodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 			return nil, status.Errorf(codes.Internal, "failed to write device marker: %v", err)
 		}
 	} else {
-		log.Printf("NodeStageVolume: staging volume %s at %s (no NVMe-oF initiator)", req.GetVolumeId(), stagingPath)
+		logging.L.Info("NodeStageVolume: staging volume (no NVMe-oF initiator)", zap.String("volumeID", req.GetVolumeId()), zap.String("stagingPath", stagingPath))
 		// Write a simple marker to indicate the volume is staged.
 		markerPath := filepath.Join(stagingPath, "staged")
 		if err := os.WriteFile(markerPath, []byte(req.GetVolumeId()), 0600); err != nil {
@@ -129,7 +131,7 @@ func (ns *NodeService) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 		if disconnErr := ns.initiator.Disconnect(ctx, nqn); disconnErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to disconnect NVMe-oF target %s: %v", nqn, disconnErr)
 		}
-		log.Printf("NodeUnstageVolume: disconnected NVMe-oF target %s for volume %s", nqn, req.GetVolumeId())
+		logging.L.Info("NodeUnstageVolume: disconnected NVMe-oF target", zap.String("nqn", nqn), zap.String("volumeID", req.GetVolumeId()))
 	}
 
 	// Clean up staging directory.
@@ -137,7 +139,7 @@ func (ns *NodeService) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 		return nil, status.Errorf(codes.Internal, "failed to remove staging path %s: %v", stagingPath, err)
 	}
 
-	log.Printf("NodeUnstageVolume: unstaged volume %s from %s", req.GetVolumeId(), stagingPath)
+	logging.L.Info("NodeUnstageVolume: unstaged volume", zap.String("volumeID", req.GetVolumeId()), zap.String("stagingPath", stagingPath))
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
@@ -166,7 +168,7 @@ func (ns *NodeService) NodePublishVolume(ctx context.Context, req *csi.NodePubli
 	if nfsServer, ok := volCtx["nfsServer"]; ok && nfsServer != "" {
 		nfsShare := volCtx["nfsShare"]
 		nfsSource := fmt.Sprintf("%s:%s", nfsServer, nfsShare)
-		log.Printf("NodePublishVolume: NFS mounting %s to %s for volume %s", nfsSource, targetPath, req.GetVolumeId())
+		logging.L.Info("NodePublishVolume: NFS mounting", zap.String("source", nfsSource), zap.String("targetPath", targetPath), zap.String("volumeID", req.GetVolumeId()))
 
 		if err := ns.mounter.Mount(nfsSource, targetPath); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to NFS mount %s to %s: %v", nfsSource, targetPath, err)
@@ -174,7 +176,7 @@ func (ns *NodeService) NodePublishVolume(ctx context.Context, req *csi.NodePubli
 		return &csi.NodePublishVolumeResponse{}, nil
 	}
 
-	log.Printf("NodePublishVolume: bind-mounting %s to %s for volume %s", stagingPath, targetPath, req.GetVolumeId())
+	logging.L.Info("NodePublishVolume: bind-mounting", zap.String("stagingPath", stagingPath), zap.String("targetPath", targetPath), zap.String("volumeID", req.GetVolumeId()))
 
 	if err := ns.mounter.Mount(stagingPath, targetPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to bind-mount %s to %s: %v", stagingPath, targetPath, err)
@@ -194,7 +196,7 @@ func (ns *NodeService) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 
 	targetPath := req.GetTargetPath()
 
-	log.Printf("NodeUnpublishVolume: unmounting %s for volume %s", targetPath, req.GetVolumeId())
+	logging.L.Info("NodeUnpublishVolume: unmounting", zap.String("targetPath", targetPath), zap.String("volumeID", req.GetVolumeId()))
 
 	if err := ns.mounter.Unmount(targetPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unmount %s: %v", targetPath, err)

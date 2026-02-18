@@ -26,3 +26,26 @@ func printTable(headers []string, rows [][]string) {
 	}
 	w.Flush()
 }
+
+// formatBytes converts a byte count into a human-readable string using
+// binary units (KiB, MiB, GiB, TiB).
+func formatBytes(b int64) string {
+	const (
+		kib = 1024
+		mib = kib * 1024
+		gib = mib * 1024
+		tib = gib * 1024
+	)
+	switch {
+	case b >= tib:
+		return fmt.Sprintf("%.1f TiB", float64(b)/float64(tib))
+	case b >= gib:
+		return fmt.Sprintf("%.1f GiB", float64(b)/float64(gib))
+	case b >= mib:
+		return fmt.Sprintf("%.1f MiB", float64(b)/float64(mib))
+	case b >= kib:
+		return fmt.Sprintf("%.1f KiB", float64(b)/float64(kib))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}

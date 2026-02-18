@@ -34,11 +34,15 @@ manifests: controller-gen ## Generate CRD manifests.
 
 .PHONY: generate-proto
 generate-proto: protoc-gen-go protoc-gen-go-grpc ## Generate Go code from protobuf definitions.
-	mkdir -p internal/proto/gen
-	PATH=$(LOCALBIN):$$PATH protoc --go_out=internal/proto/gen --go_opt=paths=source_relative \
-		--go-grpc_out=internal/proto/gen --go-grpc_opt=paths=source_relative \
-		--proto_path=api/proto \
-		api/proto/*.proto
+	PATH=$(LOCALBIN):$$PATH protoc --go_out=. --go_opt=paths=import \
+		--go-grpc_out=. --go-grpc_opt=paths=import \
+		--proto_path=. \
+		api/proto/chunk/chunk.proto \
+		api/proto/metadata/metadata.proto
+
+.PHONY: generate-crds
+generate-crds: manifests ## Generate CRD manifests from kubebuilder markers (runs controller-gen; copy output from config/crd to deploy/helm/novastor/crds/ manually).
+	@echo "CRD manifests written to config/crd/ — copy to deploy/helm/novastor/crds/ as needed."
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -63,9 +67,17 @@ test: fmt vet ## Run tests with race detection.
 test-coverage: test ## Run tests and open coverage report.
 	go tool cover -html=coverage.out -o coverage.html
 
+.PHONY: test-integration
+test-integration: ## Run integration tests with race detection.
+	go test -tags integration -race -count=1 ./test/integration/...
+
 .PHONY: test-bench
-test-bench: ## Run benchmarks.
+test-bench: ## Run benchmarks (chunk and placement).
 	go test -bench=. -benchmem ./internal/chunk/... ./internal/placement/...
+
+.PHONY: test-bench-all
+test-bench-all: ## Run all benchmarks (chunk, placement, and test/benchmark).
+	go test -bench=. -benchmem ./internal/chunk/... ./internal/placement/... ./test/benchmark/...
 
 ##@ Build
 
@@ -107,6 +119,13 @@ build-cli: fmt vet ## Build novactl CLI tool.
 docker-build: ## Build all docker images.
 	$(foreach comp,controller agent meta csi filer s3gw,docker build -t novastor-$(comp):latest -f Dockerfile.$(comp) .;)
 
+REGISTRY ?= ghcr.io/piwi3910
+IMAGE_TAG ?= latest
+
+.PHONY: docker-push
+docker-push: ## Push all docker images to the registry.
+	$(foreach comp,controller agent meta csi filer s3gw,docker tag novastor-$(comp):latest $(REGISTRY)/novastor-$(comp):$(IMAGE_TAG) && docker push $(REGISTRY)/novastor-$(comp):$(IMAGE_TAG);)
+
 ##@ Deployment
 
 .PHONY: install-crds
@@ -139,6 +158,11 @@ helm-uninstall: ## Uninstall NovaStor using Helm.
 helm-template: ## Generate Helm templates for debugging.
 	helm template novastor deploy/helm/novastor/ -n novastor-system
 
+.PHONY: helm-package
+helm-package: ## Package the Helm chart into a versioned archive.
+	mkdir -p dist/helm
+	helm package deploy/helm/novastor/ --destination dist/helm/
+
 ##@ Documentation
 
 .PHONY: docs-build
@@ -155,7 +179,6 @@ docs-serve: ## Serve documentation locally.
 clean: ## Clean build artifacts.
 	rm -rf bin/
 	rm -rf $(LOCALBIN)/
-	rm -rf internal/proto/gen/
 	rm -f coverage.out coverage.html
 
 ##@ Build Dependencies

@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Controller RBAC
+  - controller-serviceaccount.yaml
+  - controller-clusterrole.yaml
+  - controller-clusterrolebinding.yaml
+  # Agent RBAC
+  - agent-serviceaccount.yaml
+  - agent-clusterrole.yaml
+  - agent-clusterrolebinding.yaml
+  # CSI Driver RBAC
+  - csi-serviceaccount.yaml
+  - csi-clusterrole.yaml
+  - csi-clusterrolebinding.yaml

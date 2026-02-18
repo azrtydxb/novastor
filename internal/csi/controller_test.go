@@ -48,6 +48,16 @@ func (m *mockMetadataStore) DeleteVolumeMeta(_ context.Context, volumeID string)
 	return nil
 }
 
+func (m *mockMetadataStore) ListVolumesMeta(_ context.Context) ([]*metadata.VolumeMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]*metadata.VolumeMeta, 0, len(m.volumes))
+	for _, v := range m.volumes {
+		result = append(result, v)
+	}
+	return result, nil
+}
+
 // --- mock placement engine ---
 
 type mockPlacer struct {
@@ -350,15 +360,95 @@ func TestValidateVolumeCapabilities_NotFound(t *testing.T) {
 	}
 }
 
-// --- Unimplemented RPCs ---
+// --- ListVolumes tests ---
 
-func TestListVolumesUnimplemented(t *testing.T) {
+func TestListVolumes_Empty(t *testing.T) {
 	cs, _ := setupController()
-	_, err := cs.ListVolumes(context.Background(), &csi.ListVolumesRequest{})
-	if st, ok := status.FromError(err); !ok || st.Code() != codes.Unimplemented {
-		t.Errorf("expected Unimplemented, got %v", err)
+	resp, err := cs.ListVolumes(context.Background(), &csi.ListVolumesRequest{})
+	if err != nil {
+		t.Fatalf("ListVolumes failed: %v", err)
+	}
+	if len(resp.GetEntries()) != 0 {
+		t.Errorf("expected 0 entries for empty store, got %d", len(resp.GetEntries()))
+	}
+	if resp.GetNextToken() != "" {
+		t.Errorf("expected empty next token, got %q", resp.GetNextToken())
 	}
 }
+
+func TestListVolumes_AllEntries(t *testing.T) {
+	cs, _ := setupController()
+
+	for _, name := range []string{"vol-a", "vol-b", "vol-c"} {
+		if _, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+			Name:          name,
+			CapacityRange: &csi.CapacityRange{RequiredBytes: 4 * 1024 * 1024},
+		}); err != nil {
+			t.Fatalf("CreateVolume %s failed: %v", name, err)
+		}
+	}
+
+	resp, err := cs.ListVolumes(context.Background(), &csi.ListVolumesRequest{})
+	if err != nil {
+		t.Fatalf("ListVolumes failed: %v", err)
+	}
+	if len(resp.GetEntries()) != 3 {
+		t.Errorf("expected 3 entries, got %d", len(resp.GetEntries()))
+	}
+	if resp.GetNextToken() != "" {
+		t.Errorf("expected empty next token for full listing, got %q", resp.GetNextToken())
+	}
+	for _, entry := range resp.GetEntries() {
+		if entry.GetVolume().GetVolumeId() == "" {
+			t.Error("expected non-empty volume ID in list entry")
+		}
+		if entry.GetVolume().GetCapacityBytes() != 4*1024*1024 {
+			t.Errorf("expected capacity 4MiB, got %d", entry.GetVolume().GetCapacityBytes())
+		}
+	}
+}
+
+func TestListVolumes_MaxEntries(t *testing.T) {
+	cs, _ := setupController()
+
+	var volIDs []string
+	for _, name := range []string{"page-a", "page-b", "page-c"} {
+		resp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+			Name:          name,
+			CapacityRange: &csi.CapacityRange{RequiredBytes: 4 * 1024 * 1024},
+		})
+		if err != nil {
+			t.Fatalf("CreateVolume %s failed: %v", name, err)
+		}
+		volIDs = append(volIDs, resp.GetVolume().GetVolumeId())
+	}
+
+	resp, err := cs.ListVolumes(context.Background(), &csi.ListVolumesRequest{MaxEntries: 2})
+	if err != nil {
+		t.Fatalf("ListVolumes with MaxEntries failed: %v", err)
+	}
+	if len(resp.GetEntries()) != 2 {
+		t.Errorf("expected 2 entries with MaxEntries=2, got %d", len(resp.GetEntries()))
+	}
+	if resp.GetNextToken() == "" {
+		t.Error("expected non-empty next token when page is truncated")
+	}
+}
+
+func TestListVolumes_InvalidToken(t *testing.T) {
+	cs, _ := setupController()
+	_, err := cs.ListVolumes(context.Background(), &csi.ListVolumesRequest{
+		StartingToken: "nonexistent-volume-id",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid starting_token")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.Aborted {
+		t.Errorf("expected Aborted for invalid token, got %v", err)
+	}
+}
+
+// --- Unimplemented RPCs ---
 
 func TestControllerPublishVolumeUnimplemented(t *testing.T) {
 	cs, _ := setupController()

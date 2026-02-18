@@ -17,6 +17,7 @@ import (
 	"github.com/piwi3910/novastor/internal/logging"
 	"github.com/piwi3910/novastor/internal/metadata"
 	"github.com/piwi3910/novastor/internal/metrics"
+	"github.com/piwi3910/novastor/internal/transport"
 )
 
 var (
@@ -26,12 +27,16 @@ var (
 )
 
 func main() {
-	nodeID := flag.String("node-id", "", "Raft node ID (required)")
+	nodeID := flag.String("node-id", "", "Raft node ID (defaults to hostname when empty)")
 	dataDir := flag.String("data-dir", "/var/lib/novastor/meta", "Raft data directory")
-	bindAddr := flag.String("bind-addr", ":7000", "Raft bind address")
-	grpcAddr := flag.String("grpc-addr", ":7001", "gRPC client API address")
-	bootstrap := flag.Bool("bootstrap", false, "Bootstrap a single-node Raft cluster")
+	raftAddr := flag.String("raft-addr", ":7000", "Raft consensus transport listen address")
+	grpcAddr := flag.String("grpc-addr", ":7001", "gRPC client API listen address")
+	join := flag.String("join", "", "Comma-separated list of existing Raft peer addresses to join (e.g. peer1:7000,peer2:7000). When empty, bootstraps as a single-node cluster.")
 	metricsAddr := flag.String("metrics-addr", ":7002", "Prometheus metrics listen address")
+	tlsCA := flag.String("tls-ca", "", "Path to CA certificate for mTLS")
+	tlsCert := flag.String("tls-cert", "", "Path to server certificate for mTLS")
+	tlsKey := flag.String("tls-key", "", "Path to server key for mTLS")
+	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	flag.Parse()
 
 	logging.Init(false)
@@ -39,22 +44,55 @@ func main() {
 
 	log.Printf("novastor-meta %s (commit: %s, built: %s)", version, commit, date)
 
+	// Default node ID to hostname when not explicitly set.
 	if *nodeID == "" {
-		log.Fatal("--node-id is required")
+		hostname, err := os.Hostname()
+		if err != nil {
+			log.Fatalf("--node-id not set and could not determine hostname: %v", err)
+		}
+		*nodeID = hostname
+		log.Printf("--node-id not set; using hostname %q", *nodeID)
 	}
 
 	// Register Prometheus metrics.
 	metrics.Register()
 
 	// Create the Raft-backed metadata store.
-	store, err := metadata.NewRaftStore(*nodeID, *dataDir, *bindAddr, *bootstrap)
+	store, err := metadata.NewRaftStore(metadata.RaftConfig{
+		NodeID:    *nodeID,
+		DataDir:   *dataDir,
+		RaftAddr:  *raftAddr,
+		JoinAddrs: *join,
+	})
 	if err != nil {
 		log.Fatalf("Failed to create Raft store: %v", err)
 	}
 	defer store.Close()
 
+	// Main context for the metadata service lifetime.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Build gRPC server options.
+	var serverOpts []grpc.ServerOption
+	if *tlsCA != "" && *tlsCert != "" && *tlsKey != "" {
+		rotator := transport.NewCertRotator(*tlsCert, *tlsKey, *tlsRotationInterval)
+		rotator.Start(ctx)
+		log.Printf("TLS certificate rotation enabled (cert=%s, key=%s, interval=%s)",
+			*tlsCert, *tlsKey, *tlsRotationInterval)
+		tlsOpt, tlsErr := transport.NewServerTLSWithRotation(transport.TLSConfig{
+			CACertPath: *tlsCA,
+			CertPath:   *tlsCert,
+			KeyPath:    *tlsKey,
+		}, rotator)
+		if tlsErr != nil {
+			log.Fatalf("Failed to configure TLS: %v", tlsErr)
+		}
+		serverOpts = append(serverOpts, tlsOpt)
+	}
+
 	// Create and register the gRPC metadata server.
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(serverOpts...)
 	metaServer := metadata.NewGRPCServer(store)
 	metaServer.Register(grpcServer)
 
@@ -64,7 +102,8 @@ func main() {
 		log.Fatalf("Failed to listen on %s: %v", *grpcAddr, err)
 	}
 
-	log.Printf("Metadata gRPC server listening on %s (Raft bind: %s, node: %s)", *grpcAddr, *bindAddr, *nodeID)
+	log.Printf("Metadata gRPC server listening on %s (Raft addr: %s, node: %s, join: %q)",
+		*grpcAddr, *raftAddr, *nodeID, *join)
 
 	go func() {
 		if err := grpcServer.Serve(listener); err != nil {
@@ -94,6 +133,7 @@ func main() {
 	<-stop
 
 	log.Println("Shutting down metadata service...")
+	cancel() // cancel main context: stops cert rotator
 	grpcServer.GracefulStop()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

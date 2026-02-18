@@ -59,23 +59,17 @@ nav:
   - Home: index.md
   - Architecture:
       - Overview: architecture/overview.md
-      - Chunk Engine: architecture/chunk-engine.md
-      - Data Protection: architecture/data-protection.md
-      - Metadata Service: architecture/metadata-service.md
-  - Getting Started:
-      - Quick Start: getting-started/quickstart.md
-      - Installation: getting-started/installation.md
-  - User Guide:
-      - Block Storage: user-guide/block-storage.md
-      - File Storage: user-guide/file-storage.md
-      - Object Storage: user-guide/object-storage.md
-      - Storage Pools: user-guide/storage-pools.md
+      - Component Details: architecture/components.md
+  - Deployment:
+      - Quick Start: deployment/quickstart.md
+      - Helm Chart Reference: deployment/helm-values.md
+      - RBAC Configuration: deployment/rbac.md
   - Operations:
       - Monitoring: operations/monitoring.md
-      - Troubleshooting: operations/troubleshooting.md
-  - Reference:
-      - CRD Reference: reference/crd.md
-      - CLI Reference: reference/cli.md
-      - Helm Values: reference/helm-values.md
+      - Failure Recovery: operations/recovery.md
+      - Encryption at Rest: operations/encryption.md
+  - API Reference:
+      - CRD Reference: api/crds.md
+      - S3 API Compatibility: api/s3.md
   - Development:
       - Contributing: development/contributing.md

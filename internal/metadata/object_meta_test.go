@@ -10,7 +10,7 @@ import (
 
 // applyToFSM is a test helper that marshals an fsmOp and applies it to the FSM
 // via a synthetic raft.Log, returning any error from Apply.
-func applyToFSM(t *testing.T, f *FSM, op *fsmOp) {
+func applyToFSM(t *testing.T, f MetadataFSM, op *fsmOp) {
 	t.Helper()
 	data, err := json.Marshal(op)
 	if err != nil {

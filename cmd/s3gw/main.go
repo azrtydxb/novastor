@@ -11,9 +11,12 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/piwi3910/novastor/internal/agent"
 	"github.com/piwi3910/novastor/internal/metadata"
 	s3gw "github.com/piwi3910/novastor/internal/s3"
+	"github.com/piwi3910/novastor/internal/transport"
 )
 
 var (
@@ -28,6 +31,10 @@ func main() {
 	secretKey := flag.String("secret-key", "", "S3 secret key")
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
 	agentAddr := flag.String("agent-addr", "localhost:9100", "Chunk agent address")
+	tlsCA := flag.String("tls-ca", "", "Path to CA certificate for mTLS")
+	tlsCert := flag.String("tls-cert", "", "Path to client certificate for mTLS")
+	tlsKey := flag.String("tls-key", "", "Path to client key for mTLS")
+	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	flag.Parse()
 
 	log.Printf("novastor-s3gw %s (commit: %s, built: %s)", version, commit, date)
@@ -36,15 +43,37 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Warning: --access-key and --secret-key not set, S3 auth will reject all requests")
 	}
 
+	// Main context for the S3 gateway lifetime.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Build TLS dial option when TLS flags are provided.
+	var dialOpts []grpc.DialOption
+	if *tlsCA != "" && *tlsCert != "" && *tlsKey != "" {
+		rotator := transport.NewCertRotator(*tlsCert, *tlsKey, *tlsRotationInterval)
+		rotator.Start(ctx)
+		log.Printf("TLS certificate rotation enabled (cert=%s, key=%s, interval=%s)",
+			*tlsCert, *tlsKey, *tlsRotationInterval)
+		tlsOpt, tlsErr := transport.NewClientTLSWithRotation(transport.TLSConfig{
+			CACertPath: *tlsCA,
+			CertPath:   *tlsCert,
+			KeyPath:    *tlsKey,
+		}, rotator)
+		if tlsErr != nil {
+			log.Fatalf("Failed to configure TLS: %v", tlsErr)
+		}
+		dialOpts = append(dialOpts, tlsOpt)
+	}
+
 	// Connect to the metadata service.
-	metaClient, err := metadata.Dial(*metaAddr)
+	metaClient, err := metadata.Dial(*metaAddr, dialOpts...)
 	if err != nil {
 		log.Fatalf("Failed to connect to metadata service at %s: %v", *metaAddr, err)
 	}
 	defer metaClient.Close()
 
 	// Connect to the chunk agent.
-	chunkClient, err := agent.Dial(*agentAddr)
+	chunkClient, err := agent.Dial(*agentAddr, dialOpts...)
 	if err != nil {
 		log.Fatalf("Failed to connect to chunk agent at %s: %v", *agentAddr, err)
 	}
@@ -77,11 +106,12 @@ func main() {
 
 	<-stop
 	log.Println("Shutting down S3 gateway...")
+	cancel() // cancel main context: stops cert rotator
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutdownCancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("S3 gateway shutdown failed: %v", err)
 	}
 	log.Println("S3 gateway stopped")

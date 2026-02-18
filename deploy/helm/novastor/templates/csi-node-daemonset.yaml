@@ -33,6 +33,22 @@ spec:
                   fieldPath: spec.nodeName
           securityContext:
             privileged: true
+          livenessProbe:
+            exec:
+              command:
+                - test
+                - -S
+                - /csi/csi.sock
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            exec:
+              command:
+                - test
+                - -S
+                - /csi/csi.sock
+            initialDelaySeconds: 5
+            periodSeconds: 10
           volumeMounts:
             - name: socket-dir
               mountPath: /csi

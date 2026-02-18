@@ -1,0 +1,16 @@
+apiVersion: novastor.io/v1alpha1
+kind: StoragePool
+metadata:
+  name: ssd-erasurecoded
+spec:
+  nodeSelector:
+    matchLabels:
+      novastor.io/storage-tier: ssd
+  deviceFilter:
+    type: ssd
+    minSize: "200Gi"
+  dataProtection:
+    mode: erasureCoding
+    erasureCoding:
+      dataShards: 4
+      parityShards: 2

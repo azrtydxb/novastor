@@ -1,0 +1,48 @@
+# ============================================================
+# NovaStor .dockerignore
+# Excludes files that are not needed inside the Docker build
+# context, keeping image builds fast and reproducible.
+# ============================================================
+
+# Version control
+.git
+.gitignore
+.gitattributes
+.gitleaks.toml
+
+# Compiled binaries and local tool cache
+bin/
+
+# Test artifacts
+coverage.out
+coverage.html
+test/
+
+# Generated protobuf code (rebuilt in the container)
+internal/proto/gen/
+
+# Documentation sources (not needed at runtime)
+docs/
+mkdocs.yml
+
+# Editor and IDE metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# CI configuration
+.github/
+
+# Docker build files themselves (avoid recursive inclusion)
+build/
+Dockerfile*
+.dockerignore
+
+# Helm and deployment manifests (not part of the Go build)
+deploy/
+config/
+
+# Hack / tooling scripts
+hack/

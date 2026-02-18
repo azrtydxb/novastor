@@ -38,12 +38,16 @@ func (s *GRPCServer) Execute(ctx context.Context, req *pb.MetadataRequest) (*pb.
 		return s.getVolumeMeta(ctx, req.Payload)
 	case "DeleteVolumeMeta":
 		return s.deleteVolumeMeta(ctx, req.Payload)
+	case "ListVolumesMeta":
+		return s.listVolumesMeta(ctx)
 
 	// ---- Placement operations ----
 	case "PutPlacementMap":
 		return s.putPlacementMap(ctx, req.Payload)
 	case "GetPlacementMap":
 		return s.getPlacementMap(ctx, req.Payload)
+	case "ListPlacementMaps":
+		return s.listPlacementMaps(ctx)
 
 	// ---- Object operations ----
 	case "PutObjectMeta":
@@ -73,6 +77,16 @@ func (s *GRPCServer) Execute(ctx context.Context, req *pb.MetadataRequest) (*pb.
 	case "DeleteMultipartUpload":
 		return s.deleteMultipartUpload(ctx, req.Payload)
 
+	// ---- Snapshot operations ----
+	case "PutSnapshot":
+		return s.putSnapshot(ctx, req.Payload)
+	case "GetSnapshot":
+		return s.getSnapshot(ctx, req.Payload)
+	case "DeleteSnapshot":
+		return s.deleteSnapshot(ctx, req.Payload)
+	case "ListSnapshots":
+		return s.listSnapshots(ctx)
+
 	// ---- Inode operations ----
 	case "CreateInode":
 		return s.createInode(ctx, req.Payload)
@@ -92,6 +106,16 @@ func (s *GRPCServer) Execute(ctx context.Context, req *pb.MetadataRequest) (*pb.
 		return s.lookupDirEntry(ctx, req.Payload)
 	case "ListDirectory":
 		return s.listDirectory(ctx, req.Payload)
+
+	// ---- Node registration operations ----
+	case "PutNodeMeta":
+		return s.putNodeMeta(ctx, req.Payload)
+	case "GetNodeMeta":
+		return s.getNodeMeta(ctx, req.Payload)
+	case "DeleteNodeMeta":
+		return s.deleteNodeMeta(ctx, req.Payload)
+	case "ListNodeMetas":
+		return s.listNodeMetas(ctx)
 
 	default:
 		return &pb.MetadataResponse{Error: fmt.Sprintf("unknown operation: %s", req.Operation)}, nil
@@ -155,6 +179,14 @@ func (s *GRPCServer) deleteVolumeMeta(ctx context.Context, payload []byte) (*pb.
 	return &pb.MetadataResponse{}, nil
 }
 
+func (s *GRPCServer) listVolumesMeta(ctx context.Context) (*pb.MetadataResponse, error) {
+	metas, err := s.store.ListVolumesMeta(ctx)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(metas)
+}
+
 // ---- Placement operations ----
 
 func (s *GRPCServer) putPlacementMap(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
@@ -180,6 +212,14 @@ func (s *GRPCServer) getPlacementMap(ctx context.Context, payload []byte) (*pb.M
 		return errResp(err), nil
 	}
 	return okResp(pm)
+}
+
+func (s *GRPCServer) listPlacementMaps(ctx context.Context) (*pb.MetadataResponse, error) {
+	pms, err := s.store.ListPlacementMaps(ctx)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(pms)
 }
 
 // ---- Object operations ----
@@ -327,6 +367,54 @@ func (s *GRPCServer) deleteMultipartUpload(ctx context.Context, payload []byte) 
 	return &pb.MetadataResponse{}, nil
 }
 
+// ---- Snapshot operations ----
+
+func (s *GRPCServer) putSnapshot(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var meta SnapshotMeta
+	if err := json.Unmarshal(payload, &meta); err != nil {
+		return errResp(fmt.Errorf("unmarshal SnapshotMeta: %w", err)), nil
+	}
+	if err := s.store.PutSnapshot(ctx, &meta); err != nil {
+		return errResp(err), nil
+	}
+	return &pb.MetadataResponse{}, nil
+}
+
+func (s *GRPCServer) getSnapshot(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args struct {
+		SnapshotID string `json:"snapshotID"`
+	}
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal args: %w", err)), nil
+	}
+	meta, err := s.store.GetSnapshot(ctx, args.SnapshotID)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(meta)
+}
+
+func (s *GRPCServer) deleteSnapshot(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args struct {
+		SnapshotID string `json:"snapshotID"`
+	}
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal args: %w", err)), nil
+	}
+	if err := s.store.DeleteSnapshot(ctx, args.SnapshotID); err != nil {
+		return errResp(err), nil
+	}
+	return &pb.MetadataResponse{}, nil
+}
+
+func (s *GRPCServer) listSnapshots(ctx context.Context) (*pb.MetadataResponse, error) {
+	metas, err := s.store.ListSnapshots(ctx)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(metas)
+}
+
 // ---- Inode operations ----
 
 func (s *GRPCServer) createInode(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
@@ -442,4 +530,52 @@ func (s *GRPCServer) listDirectory(ctx context.Context, payload []byte) (*pb.Met
 		return errResp(err), nil
 	}
 	return okResp(entries)
+}
+
+// ---- Node registration operations ----
+
+func (s *GRPCServer) putNodeMeta(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var meta NodeMeta
+	if err := json.Unmarshal(payload, &meta); err != nil {
+		return errResp(fmt.Errorf("unmarshal NodeMeta: %w", err)), nil
+	}
+	if err := s.store.PutNodeMeta(ctx, &meta); err != nil {
+		return errResp(err), nil
+	}
+	return &pb.MetadataResponse{}, nil
+}
+
+func (s *GRPCServer) getNodeMeta(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args struct {
+		NodeID string `json:"nodeID"`
+	}
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal args: %w", err)), nil
+	}
+	meta, err := s.store.GetNodeMeta(ctx, args.NodeID)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(meta)
+}
+
+func (s *GRPCServer) deleteNodeMeta(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args struct {
+		NodeID string `json:"nodeID"`
+	}
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal args: %w", err)), nil
+	}
+	if err := s.store.DeleteNodeMeta(ctx, args.NodeID); err != nil {
+		return errResp(err), nil
+	}
+	return &pb.MetadataResponse{}, nil
+}
+
+func (s *GRPCServer) listNodeMetas(ctx context.Context) (*pb.MetadataResponse, error) {
+	metas, err := s.store.ListNodeMetas(ctx)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(metas)
 }

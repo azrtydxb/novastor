@@ -13,7 +13,12 @@ func setupTestStore(t *testing.T) (*RaftStore, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewRaftStore("test-node", dir, "127.0.0.1:0", true)
+	store, err := NewRaftStore(RaftConfig{
+		NodeID:   "test-node",
+		DataDir:  dir,
+		RaftAddr: "127.0.0.1:0",
+		Backend:  "memory",
+	})
 	if err != nil {
 		os.RemoveAll(dir)
 		t.Fatalf("NewRaftStore failed: %v", err)

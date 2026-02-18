@@ -133,6 +133,9 @@ type SharedFilesystemSpec struct {
 	// +kubebuilder:validation:Enum=ReadWriteMany;ReadOnlyMany
 	AccessMode string      `json:"accessMode"`
 	Export     *ExportSpec `json:"export,omitempty"`
+	// Image overrides the NFS filer container image. Defaults to novastor/novastor-filer:v0.1.0.
+	// +optional
+	Image string `json:"image,omitempty"`
 }
 
 type ExportSpec struct {
@@ -171,6 +174,9 @@ type ObjectStoreSpec struct {
 	Pool         string             `json:"pool"`
 	Endpoint     ObjectEndpointSpec `json:"endpoint"`
 	BucketPolicy *BucketPolicySpec  `json:"bucketPolicy,omitempty"`
+	// Image overrides the S3 gateway container image. Defaults to novastor/novastor-s3gw:v0.1.0.
+	// +optional
+	Image string `json:"image,omitempty"`
 }
 
 type ObjectEndpointSpec struct {

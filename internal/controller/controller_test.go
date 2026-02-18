@@ -341,8 +341,8 @@ func TestSharedFilesystemReconciler_CreatesDeploymentAndService(t *testing.T) {
 	if len(deploy.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("expected 1 container, got %d", len(deploy.Spec.Template.Spec.Containers))
 	}
-	if deploy.Spec.Template.Spec.Containers[0].Image != nfsFilerImage {
-		t.Errorf("expected image %q, got %q", nfsFilerImage, deploy.Spec.Template.Spec.Containers[0].Image)
+	if deploy.Spec.Template.Spec.Containers[0].Image != defaultNFSFilerImage {
+		t.Errorf("expected image %q, got %q", defaultNFSFilerImage, deploy.Spec.Template.Spec.Containers[0].Image)
 	}
 
 	// Verify Service was created.

@@ -45,6 +45,67 @@ func NewServerTLS(cfg TLSConfig) (grpc.ServerOption, error) {
 	return grpc.Creds(credentials.NewTLS(tlsConfig)), nil
 }
 
+// NewServerTLSWithRotation creates gRPC server options with certificate rotation.
+// The CA certificate is loaded from cfg.CACertPath for the trust pool, while the
+// leaf certificate is served via the rotator's GetCertificate callback so that
+// certificate renewals on disk are picked up without a process restart.
+func NewServerTLSWithRotation(cfg TLSConfig, rotator *CertRotator) (grpc.ServerOption, error) {
+	caCert, err := os.ReadFile(cfg.CACertPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading CA certificate: %w", err)
+	}
+
+	certPool := x509.NewCertPool()
+	if !certPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to add CA certificate to pool")
+	}
+
+	tlsConfig := &tls.Config{
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			cert := rotator.GetCertificate()
+			if cert == nil {
+				return nil, fmt.Errorf("no certificate loaded by rotator")
+			}
+			return cert, nil
+		},
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  certPool,
+		MinVersion: tls.VersionTLS13,
+	}
+
+	return grpc.Creds(credentials.NewTLS(tlsConfig)), nil
+}
+
+// NewClientTLSWithRotation creates gRPC dial options with certificate rotation.
+// The CA certificate is loaded from cfg.CACertPath for server verification, while
+// the client certificate is served via the rotator's GetCertificate callback.
+func NewClientTLSWithRotation(cfg TLSConfig, rotator *CertRotator) (grpc.DialOption, error) {
+	caCert, err := os.ReadFile(cfg.CACertPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading CA certificate: %w", err)
+	}
+
+	certPool := x509.NewCertPool()
+	if !certPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to add CA certificate to pool")
+	}
+
+	tlsConfig := &tls.Config{
+		GetClientCertificate: func(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			cert := rotator.GetCertificate()
+			if cert == nil {
+				return nil, fmt.Errorf("no certificate loaded by rotator")
+			}
+			return cert, nil
+		},
+		RootCAs:    certPool,
+		ServerName: cfg.ServerName,
+		MinVersion: tls.VersionTLS13,
+	}
+
+	return grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)), nil
+}
+
 // NewClientTLS creates gRPC dial options for mTLS.
 func NewClientTLS(cfg TLSConfig) (grpc.DialOption, error) {
 	clientCert, err := tls.LoadX509KeyPair(cfg.CertPath, cfg.KeyPath)

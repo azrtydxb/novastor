@@ -3,10 +3,13 @@ package operator
 import (
 	"context"
 	"fmt"
-	"log"
 	"sort"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/piwi3910/novastor/internal/logging"
 )
 
 // NodeStatus represents the health state of a storage node.
@@ -100,12 +103,12 @@ func (rm *RecoveryManager) CheckNodes(ctx context.Context) {
 		switch {
 		case elapsed > rm.downTimeout:
 			if info.Status != NodeDown {
-				log.Printf("node %s marked DOWN (last seen %s ago)", info.ID, elapsed)
+				logging.L.Warn("node marked DOWN", zap.String("nodeID", info.ID), zap.Duration("elapsed", elapsed))
 			}
 			info.Status = NodeDown
 		case elapsed > rm.suspectTimeout:
 			if info.Status == NodeHealthy {
-				log.Printf("node %s marked SUSPECT (last seen %s ago)", info.ID, elapsed)
+				logging.L.Warn("node marked SUSPECT", zap.String("nodeID", info.ID), zap.Duration("elapsed", elapsed))
 			}
 			info.Status = NodeSuspect
 		default:
@@ -139,7 +142,7 @@ func (rm *RecoveryManager) RecoverNode(ctx context.Context, nodeID string) error
 	for _, chunkID := range chunks {
 		replicas, err := rm.placement.ReplicaNodes(ctx, chunkID)
 		if err != nil {
-			log.Printf("error finding replicas for chunk %s: %v", chunkID, err)
+			logging.L.Error("error finding replicas for chunk", zap.String("chunkID", chunkID), zap.Error(err))
 			continue
 		}
 
@@ -152,7 +155,7 @@ func (rm *RecoveryManager) RecoverNode(ctx context.Context, nodeID string) error
 			}
 		}
 		if sourceNode == "" {
-			log.Printf("no surviving replica found for chunk %s", chunkID)
+			logging.L.Warn("no surviving replica found for chunk", zap.String("chunkID", chunkID))
 			continue
 		}
 
@@ -174,7 +177,7 @@ func (rm *RecoveryManager) RecoverNode(ctx context.Context, nodeID string) error
 			}
 		}
 		if destNode == "" {
-			log.Printf("no suitable destination for chunk %s", chunkID)
+			logging.L.Warn("no suitable destination for chunk", zap.String("chunkID", chunkID))
 			continue
 		}
 
@@ -232,7 +235,12 @@ func (rm *RecoveryManager) ProcessRecoveryQueue(ctx context.Context) error {
 			defer func() { <-sem }()
 
 			if err := rm.replicator.ReplicateChunk(ctx, t.ChunkID, t.SourceNode, t.DestNode); err != nil {
-				log.Printf("failed to replicate chunk %s from %s to %s: %v", t.ChunkID, t.SourceNode, t.DestNode, err)
+				logging.L.Error("failed to replicate chunk",
+					zap.String("chunkID", t.ChunkID),
+					zap.String("source", t.SourceNode),
+					zap.String("dest", t.DestNode),
+					zap.Error(err),
+				)
 				mu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -242,7 +250,7 @@ func (rm *RecoveryManager) ProcessRecoveryQueue(ctx context.Context) error {
 			}
 
 			if err := rm.placement.UpdatePlacement(ctx, t.ChunkID, t.SourceNode, t.DestNode); err != nil {
-				log.Printf("failed to update placement for chunk %s: %v", t.ChunkID, err)
+				logging.L.Error("failed to update placement for chunk", zap.String("chunkID", t.ChunkID), zap.Error(err))
 			}
 
 			rm.mu.Lock()
@@ -253,6 +261,25 @@ func (rm *RecoveryManager) ProcessRecoveryQueue(ctx context.Context) error {
 
 	wg.Wait()
 	return firstErr
+}
+
+// SetMaxConcurrent overrides the maximum number of concurrent recovery
+// operations. It must be called before ProcessRecoveryQueue is invoked.
+func (rm *RecoveryManager) SetMaxConcurrent(n int) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if n > 0 {
+		rm.maxConcurrent = n
+	}
+}
+
+// SetDownTimeout overrides the duration after which a node without a
+// heartbeat is marked Down. The suspect timeout is set to half this value.
+func (rm *RecoveryManager) SetDownTimeout(d time.Duration) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.downTimeout = d
+	rm.suspectTimeout = d / 2
 }
 
 // NodeCount returns the total number of tracked nodes.

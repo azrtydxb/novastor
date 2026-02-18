@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	csiDriverName = "novastor.io"
+	csiDriverName = "novastor.csi.novastor.io"
 )
 
 // BlockVolumeReconciler reconciles BlockVolume objects.

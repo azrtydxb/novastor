@@ -52,6 +52,16 @@ func (m *mockSnapshotStore) DeleteVolumeMeta(_ context.Context, volumeID string)
 	return nil
 }
 
+func (m *mockSnapshotStore) ListVolumesMeta(_ context.Context) ([]*metadata.VolumeMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]*metadata.VolumeMeta, 0, len(m.volumes))
+	for _, v := range m.volumes {
+		result = append(result, v)
+	}
+	return result, nil
+}
+
 func (m *mockSnapshotStore) PutSnapshotMeta(_ context.Context, meta *SnapshotMeta) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

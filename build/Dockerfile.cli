@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1.7
+
+# ============================================================
+# Build stage
+# ============================================================
+FROM golang:1.24-alpine AS builder
+
+LABEL stage=builder
+
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
+
+# GOTOOLCHAIN=local prevents Go from attempting to download toolchain 1.25.
+RUN GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build \
+      -trimpath \
+      -ldflags="-s -w \
+        -X main.version=${VERSION} \
+        -X main.commit=${COMMIT} \
+        -X main.date=${BUILD_DATE}" \
+      -o /out/novactl \
+      ./cmd/cli
+
+# ============================================================
+# Runtime stage
+# ============================================================
+FROM gcr.io/distroless/static-debian12:nonroot
+
+LABEL org.opencontainers.image.title="novactl" \
+      org.opencontainers.image.description="NovaStor CLI tool for managing storage resources" \
+      org.opencontainers.image.source="https://github.com/piwi3910/novastor" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+COPY --from=builder /out/novactl /usr/local/bin/novactl
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# novactl is a CLI tool; no ports are exposed.
+
+ENTRYPOINT ["/usr/local/bin/novactl"]

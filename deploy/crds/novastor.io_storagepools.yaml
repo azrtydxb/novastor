@@ -1,0 +1,219 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: storagepools.novastor.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+spec:
+  group: novastor.io
+  names:
+    kind: StoragePool
+    listKind: StoragePoolList
+    plural: storagepools
+    singular: storagepool
+    shortNames:
+      - sp
+    categories:
+      - novastor
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Mode
+          type: string
+          jsonPath: .spec.dataProtection.mode
+        - name: Nodes
+          type: integer
+          jsonPath: .status.nodeCount
+        - name: Capacity
+          type: string
+          jsonPath: .status.totalCapacity
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: StoragePool defines a set of storage nodes and their data protection policy.
+          type: object
+          properties:
+            apiVersion:
+              description: >-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+              type: string
+            kind:
+              description: >-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated. In CamelCase.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: StoragePoolSpec defines the desired state of StoragePool.
+              type: object
+              required:
+                - dataProtection
+              properties:
+                nodeSelector:
+                  description: NodeSelector selects which nodes belong to this pool.
+                  type: object
+                  properties:
+                    matchExpressions:
+                      description: matchExpressions is a list of label selector requirements.
+                      type: array
+                      items:
+                        description: A label selector requirement is a selector that contains values, a key, and an operator.
+                        type: object
+                        required:
+                          - key
+                          - operator
+                        properties:
+                          key:
+                            description: key is the label key that the selector applies to.
+                            type: string
+                          operator:
+                            description: >-
+                              operator represents a key's relationship to a set of values.
+                              Valid operators are In, NotIn, Exists and DoesNotExist.
+                            type: string
+                          values:
+                            description: >-
+                              values is an array of string values. If the operator is In or NotIn,
+                              the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                              the values array must be empty.
+                            type: array
+                            items:
+                              type: string
+                    matchLabels:
+                      description: matchLabels is a map of {key,value} pairs.
+                      type: object
+                      additionalProperties:
+                        type: string
+                deviceFilter:
+                  description: DeviceFilter specifies which devices on selected nodes to use.
+                  type: object
+                  properties:
+                    type:
+                      description: Type of storage device to use.
+                      type: string
+                      enum:
+                        - nvme
+                        - ssd
+                        - hdd
+                    minSize:
+                      description: MinSize is the minimum device size to include.
+                      type: string
+                dataProtection:
+                  description: DataProtection configures how data is protected in this pool.
+                  type: object
+                  required:
+                    - mode
+                  properties:
+                    mode:
+                      description: Mode defines the data protection strategy.
+                      type: string
+                      enum:
+                        - replication
+                        - erasureCoding
+                    replication:
+                      description: Replication holds replication-specific configuration.
+                      type: object
+                      required:
+                        - factor
+                      properties:
+                        factor:
+                          description: Factor is the number of replicas to maintain.
+                          type: integer
+                          default: 3
+                          minimum: 1
+                          maximum: 5
+                        writeQuorum:
+                          description: WriteQuorum is the minimum number of replicas that must acknowledge a write.
+                          type: integer
+                    erasureCoding:
+                      description: ErasureCoding holds erasure-coding-specific configuration.
+                      type: object
+                      required:
+                        - dataShards
+                        - parityShards
+                      properties:
+                        dataShards:
+                          description: DataShards is the number of data shards.
+                          type: integer
+                          default: 4
+                          minimum: 2
+                        parityShards:
+                          description: ParityShards is the number of parity shards.
+                          type: integer
+                          default: 2
+                          minimum: 1
+            status:
+              description: StoragePoolStatus defines the observed state of StoragePool.
+              type: object
+              properties:
+                phase:
+                  description: Phase represents the current lifecycle phase of the pool.
+                  type: string
+                nodeCount:
+                  description: NodeCount is the number of storage nodes currently in the pool.
+                  type: integer
+                totalCapacity:
+                  description: TotalCapacity is the aggregate raw capacity of all devices in the pool.
+                  type: string
+                usedCapacity:
+                  description: UsedCapacity is the amount of capacity currently in use.
+                  type: string
+                dataProtection:
+                  description: DataProtection summarises the active data protection configuration.
+                  type: string
+                conditions:
+                  description: Conditions reflect the current reconciliation state of the pool.
+                  type: array
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        description: lastTransitionTime is the last time the condition transitioned from one status to another.
+                        type: string
+                        format: date-time
+                      message:
+                        description: message is a human readable message indicating details about the transition.
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        description: observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        description: reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        type: string
+                        maxLength: 316
+                        pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$'

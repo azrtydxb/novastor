@@ -1,0 +1,151 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: objectstores.novastor.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+spec:
+  group: novastor.io
+  names:
+    kind: ObjectStore
+    listKind: ObjectStoreList
+    plural: objectstores
+    singular: objectstore
+    shortNames:
+      - os
+    categories:
+      - novastor
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Pool
+          type: string
+          jsonPath: .spec.pool
+        - name: Port
+          type: integer
+          jsonPath: .spec.endpoint.service.port
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: ObjectStore represents an S3-compatible object store.
+          type: object
+          properties:
+            apiVersion:
+              description: >-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+              type: string
+            kind:
+              description: >-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated. In CamelCase.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: ObjectStoreSpec defines the desired state of ObjectStore.
+              type: object
+              required:
+                - pool
+                - endpoint
+              properties:
+                pool:
+                  description: Pool is the name of the StoragePool backing this object store.
+                  type: string
+                endpoint:
+                  description: Endpoint configures how the S3-compatible API is exposed.
+                  type: object
+                  required:
+                    - service
+                  properties:
+                    service:
+                      description: Service defines the Kubernetes service configuration for the S3 endpoint.
+                      type: object
+                      required:
+                        - port
+                      properties:
+                        port:
+                          description: Port is the port on which the S3 API listens.
+                          type: integer
+                          format: int32
+                bucketPolicy:
+                  description: BucketPolicy defines default policies applied to buckets in this store.
+                  type: object
+                  properties:
+                    maxBuckets:
+                      description: MaxBuckets is the maximum number of buckets permitted in this store.
+                      type: integer
+                    versioning:
+                      description: Versioning controls whether object versioning is enabled by default.
+                      type: string
+                      enum:
+                        - enabled
+                        - disabled
+                        - suspended
+            status:
+              description: ObjectStoreStatus defines the observed state of ObjectStore.
+              type: object
+              properties:
+                phase:
+                  description: Phase represents the current lifecycle phase of the object store.
+                  type: string
+                endpoint:
+                  description: Endpoint is the URL at which the S3-compatible API is reachable.
+                  type: string
+                conditions:
+                  description: Conditions reflect the current reconciliation state of the object store.
+                  type: array
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        description: lastTransitionTime is the last time the condition transitioned from one status to another.
+                        type: string
+                        format: date-time
+                      message:
+                        description: message is a human readable message indicating details about the transition.
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        description: observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        description: reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        type: string
+                        maxLength: 316
+                        pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$'

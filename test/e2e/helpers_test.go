@@ -52,7 +52,11 @@ func newTestCluster(t *testing.T) *testCluster {
 	raftBindAddr := allocAddr(t)
 
 	// 3. Bootstrap a single-node RaftStore on the Raft-specific port.
-	raftStore, err := metadata.NewRaftStore("node-1", raftDir, raftBindAddr, true)
+	raftStore, err := metadata.NewRaftStore(metadata.RaftConfig{
+		NodeID:   "node-1",
+		DataDir:  raftDir,
+		RaftAddr: raftBindAddr,
+	})
 	if err != nil {
 		t.Fatalf("Failed to create RaftStore: %v", err)
 	}

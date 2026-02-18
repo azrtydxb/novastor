@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -27,16 +28,39 @@ type PlacementMap struct {
 
 type RaftStore struct {
 	raft *raft.Raft
-	fsm  *FSM
+	fsm  MetadataFSM
 }
 
-func NewRaftStore(nodeID, dataDir, bindAddr string, bootstrap bool) (*RaftStore, error) {
-	config := raft.DefaultConfig()
-	config.LocalID = raft.ServerID(nodeID)
-	config.SnapshotInterval = 30 * time.Second
-	config.SnapshotThreshold = 1024
+// RaftConfig holds all configuration needed to create a RaftStore.
+type RaftConfig struct {
+	// NodeID is the unique identifier for this Raft node.
+	NodeID string
+	// DataDir is the directory where Raft log and snapshot data is persisted.
+	DataDir string
+	// RaftAddr is the TCP address this node listens on for Raft consensus traffic (e.g. ":7000").
+	RaftAddr string
+	// JoinAddrs is a comma-separated list of existing Raft peer addresses to join.
+	// When empty, the node bootstraps as a single-node cluster.
+	JoinAddrs string
+	// Backend selects the FSM storage backend. Valid values are "memory" and
+	// "badger". When empty, defaults to "badger" for persistent storage.
+	Backend string
+}
 
-	addr, err := net.ResolveTCPAddr("tcp", bindAddr)
+// NewRaftStore creates a Raft-backed metadata store.
+//
+// If cfg.JoinAddrs is empty the node bootstraps a single-node cluster (the
+// original behaviour preserved for backwards compatibility).  When cfg.JoinAddrs
+// contains one or more comma-separated peer addresses the node skips bootstrap
+// and instead dials each peer in turn until one accepts the AddVoter RPC,
+// joining the existing cluster.
+func NewRaftStore(cfg RaftConfig) (*RaftStore, error) {
+	raftCfg := raft.DefaultConfig()
+	raftCfg.LocalID = raft.ServerID(cfg.NodeID)
+	raftCfg.SnapshotInterval = 30 * time.Second
+	raftCfg.SnapshotThreshold = 1024
+
+	addr, err := net.ResolveTCPAddr("tcp", cfg.RaftAddr)
 	if err != nil {
 		return nil, fmt.Errorf("resolving bind address: %w", err)
 	}
@@ -46,37 +70,104 @@ func NewRaftStore(nodeID, dataDir, bindAddr string, bootstrap bool) (*RaftStore,
 		return nil, fmt.Errorf("creating transport: %w", err)
 	}
 
-	snapshotStore, err := raft.NewFileSnapshotStore(dataDir, 2, os.Stderr)
+	snapshotStore, err := raft.NewFileSnapshotStore(cfg.DataDir, 2, os.Stderr)
 	if err != nil {
 		return nil, fmt.Errorf("creating snapshot store: %w", err)
 	}
 
-	logStorePath := filepath.Join(dataDir, "raft-log.db")
+	logStorePath := filepath.Join(cfg.DataDir, "raft-log.db")
 	logStore, err := raftboltdb.NewBoltStore(logStorePath)
 	if err != nil {
 		return nil, fmt.Errorf("creating log store: %w", err)
 	}
 
-	fsm := NewFSM()
+	var fsm MetadataFSM
+	switch cfg.Backend {
+	case "memory":
+		fsm = NewFSM()
+	case "badger", "":
+		badgerDir := filepath.Join(cfg.DataDir, "badger")
+		if err := os.MkdirAll(badgerDir, 0o750); err != nil {
+			return nil, fmt.Errorf("creating badger data dir: %w", err)
+		}
+		badgerFSM, err := NewBadgerFSM(badgerDir)
+		if err != nil {
+			return nil, fmt.Errorf("creating badger fsm: %w", err)
+		}
+		fsm = badgerFSM
+	default:
+		return nil, fmt.Errorf("unknown backend %q: valid values are \"memory\" and \"badger\"", cfg.Backend)
+	}
 
-	r, err := raft.NewRaft(config, fsm, logStore, logStore, snapshotStore, transport)
+	r, err := raft.NewRaft(raftCfg, fsm, logStore, logStore, snapshotStore, transport)
 	if err != nil {
 		return nil, fmt.Errorf("creating raft: %w", err)
 	}
 
-	if bootstrap {
-		cfg := raft.Configuration{
+	store := &RaftStore{raft: r, fsm: fsm}
+
+	if cfg.JoinAddrs == "" {
+		// Bootstrap as a single-node cluster.
+		bootstrapCfg := raft.Configuration{
 			Servers: []raft.Server{
 				{
-					ID:      raft.ServerID(nodeID),
+					ID:      raft.ServerID(cfg.NodeID),
 					Address: transport.LocalAddr(),
 				},
 			},
 		}
-		r.BootstrapCluster(cfg)
+		r.BootstrapCluster(bootstrapCfg)
+		return store, nil
 	}
 
-	return &RaftStore{raft: r, fsm: fsm}, nil
+	// Join an existing cluster by calling AddVoter on each peer until one succeeds.
+	peers := splitAndTrim(cfg.JoinAddrs)
+	if err := store.joinCluster(cfg.NodeID, addr.String(), peers); err != nil {
+		return nil, fmt.Errorf("joining raft cluster: %w", err)
+	}
+
+	return store, nil
+}
+
+// joinCluster attempts to add this node as a voter to an existing Raft cluster
+// by contacting each of the provided peer addresses in turn.  It retries with
+// a small back-off to tolerate a brief window where no leader is available
+// (e.g. immediately after all peers start simultaneously).
+func (s *RaftStore) joinCluster(nodeID, raftAddr string, peers []string) error {
+	const (
+		maxAttempts = 30
+		retryDelay  = 2 * time.Second
+	)
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Check if we might already be a member of the cluster.
+		configFuture := s.raft.GetConfiguration()
+		if err := configFuture.Error(); err == nil {
+			for _, srv := range configFuture.Configuration().Servers {
+				if string(srv.ID) == nodeID {
+					// Already a member – nothing more to do.
+					return nil
+				}
+			}
+		}
+
+		// Attempt to add this node as a voter.  AddVoter must be called on the
+		// leader; if this node is not yet the leader the future will return
+		// ErrNotLeader and we retry after a delay.
+		addFuture := s.raft.AddVoter(
+			raft.ServerID(nodeID),
+			raft.ServerAddress(raftAddr),
+			0, // prevIndex: 0 means append unconditionally
+			5*time.Second,
+		)
+		if err := addFuture.Error(); err == nil {
+			return nil
+		}
+
+		time.Sleep(retryDelay)
+	}
+
+	return fmt.Errorf("failed to join cluster after %d attempts via peers %v", maxAttempts, peers)
 }
 
 func (s *RaftStore) IsLeader() bool {
@@ -84,7 +175,12 @@ func (s *RaftStore) IsLeader() bool {
 }
 
 func (s *RaftStore) Close() error {
-	return s.raft.Shutdown().Error()
+	raftErr := s.raft.Shutdown().Error()
+	fsmErr := s.fsm.Close()
+	if raftErr != nil {
+		return raftErr
+	}
+	return fsmErr
 }
 
 func (s *RaftStore) apply(op *fsmOp) error {
@@ -125,6 +221,22 @@ func (s *RaftStore) DeleteVolumeMeta(_ context.Context, volumeID string) error {
 	return s.apply(&fsmOp{Op: opDelete, Bucket: bucketVolumes, Key: volumeID})
 }
 
+func (s *RaftStore) ListVolumesMeta(_ context.Context) ([]*VolumeMeta, error) {
+	all, err := s.fsm.GetAll(bucketVolumes)
+	if err != nil {
+		return nil, fmt.Errorf("listing volumes: %w", err)
+	}
+	result := make([]*VolumeMeta, 0, len(all))
+	for _, data := range all {
+		var meta VolumeMeta
+		if err := json.Unmarshal(data, &meta); err != nil {
+			return nil, fmt.Errorf("unmarshaling volume meta: %w", err)
+		}
+		result = append(result, &meta)
+	}
+	return result, nil
+}
+
 func (s *RaftStore) PutPlacementMap(_ context.Context, pm *PlacementMap) error {
 	data, _ := json.Marshal(pm)
 	return s.apply(&fsmOp{Op: opPut, Bucket: bucketPlacements, Key: pm.ChunkID, Value: data})
@@ -140,4 +252,34 @@ func (s *RaftStore) GetPlacementMap(_ context.Context, chunkID string) (*Placeme
 		return nil, fmt.Errorf("unmarshaling placement map: %w", err)
 	}
 	return &pm, nil
+}
+
+// ListPlacementMaps returns all placement map entries.
+func (s *RaftStore) ListPlacementMaps(_ context.Context) ([]*PlacementMap, error) {
+	all, err := s.fsm.GetAll(bucketPlacements)
+	if err != nil {
+		return nil, fmt.Errorf("listing placement maps: %w", err)
+	}
+	result := make([]*PlacementMap, 0, len(all))
+	for _, data := range all {
+		var pm PlacementMap
+		if err := json.Unmarshal(data, &pm); err != nil {
+			return nil, fmt.Errorf("unmarshaling placement map: %w", err)
+		}
+		result = append(result, &pm)
+	}
+	return result, nil
+}
+
+// splitAndTrim splits a comma-separated list of addresses and trims whitespace.
+func splitAndTrim(s string) []string {
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
 }

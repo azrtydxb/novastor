@@ -1,3 +1,8 @@
+crds:
+  # install controls whether CRDs are installed as part of the Helm release.
+  # Set to false if you manage CRDs separately (e.g. via kubectl apply -f deploy/crds/).
+  install: true
+
 global:
   image:
     registry: ghcr.io/piwi3910
@@ -43,6 +48,13 @@ meta:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  raft:
+    # raftPort -- TCP port for Raft consensus transport between peers.
+    raftPort: 7000
+    # grpcPort -- TCP port for the gRPC client API.
+    grpcPort: 7001
+    # metricsPort -- TCP port for Prometheus metrics.
+    metricsPort: 7002
 
 agent:
   image:
@@ -156,6 +168,9 @@ storageClass:
   reclaimPolicy: Delete
   volumeBindingMode: WaitForFirstConsumer
 
+storageClasses:
+  enabled: true
+
 serviceAccount:
   create: true
   name: ""
@@ -163,3 +178,17 @@ serviceAccount:
 
 rbac:
   create: true
+
+monitoring:
+  serviceMonitor:
+    # enabled -- Set to true to create ServiceMonitor resources for Prometheus Operator discovery.
+    enabled: false
+    # labels -- Additional labels to add to ServiceMonitor resources (e.g. for Prometheus Operator label selectors).
+    labels: {}
+    # interval -- Prometheus scrape interval.
+    interval: 30s
+    # scrapeTimeout -- Prometheus scrape timeout.
+    scrapeTimeout: 10s
+  grafana:
+    # enabled -- Set to true to create a ConfigMap with Grafana dashboards for sidecar auto-discovery.
+    enabled: false

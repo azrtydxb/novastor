@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: novastor-controller
+  labels:
+    app.kubernetes.io/name: novastor
+    app.kubernetes.io/component: controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: novastor-controller
+subjects:
+  - kind: ServiceAccount
+    name: novastor-controller
+    namespace: novastor-system

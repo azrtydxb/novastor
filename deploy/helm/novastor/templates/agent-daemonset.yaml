@@ -45,6 +45,18 @@ spec:
               mountPath: /dev
             - name: sys
               mountPath: /sys
+            - name: chunks
+              mountPath: /var/lib/novastor/chunks
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
       volumes:
@@ -54,6 +66,10 @@ spec:
         - name: sys
           hostPath:
             path: /sys
+        - name: chunks
+          hostPath:
+            path: /var/lib/novastor/chunks
+            type: DirectoryOrCreate
       {{- with .Values.agent.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

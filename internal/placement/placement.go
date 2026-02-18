@@ -2,8 +2,17 @@ package placement
 
 import "sync"
 
+// Placer selects storage nodes for chunk placement.
 type Placer interface {
+	// PlaceKey returns a deterministic set of node IDs for the given key.
+	// The same key always produces the same placement (assuming the node set
+	// has not changed). Implementations that do not support keyed placement
+	// may fall back to Place.
+	PlaceKey(key string, count int) []string
+
+	// Place returns node IDs using a non-deterministic or round-robin strategy.
 	Place(count int) []string
+
 	AddNode(nodeID string)
 	RemoveNode(nodeID string)
 }
@@ -18,6 +27,11 @@ func NewRoundRobin(nodes []string) *RoundRobin {
 	cp := make([]string, len(nodes))
 	copy(cp, nodes)
 	return &RoundRobin{nodes: cp}
+}
+
+// PlaceKey falls back to Place for RoundRobin (no key-based placement).
+func (rr *RoundRobin) PlaceKey(_ string, count int) []string {
+	return rr.Place(count)
 }
 
 func (rr *RoundRobin) Place(count int) []string {

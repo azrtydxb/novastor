@@ -26,6 +26,22 @@ spec:
           args:
             - --endpoint=unix:///csi/csi.sock
             - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+          livenessProbe:
+            exec:
+              command:
+                - test
+                - -S
+                - /csi/csi.sock
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            exec:
+              command:
+                - test
+                - -S
+                - /csi/csi.sock
+            initialDelaySeconds: 5
+            periodSeconds: 10
           volumeMounts:
             - name: socket-dir
               mountPath: /csi

@@ -27,15 +27,24 @@ spec:
           args:
             - --node-id=$(POD_NAME)
             - --data-dir=/data
-            - --bind-addr=0.0.0.0:7000
+            - --raft-addr=0.0.0.0:7000
+            - --grpc-addr=0.0.0.0:7001
+            - --metrics-addr=0.0.0.0:7002
+            - --join={{ include "novastor.fullname" . }}-meta-headless:7000
           env:
             - name: POD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
           ports:
-            - name: grpc
+            - name: raft
               containerPort: 7000
+              protocol: TCP
+            - name: grpc
+              containerPort: 7001
+              protocol: TCP
+            - name: metrics
+              containerPort: 7002
               protocol: TCP
           livenessProbe:
             tcpSocket:

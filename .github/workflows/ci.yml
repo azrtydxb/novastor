@@ -139,6 +139,36 @@ jobs:
           BINARY_NAME: ${{ matrix.binary }}
         run: go build -o "bin/novastor-${BINARY_NAME}" "./cmd/${BINARY_NAME}/"
 
+  integration-tests:
+    name: Integration Tests
+    needs: [changes, test]
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run integration tests
+        run: make test-integration
+
+  e2e-tests:
+    name: E2E Tests
+    needs: [changes, test]
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run E2E tests
+        run: go test -tags e2e -race -count=1 ./test/e2e/...
+
   helm-lint:
     name: Helm Lint
     needs: changes

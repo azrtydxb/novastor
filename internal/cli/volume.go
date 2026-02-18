@@ -26,9 +26,28 @@ var volumeListCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		// The metadata service does not yet expose a ListVolumeMetas RPC,
-		// so for now we report that capability is pending.
-		fmt.Println("Volume listing requires a metadata list-volumes RPC (not yet implemented).")
+		ctx := context.Background()
+		volumes, err := client.ListVolumesMeta(ctx)
+		if err != nil {
+			return fmt.Errorf("listing volumes: %w", err)
+		}
+
+		if len(volumes) == 0 {
+			fmt.Println("No volumes found.")
+			return nil
+		}
+
+		headers := []string{"VOLUME ID", "POOL", "SIZE (BYTES)", "CHUNKS"}
+		var rows [][]string
+		for _, v := range volumes {
+			rows = append(rows, []string{
+				v.VolumeID,
+				v.Pool,
+				strconv.FormatUint(v.SizeBytes, 10),
+				strconv.Itoa(len(v.ChunkIDs)),
+			})
+		}
+		printTable(headers, rows)
 		return nil
 	},
 }
