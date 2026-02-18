@@ -278,7 +278,17 @@ func main() {
 		)
 	} else {
 		defer metaClient.Close()
-		go registerNode(ctx, metaClient, *nodeID, *listenAddr, *dataDir, store, *heartbeatInterval)
+		// Use the routable host IP for registration so that other components
+		// (e.g. the CSI controller) can dial this agent from outside the pod.
+		// Fall back to listenAddr when host-ip is not set.
+		registrationAddr := *listenAddr
+		if *hostIP != "" {
+			_, port, splitErr := net.SplitHostPort(*listenAddr)
+			if splitErr == nil {
+				registrationAddr = net.JoinHostPort(*hostIP, port)
+			}
+		}
+		go registerNode(ctx, metaClient, *nodeID, registrationAddr, *dataDir, store, *heartbeatInterval)
 	}
 
 	// Start Prometheus metrics HTTP server.
