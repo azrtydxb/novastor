@@ -413,3 +413,57 @@ func (fs *FileSystem) Truncate(ctx context.Context, ino uint64, size int64) erro
 
 	return nil
 }
+
+// Link creates a hard link to an existing file within the specified parent directory.
+// The link name is a new directory entry that points to the same inode as the target file.
+// The link count of the target inode is incremented.
+func (fs *FileSystem) Link(ctx context.Context, targetIno uint64, parentIno uint64, name string) (*InodeMeta, error) {
+	// Get the target inode to verify it exists and is a regular file.
+	target, err := fs.meta.GetInode(ctx, targetIno)
+	if err != nil {
+		return nil, fmt.Errorf("getting target inode %d: %w", targetIno, err)
+	}
+
+	// Hard links are only supported for regular files.
+	if target.Type != TypeFile {
+		return nil, fmt.Errorf("hard links only supported for regular files, got %s", target.Type)
+	}
+
+	// Check if the link name already exists in the parent directory.
+	// According to NFS v3 spec, if the target entry exists, it should be removed first.
+	if existing, _ := fs.meta.LookupDirEntry(ctx, parentIno, name); existing != nil {
+		// Remove the existing entry first.
+		if err := fs.meta.DeleteDirEntry(ctx, parentIno, name); err != nil {
+			return nil, fmt.Errorf("removing existing entry %q: %w", name, err)
+		}
+		// If the existing entry pointed to a different inode, decrement its link count.
+		if existing.Ino != targetIno {
+			if existingInode, err := fs.meta.GetInode(ctx, existing.Ino); err == nil {
+				if existingInode.LinkCount <= 1 {
+					_ = fs.meta.DeleteInode(ctx, existing.Ino)
+				} else {
+					existingInode.LinkCount--
+					existingInode.CTime = time.Now().UnixNano()
+					_ = fs.meta.UpdateInode(ctx, existingInode)
+				}
+			}
+		}
+	}
+
+	// Create the new directory entry pointing to the target inode.
+	entry := &DirEntry{Name: name, Ino: targetIno, Type: TypeFile}
+	if err := fs.meta.CreateDirEntry(ctx, parentIno, entry); err != nil {
+		return nil, fmt.Errorf("creating dir entry: %w", err)
+	}
+
+	// Increment the link count on the target inode.
+	target.LinkCount++
+	target.CTime = time.Now().UnixNano()
+	if err := fs.meta.UpdateInode(ctx, target); err != nil {
+		// Rollback: remove the directory entry if the update fails.
+		_ = fs.meta.DeleteDirEntry(ctx, parentIno, name)
+		return nil, fmt.Errorf("updating inode link count: %w", err)
+	}
+
+	return target, nil
+}
