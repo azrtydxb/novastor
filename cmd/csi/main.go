@@ -227,6 +227,11 @@ func main() {
 	// the slow per-entry TCP probes that were needed before.
 	const nodeTTL = 90 * time.Second
 
+	// gcThreshold is the age after which stale node entries are deleted from
+	// the metadata store. We use 10 minutes to avoid deleting entries for
+	// nodes that are temporarily unreachable but still valid.
+	const gcThreshold = 10 * time.Minute
+
 	// Sync node list from metadata service: discover ready agents dynamically.
 	// This runs once at startup and every 30 seconds thereafter so that nodes
 	// joining or leaving the cluster are reflected without a CSI restart.
@@ -289,6 +294,49 @@ func main() {
 				return
 			case <-ticker.C:
 				syncNodes()
+			}
+		}
+	}()
+
+	// garbageCollectNodes periodically removes stale node entries from the
+	// metadata store. This prevents unbounded growth of the Raft log and
+	// BadgerDB when agent pods restart with new IPs.
+	garbageCollectNodes := func() {
+		nodes, err := metaClient.ListNodeMetas(ctx)
+		if err != nil {
+			log.Printf("Warning: failed to list node metas for GC: %v", err)
+			return
+		}
+		gcCutoff := time.Now().Add(-gcThreshold).Unix()
+		deletedCount := 0
+		for _, n := range nodes {
+			// Delete entries that haven't had a heartbeat in gcThreshold.
+			// We only delete entries that are significantly older than the
+			// nodeTTL to avoid deleting nodes that are temporarily unreachable.
+			if n.LastHeartbeat < gcCutoff {
+				if err := metaClient.DeleteNodeMeta(ctx, n.NodeID); err != nil {
+					log.Printf("Warning: failed to delete stale node %s: %v", n.NodeID, err)
+				} else {
+					deletedCount++
+					log.Printf("Garbage collected stale node %s (last heartbeat %ds ago)",
+						n.NodeID, time.Now().Unix()-n.LastHeartbeat)
+				}
+			}
+		}
+		if deletedCount > 0 {
+			log.Printf("Garbage collected %d stale node entries", deletedCount)
+		}
+	}
+	// Run GC every5 minutes.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				garbageCollectNodes()
 			}
 		}
 	}()
