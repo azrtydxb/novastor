@@ -32,6 +32,9 @@ spec:
           volumeMounts:
             - name: sys
               mountPath: /sys
+            - name: lib-modules
+              mountPath: /lib/modules
+              readOnly: true
       containers:
         - name: agent
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.agent.image.repository }}:{{ include "novastor.imageTag" . }}"
@@ -105,6 +108,10 @@ spec:
           hostPath:
             path: /var/lib/novastor/volumes
             type: DirectoryOrCreate
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
       {{- with .Values.agent.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
