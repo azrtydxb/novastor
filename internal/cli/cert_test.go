@@ -61,4 +61,3 @@ func TestMTLSComponentCommunication(t *testing.T) {
 
 	t.Skip("TODO: implement mTLS component communication test")
 }
-
