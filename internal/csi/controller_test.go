@@ -58,6 +58,16 @@ func (m *mockMetadataStore) ListVolumesMeta(_ context.Context) ([]*metadata.Volu
 	return result, nil
 }
 
+func (m *mockMetadataStore) PutPlacementMap(_ context.Context, pm *metadata.PlacementMap) error {
+	// No-op for tests: placement maps are not tested in the mock.
+	return nil
+}
+
+func (m *mockMetadataStore) DeletePlacementMap(_ context.Context, chunkID string) error {
+	// No-op for tests: placement maps are not tested in the mock.
+	return nil
+}
+
 // --- mock placement engine ---
 
 type mockPlacer struct {

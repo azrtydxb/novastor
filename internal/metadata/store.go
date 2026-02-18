@@ -340,6 +340,11 @@ func (s *RaftStore) ListPlacementMaps(_ context.Context) ([]*PlacementMap, error
 	return result, nil
 }
 
+// DeletePlacementMap removes a placement map entry.
+func (s *RaftStore) DeletePlacementMap(_ context.Context, chunkID string) error {
+	return s.apply(&fsmOp{Op: opDelete, Bucket: bucketPlacements, Key: chunkID})
+}
+
 // splitAndTrim splits a comma-separated list of addresses and trims whitespace.
 func splitAndTrim(s string) []string {
 	parts := strings.Split(s, ",")

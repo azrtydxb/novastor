@@ -30,6 +30,9 @@ type MetadataStore interface {
 	GetVolumeMeta(ctx context.Context, volumeID string) (*metadata.VolumeMeta, error)
 	DeleteVolumeMeta(ctx context.Context, volumeID string) error
 	ListVolumesMeta(ctx context.Context) ([]*metadata.VolumeMeta, error)
+	// Placement map methods for recovery management.
+	PutPlacementMap(ctx context.Context, pm *metadata.PlacementMap) error
+	DeletePlacementMap(ctx context.Context, chunkID string) error
 }
 
 // PlacementEngine selects storage nodes for new chunks.
@@ -118,6 +121,22 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		ChunkIDs:  chunkIDs,
 	}
 
+	// Write placement maps for each chunk. This is critical for recovery:
+	// if a node fails, the recovery manager uses these maps to know which
+	// chunks were on that node and need re-replication.
+	// Each chunk is placed on the node at the same index in nodeIDs.
+	for i, chunkID := range chunkIDs {
+		if i < len(nodeIDs) {
+			pm := &metadata.PlacementMap{
+				ChunkID: chunkID,
+				Nodes:   []string{nodeIDs[i]},
+			}
+			if err := cs.meta.PutPlacementMap(ctx, pm); err != nil {
+				return nil, status.Errorf(codes.Internal, "writing placement map for chunk %s: %v", chunkID, err)
+			}
+		}
+	}
+
 	// Set volume context for RWX (NFS-backed) volumes.
 	volContext := map[string]string{}
 	if hasRWXCapability(req.GetVolumeCapabilities()) {
@@ -190,6 +209,19 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 			logging.L.Warn("failed to delete NVMe-oF target (proceeding with metadata cleanup)",
 				zap.String("volumeID", volumeID),
 				zap.String("targetNodeID", vm.TargetNodeID),
+				zap.Error(deleteErr))
+		}
+	}
+
+	// Clean up placement maps for all chunks in this volume (best-effort).
+	for _, chunkID := range vm.ChunkIDs {
+		if deleteErr := cs.meta.DeletePlacementMap(ctx, chunkID); deleteErr != nil {
+			// Log but don't fail the delete operation if placement map cleanup fails.
+			// The volume metadata takes precedence; orphaned placement maps will be
+			// cleaned up by the garbage collector.
+			logging.L.Warn("failed to delete placement map (proceeding with metadata cleanup)",
+				zap.String("volumeID", volumeID),
+				zap.String("chunkID", chunkID),
 				zap.Error(deleteErr))
 		}
 	}
