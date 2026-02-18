@@ -11,7 +11,7 @@ SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
 # All binaries
-BINARIES = controller agent meta csi filer s3gw webhook cli
+BINARIES = controller agent meta csi filer s3gw scheduler webhook cli scheduler
 
 .PHONY: all
 all: build-all
@@ -125,11 +125,11 @@ IMAGE_TAG ?= latest
 
 .PHONY: docker-build
 docker-build: ## Build all docker images.
-	$(foreach comp,controller agent meta csi filer s3gw,$(DOCKER) build -t novastor-$(comp):latest -f build/Dockerfile.$(comp) .;)
+	$(foreach comp,controller agent meta csi filer s3gw scheduler webhook,$(DOCKER) build -t novastor-$(comp):latest -f build/Dockerfile.$(comp) .;)
 
 .PHONY: docker-push
 docker-push: ## Push all docker images to the registry.
-	$(foreach comp,controller agent meta csi filer s3gw,$(DOCKER) tag novastor-$(comp):latest $(REGISTRY)/novastor-$(comp):$(IMAGE_TAG) && $(DOCKER) push $(REGISTRY)/novastor-$(comp):$(IMAGE_TAG);)
+	$(foreach comp,controller agent meta csi filer s3gw scheduler webhook,$(DOCKER) tag novastor-$(comp):latest $(REGISTRY)/novastor-$(comp):$(IMAGE_TAG) && $(DOCKER) push $(REGISTRY)/novastor-$(comp):$(IMAGE_TAG);)
 
 ##@ Deployment
 
@@ -223,3 +223,7 @@ $(PROTOC_GEN_GO): $(LOCALBIN)
 protoc-gen-go-grpc: $(PROTOC_GEN_GO_GRPC) ## Download protoc-gen-go-grpc locally if necessary.
 $(PROTOC_GEN_GO_GRPC): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
+
+.PHONY: build-scheduler
+build-scheduler: fmt vet ## Build scheduler plugin binary.
+	go build -o bin/novastor-scheduler ./cmd/scheduler/

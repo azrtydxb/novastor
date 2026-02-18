@@ -1,0 +1,32 @@
+# Build stage
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /workspace
+
+# Install dependencies
+RUN apk add --no-cache git make
+
+# Copy go modules
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the scheduler binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o novastor-scheduler ./cmd/scheduler/
+
+# Final stage
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /
+
+COPY --from=builder /workspace/novastor-scheduler .
+
+# Non-root user
+RUN addgroup -S novastor && adduser -S novastor -G novastor
+USER novastor
+
+ENTRYPOINT ["/novastor-scheduler"]
