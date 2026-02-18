@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash/crc32"
+
+	"github.com/piwi3910/novastor/internal/metadata"
 )
 
 const ChunkSize = 4 * 1024 * 1024
@@ -20,6 +22,12 @@ type Chunk struct {
 	ID       ChunkID
 	Data     []byte
 	Checksum uint32
+
+	// ProtectionProfile specifies the data protection settings for this chunk.
+	ProtectionProfile *metadata.ProtectionProfile `json:"protectionProfile,omitempty"`
+
+	// ComplianceInfo tracks the current compliance state of this chunk.
+	ComplianceInfo *metadata.ComplianceInfo `json:"complianceInfo,omitempty"`
 }
 
 func (c *Chunk) ComputeChecksum() uint32 {
