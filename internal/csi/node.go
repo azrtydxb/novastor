@@ -135,17 +135,20 @@ func (ns *NodeService) NodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		// Format the device with ext4 if it has no filesystem yet.
 		formatted, fmtErr := ns.formatter.IsFormatted(ctx, devicePath)
 		if fmtErr != nil {
+			_ = ns.initiator.Disconnect(ctx, subsystemNQN)
 			return nil, status.Errorf(codes.Internal, "checking filesystem on %s: %v", devicePath, fmtErr)
 		}
 		if !formatted {
 			logging.L.Info("NodeStageVolume: formatting device", zap.String("devicePath", devicePath), zap.String("volumeID", req.GetVolumeId()))
 			if fmtErr := ns.formatter.Format(ctx, devicePath, "ext4"); fmtErr != nil {
+				_ = ns.initiator.Disconnect(ctx, subsystemNQN)
 				return nil, status.Errorf(codes.Internal, "formatting %s as ext4: %v", devicePath, fmtErr)
 			}
 		}
 
 		// Mount the formatted device to the staging path.
 		if mountErr := ns.formatter.Mount(ctx, devicePath, stagingPath, "ext4"); mountErr != nil {
+			_ = ns.initiator.Disconnect(ctx, subsystemNQN)
 			return nil, status.Errorf(codes.Internal, "mounting %s to %s: %v", devicePath, stagingPath, mountErr)
 		}
 		logging.L.Info("NodeStageVolume: mounted device", zap.String("devicePath", devicePath), zap.String("stagingPath", stagingPath), zap.String("volumeID", req.GetVolumeId()))

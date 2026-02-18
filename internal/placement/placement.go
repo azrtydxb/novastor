@@ -3,6 +3,13 @@ package placement
 import "sync"
 
 // Placer selects storage nodes for chunk placement.
+//
+// NOTE: When NVMe-oF integration is enabled, node IDs returned by Place and
+// PlaceKey must be network addresses (host:port format) that can be used for
+// gRPC communication with the agent's NVMeTargetService. If logical node IDs
+// are used instead, the CSI controller will fail to reach agents when creating
+// NVMe-oF targets. To support separate logical IDs and network addresses, a
+// nodeID→address resolution mechanism would need to be added to the controller.
 type Placer interface {
 	// PlaceKey returns a deterministic set of node IDs for the given key.
 	// The same key always produces the same placement (assuming the node set

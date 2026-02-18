@@ -6,9 +6,11 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/piwi3910/novastor/internal/logging"
 	"github.com/piwi3910/novastor/internal/metadata"
 )
 
@@ -124,8 +126,13 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		volContext["accessMode"] = "RWX"
 	} else if cs.agentTarget != nil {
 		// For RWO block volumes, create an NVMe-oF target on the first placed node.
-		// nodeIDs[0] is used as both the node identifier and the agent address.
-		nqn, targetAddr, targetPort, targetErr := cs.agentTarget.CreateTarget(ctx, nodeIDs[0], volumeID, int64(requiredBytes))
+		// NOTE: nodeIDs[0] is used as the agent address. The PlacementEngine must
+		//       return network addresses (host:port) that can be used for gRPC calls
+		//       to the agent's NVMeTargetService. If the placement engine returns
+		//       logical node IDs that differ from network addresses, a separate
+		//       nodeID→address mapping mechanism is required.
+		agentAddr := nodeIDs[0]
+		nqn, targetAddr, targetPort, targetErr := cs.agentTarget.CreateTarget(ctx, agentAddr, volumeID, int64(requiredBytes))
 		if targetErr != nil {
 			return nil, status.Errorf(codes.Internal, "creating NVMe-oF target for volume %s: %v", volumeID, targetErr)
 		}
@@ -171,10 +178,15 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
-	// Tear down NVMe-oF target before removing metadata.
+	// Tear down NVMe-oF target before removing metadata (best-effort).
+	// If the target deletion fails (e.g., agent unreachable), we still proceed
+	// with metadata cleanup to avoid blocking volume deletion on retries.
 	if cs.agentTarget != nil && vm.TargetNodeID != "" {
 		if deleteErr := cs.agentTarget.DeleteTarget(ctx, vm.TargetNodeID, volumeID); deleteErr != nil {
-			return nil, status.Errorf(codes.Internal, "deleting NVMe-oF target for volume %s: %v", volumeID, deleteErr)
+			logging.L.Warn("failed to delete NVMe-oF target (proceeding with metadata cleanup)",
+				zap.String("volumeID", volumeID),
+				zap.String("targetNodeID", vm.TargetNodeID),
+				zap.Error(deleteErr))
 		}
 	}
 
