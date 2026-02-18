@@ -44,7 +44,7 @@ NovaStor is a unified Kubernetes-native storage system providing **block** (CSI/
 | CSI Driver | `novastor-csi` | DaemonSet + Deployment | `cmd/csi/`, `internal/csi/` |
 | File Gateway | `novastor-filer` | Deployment | `cmd/filer/`, `internal/filer/` |
 | S3 Gateway | `novastor-s3gw` | Deployment | `cmd/s3gw/`, `internal/s3/` |
-| CLI | `novactl` | — | `cmd/cli/` |
+| CLI | `novastorctl` | — | `cmd/cli/` |
 
 ### Data Protection
 
@@ -122,7 +122,7 @@ novastor/
 │   ├── csi/                 # CSI driver
 │   ├── filer/               # NFS/file gateway
 │   ├── s3gw/                # S3-compatible gateway
-│   └── cli/                 # novactl CLI tool
+│   └── cli/                 # novastorctl CLI tool
 ├── api/
 │   ├── v1alpha1/            # CRD type definitions
 │   └── proto/               # Protobuf definitions

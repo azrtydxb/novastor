@@ -2926,7 +2926,7 @@ var (
 )
 
 func main() {
-	fmt.Fprintf(os.Stderr, "novactl %s (commit: %s, built: %s)\n", version, commit, date)
+	fmt.Fprintf(os.Stderr, "novastorctl %s (commit: %s, built: %s)\n", version, commit, date)
 	fmt.Fprintln(os.Stderr, "CLI not yet implemented")
 	os.Exit(0)
 }
