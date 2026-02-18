@@ -44,8 +44,25 @@ func (m *mockMounter) Unmount(target string) error {
 	return m.unmountErr
 }
 
+// noopFormatter is a DeviceFormatter that succeeds without calling any system tools.
+// Used in tests that run with a StubInitiator (directory, not a real block device).
+type noopFormatter struct{}
+
+func (noopFormatter) IsFormatted(_ context.Context, _ string) (bool, error) { return true, nil }
+func (noopFormatter) Format(_ context.Context, _, _ string) error           { return nil }
+func (noopFormatter) Mount(_ context.Context, _, _, _ string) error         { return nil }
+func (noopFormatter) Unmount(_ context.Context, _ string) error             { return nil }
+
 func newTestNodeService(nodeID string, mounter Mounter) *NodeService {
 	return NewNodeService(nodeID, &mockChunkClient{}, mounter)
+}
+
+// newTestNodeServiceWithInitiator creates a NodeService with a StubInitiator and
+// a noopFormatter so tests don't need blkid/mkfs/mount available.
+func newTestNodeServiceWithInitiator(nodeID string, mounter Mounter, initiator NVMeInitiator) *NodeService {
+	svc := NewNodeServiceWithInitiator(nodeID, &mockChunkClient{}, mounter, initiator)
+	svc.formatter = noopFormatter{}
+	return svc
 }
 
 func TestNodeGetInfo(t *testing.T) {
@@ -156,7 +173,7 @@ func TestNodeStageVolume_WithInitiator(t *testing.T) {
 	initiatorBase := filepath.Join(tmpDir, "nvme-devices")
 
 	initiator := &StubInitiator{BasePath: initiatorBase}
-	ns := NewNodeServiceWithInitiator("node-1", &mockChunkClient{}, &mockMounter{}, initiator)
+	ns := newTestNodeServiceWithInitiator("node-1", &mockMounter{}, initiator)
 
 	resp, err := ns.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
 		VolumeId:          "vol-002",
@@ -251,7 +268,7 @@ func TestNodeUnstageVolume_WithInitiator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ns := NewNodeServiceWithInitiator("node-1", &mockChunkClient{}, &mockMounter{}, initiator)
+	ns := newTestNodeServiceWithInitiator("node-1", &mockMounter{}, initiator)
 
 	resp, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
 		VolumeId:          "vol-003",

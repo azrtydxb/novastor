@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package nvme;
+
+option go_package = "github.com/piwi3910/novastor/api/proto/nvme";
+
+// NVMeTargetService manages NVMe-oF/TCP targets on storage agent nodes.
+// The CSI controller calls this service during CreateVolume/DeleteVolume
+// to create and tear down backing block devices exposed via nvmet configfs.
+service NVMeTargetService {
+  // CreateTarget creates a sparse backing file, attaches a loop device,
+  // and exposes it as an NVMe-oF/TCP target via nvmet configfs.
+  // Returns the subsystem NQN, listen address, and port for the initiator.
+  rpc CreateTarget(CreateTargetRequest) returns (CreateTargetResponse);
+
+  // DeleteTarget removes the NVMe-oF/TCP target, detaches the loop device,
+  // and deletes the sparse backing file.
+  rpc DeleteTarget(DeleteTargetRequest) returns (DeleteTargetResponse);
+}
+
+message CreateTargetRequest {
+  // volume_id is the unique volume identifier, used to derive the NQN and
+  // backing file name.
+  string volume_id = 1;
+
+  // size_bytes is the requested size for the backing sparse file.
+  int64 size_bytes = 2;
+}
+
+message CreateTargetResponse {
+  // subsystem_nqn is the NVMe Qualified Name for the created subsystem,
+  // e.g. "nqn.2024-01.io.novastor:vol-<uuid>".
+  string subsystem_nqn = 1;
+
+  // target_address is the IP address the NVMe-oF port is bound to.
+  string target_address = 2;
+
+  // target_port is the TCP port the NVMe-oF target listens on (default "4420").
+  string target_port = 3;
+}
+
+message DeleteTargetRequest {
+  // volume_id identifies the target to tear down.
+  string volume_id = 1;
+}
+
+message DeleteTargetResponse {}

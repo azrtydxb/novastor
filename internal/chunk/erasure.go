@@ -69,6 +69,6 @@ func (ec *ErasureCoder) Decode(shards [][]byte) ([]byte, error) {
 	return payload[:origLen], nil
 }
 
-func (ec *ErasureCoder) ShardCount() int  { return ec.dataShards + ec.parityShards }
+func (ec *ErasureCoder) ShardCount() int   { return ec.dataShards + ec.parityShards }
 func (ec *ErasureCoder) DataShards() int   { return ec.dataShards }
 func (ec *ErasureCoder) ParityShards() int { return ec.parityShards }

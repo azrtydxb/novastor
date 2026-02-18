@@ -242,12 +242,16 @@ func main() {
 	// Register CSI Node service (requires node ID).
 	if *nodeID != "" {
 		mounter := &novcsi.RealMounter{}
-		node := novcsi.NewNodeService(*nodeID, nodeChunkClient, mounter)
+		initiator := &novcsi.LinuxInitiator{}
+		node := novcsi.NewNodeServiceWithInitiator(*nodeID, nodeChunkClient, mounter, initiator)
 		csi.RegisterNodeServer(srv, node)
 	}
 
+	// Build NVMe target client for controller → agent communication.
+	nvmeTargetClient := novcsi.NewNodeTargetClient(dialOpts...)
+
 	// Build sub-controllers.
-	controller := novcsi.NewControllerServer(metaClient, placer)
+	controller := novcsi.NewControllerServer(metaClient, placer, nvmeTargetClient)
 	snapAdapter := &snapshotStoreAdapter{client: metaClient}
 	snapshotCtrl := novcsi.NewSnapshotController(snapAdapter)
 	expandCtrl := novcsi.NewExpandController(metaClient, placer)

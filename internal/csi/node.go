@@ -31,6 +31,39 @@ type Mounter interface {
 	Unmount(target string) error
 }
 
+// DeviceFormatter abstracts block device formatting and mounting so that
+// tests can substitute a no-op implementation without needing blkid/mkfs/mount.
+type DeviceFormatter interface {
+	// IsFormatted returns true if devicePath already contains a filesystem.
+	IsFormatted(ctx context.Context, devicePath string) (bool, error)
+	// Format formats devicePath with the given filesystem type.
+	Format(ctx context.Context, devicePath, fsType string) error
+	// Mount mounts devicePath to targetPath using the given filesystem type.
+	Mount(ctx context.Context, devicePath, targetPath, fsType string) error
+	// Unmount unmounts the filesystem at targetPath.
+	Unmount(ctx context.Context, targetPath string) error
+}
+
+// RealDeviceFormatter is the production DeviceFormatter that calls blkid,
+// mkfs.ext4, mount, and umount via exec.
+type RealDeviceFormatter struct{}
+
+func (RealDeviceFormatter) IsFormatted(ctx context.Context, devicePath string) (bool, error) {
+	return isFormatted(ctx, devicePath)
+}
+
+func (RealDeviceFormatter) Format(ctx context.Context, devicePath, fsType string) error {
+	return formatDevice(ctx, devicePath, fsType)
+}
+
+func (RealDeviceFormatter) Mount(ctx context.Context, devicePath, targetPath, fsType string) error {
+	return mountDevice(ctx, devicePath, targetPath, fsType)
+}
+
+func (RealDeviceFormatter) Unmount(ctx context.Context, targetPath string) error {
+	return unmountPath(ctx, targetPath)
+}
+
 // NodeService implements the CSI Node service.
 type NodeService struct {
 	csi.UnimplementedNodeServer
@@ -39,6 +72,7 @@ type NodeService struct {
 	chunkClient ChunkClient
 	mounter     Mounter
 	initiator   NVMeInitiator
+	formatter   DeviceFormatter
 }
 
 // NewNodeService creates a new NodeService with the given node ID, chunk client,
@@ -48,6 +82,7 @@ func NewNodeService(nodeID string, chunkClient ChunkClient, mounter Mounter) *No
 		nodeID:      nodeID,
 		chunkClient: chunkClient,
 		mounter:     mounter,
+		formatter:   RealDeviceFormatter{},
 	}
 }
 
@@ -58,6 +93,7 @@ func NewNodeServiceWithInitiator(nodeID string, chunkClient ChunkClient, mounter
 		chunkClient: chunkClient,
 		mounter:     mounter,
 		initiator:   initiator,
+		formatter:   RealDeviceFormatter{},
 	}
 }
 
@@ -96,6 +132,24 @@ func (ns *NodeService) NodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		}
 		logging.L.Info("NodeStageVolume: connected NVMe-oF device", zap.String("devicePath", devicePath), zap.String("volumeID", req.GetVolumeId()))
 
+		// Format the device with ext4 if it has no filesystem yet.
+		formatted, fmtErr := ns.formatter.IsFormatted(ctx, devicePath)
+		if fmtErr != nil {
+			return nil, status.Errorf(codes.Internal, "checking filesystem on %s: %v", devicePath, fmtErr)
+		}
+		if !formatted {
+			logging.L.Info("NodeStageVolume: formatting device", zap.String("devicePath", devicePath), zap.String("volumeID", req.GetVolumeId()))
+			if fmtErr := ns.formatter.Format(ctx, devicePath, "ext4"); fmtErr != nil {
+				return nil, status.Errorf(codes.Internal, "formatting %s as ext4: %v", devicePath, fmtErr)
+			}
+		}
+
+		// Mount the formatted device to the staging path.
+		if mountErr := ns.formatter.Mount(ctx, devicePath, stagingPath, "ext4"); mountErr != nil {
+			return nil, status.Errorf(codes.Internal, "mounting %s to %s: %v", devicePath, stagingPath, mountErr)
+		}
+		logging.L.Info("NodeStageVolume: mounted device", zap.String("devicePath", devicePath), zap.String("stagingPath", stagingPath), zap.String("volumeID", req.GetVolumeId()))
+
 		// Write device path marker so NodeUnstageVolume knows what to disconnect.
 		markerPath := filepath.Join(stagingPath, "nvme-device")
 		if err := os.WriteFile(markerPath, []byte(subsystemNQN), 0600); err != nil {
@@ -128,6 +182,13 @@ func (ns *NodeService) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 	markerPath := filepath.Join(stagingPath, "nvme-device")
 	if nqnBytes, err := os.ReadFile(markerPath); err == nil && ns.initiator != nil {
 		nqn := string(nqnBytes)
+
+		// Unmount the staging path before disconnecting the NVMe device.
+		if umountErr := ns.formatter.Unmount(ctx, stagingPath); umountErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to unmount staging path %s: %v", stagingPath, umountErr)
+		}
+		logging.L.Info("NodeUnstageVolume: unmounted staging path", zap.String("stagingPath", stagingPath), zap.String("volumeID", req.GetVolumeId()))
+
 		if disconnErr := ns.initiator.Disconnect(ctx, nqn); disconnErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to disconnect NVMe-oF target %s: %v", nqn, disconnErr)
 		}

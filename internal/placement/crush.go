@@ -258,4 +258,3 @@ func crushHash(key, nodeID string) uint64 {
 
 	return h
 }
-

@@ -40,25 +40,25 @@ const (
 	nfsProcCommit      uint32 = 21
 
 	// NFS v3 status codes (nfsstat3).
-	nfs3OK          uint32 = 0
-	nfs3ErrPerm     uint32 = 1
-	nfs3ErrNoEnt    uint32 = 2
-	nfs3ErrIO       uint32 = 5
-	nfs3ErrNXIO     uint32 = 6
-	nfs3ErrAcces    uint32 = 13
-	nfs3ErrExist    uint32 = 17
-	nfs3ErrXDev     uint32 = 18
-	nfs3ErrNoDev    uint32 = 19
-	nfs3ErrNotDir   uint32 = 20
-	nfs3ErrIsDir    uint32 = 21
-	nfs3ErrInval    uint32 = 22
-	nfs3ErrFBig     uint32 = 27
-	nfs3ErrNoSpc    uint32 = 28
-	nfs3ErrROFS     uint32 = 30
+	nfs3OK             uint32 = 0
+	nfs3ErrPerm        uint32 = 1
+	nfs3ErrNoEnt       uint32 = 2
+	nfs3ErrIO          uint32 = 5
+	nfs3ErrNXIO        uint32 = 6
+	nfs3ErrAcces       uint32 = 13
+	nfs3ErrExist       uint32 = 17
+	nfs3ErrXDev        uint32 = 18
+	nfs3ErrNoDev       uint32 = 19
+	nfs3ErrNotDir      uint32 = 20
+	nfs3ErrIsDir       uint32 = 21
+	nfs3ErrInval       uint32 = 22
+	nfs3ErrFBig        uint32 = 27
+	nfs3ErrNoSpc       uint32 = 28
+	nfs3ErrROFS        uint32 = 30
 	nfs3ErrNameTooLong uint32 = 63
-	nfs3ErrNotEmpty uint32 = 66
-	nfs3ErrStale    uint32 = 70
-	nfs3ErrBadHandle uint32 = 10001
+	nfs3ErrNotEmpty    uint32 = 66
+	nfs3ErrStale       uint32 = 70
+	nfs3ErrBadHandle   uint32 = 10001
 	nfs3ErrServerfault uint32 = 10006
 
 	// NFS v3 file types (ftype3).
@@ -79,9 +79,9 @@ const (
 	access3Execute uint32 = 0x0020
 
 	// WRITE3 stable/unstable constants.
-	writeUnstable  uint32 = 0
-	writeDataSync  uint32 = 1
-	writeFileSync  uint32 = 2
+	writeUnstable uint32 = 0
+	writeDataSync uint32 = 1
+	writeFileSync uint32 = 2
 
 	// CREATE3 mode constants.
 	createUnchecked uint32 = 0
@@ -89,17 +89,17 @@ const (
 	createExclusive uint32 = 2
 
 	// Maximum sizes for NFS v3.
-	maxNFSData    uint32 = 1048576 // 1 MiB max read/write
-	maxNFSName    uint32 = 255
-	maxNFSPath    uint32 = 4096
+	maxNFSData     uint32 = 1048576 // 1 MiB max read/write
+	maxNFSName     uint32 = 255
+	maxNFSPath     uint32 = 4096
 	maxNFSFileSize uint64 = 1 << 62 // ~4 EiB
 )
 
 // nfsV3Handler implements the NFS v3 program.
 type nfsV3Handler struct {
-	fs       NFSHandler
-	handles  *handleManager
-	locker   *LockManager
+	fs            NFSHandler
+	handles       *handleManager
+	locker        *LockManager
 	writeVerifier [8]byte // stable across server lifetime, changes on restart
 }
 
@@ -1135,9 +1135,9 @@ func (n *nfsV3Handler) handleFsStat(ctx context.Context, payload []byte) ([]byte
 	// Total, free, available bytes (report large values - chunk storage is distributed).
 	var totalBytes uint64 = 1 << 50 // ~1 PiB
 	var freeBytes uint64 = 1 << 49  // ~512 TiB
-	w.writeUint64(totalBytes)  // tbytes
-	w.writeUint64(freeBytes)   // fbytes
-	w.writeUint64(freeBytes)   // abytes (available)
+	w.writeUint64(totalBytes)       // tbytes
+	w.writeUint64(freeBytes)        // fbytes
+	w.writeUint64(freeBytes)        // abytes (available)
 	// Total, free, available files.
 	var totalFiles uint64 = 1 << 40
 	var freeFiles uint64 = 1 << 39
@@ -1161,13 +1161,13 @@ func (n *nfsV3Handler) handleFsInfo(ctx context.Context, payload []byte) ([]byte
 	w := newXDRWriter()
 	w.writeUint32(nfs3OK)
 	n.writePostOpAttr(w, meta)
-	w.writeUint32(maxNFSData) // rtmax
-	w.writeUint32(maxNFSData) // rtpref
-	w.writeUint32(8)          // rtmult (suggested read multiple)
-	w.writeUint32(maxNFSData) // wtmax
-	w.writeUint32(maxNFSData) // wtpref
-	w.writeUint32(8)          // wtmult
-	w.writeUint32(maxNFSData) // dtpref (readdir)
+	w.writeUint32(maxNFSData)     // rtmax
+	w.writeUint32(maxNFSData)     // rtpref
+	w.writeUint32(8)              // rtmult (suggested read multiple)
+	w.writeUint32(maxNFSData)     // wtmax
+	w.writeUint32(maxNFSData)     // wtpref
+	w.writeUint32(8)              // wtmult
+	w.writeUint32(maxNFSData)     // dtpref (readdir)
 	w.writeUint64(maxNFSFileSize) // maxfilesize
 	// time_delta (smallest time granularity: 1 nanosecond)
 	w.writeUint32(0) // seconds
@@ -1189,12 +1189,12 @@ func (n *nfsV3Handler) handlePathConf(ctx context.Context, payload []byte) ([]by
 	w := newXDRWriter()
 	w.writeUint32(nfs3OK)
 	n.writePostOpAttr(w, meta)
-	w.writeUint32(32767)  // linkmax
-	w.writeUint32(255)    // name_max
-	w.writeBool(true)     // no_trunc
-	w.writeBool(false)    // chown_restricted
-	w.writeBool(true)     // case_insensitive = false (case_preserving)
-	w.writeBool(true)     // case_preserving
+	w.writeUint32(32767) // linkmax
+	w.writeUint32(255)   // name_max
+	w.writeBool(true)    // no_trunc
+	w.writeBool(false)   // chown_restricted
+	w.writeBool(true)    // case_insensitive = false (case_preserving)
+	w.writeBool(true)    // case_preserving
 	return w.Bytes(), nil
 }
 

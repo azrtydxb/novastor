@@ -19,6 +19,12 @@ type VolumeMeta struct {
 	Pool      string   `json:"pool"`
 	SizeBytes uint64   `json:"sizeBytes"`
 	ChunkIDs  []string `json:"chunkIDs"`
+
+	// NVMe-oF target fields populated by the CSI controller after target creation.
+	TargetNodeID  string `json:"targetNodeID,omitempty"`
+	TargetAddress string `json:"targetAddress,omitempty"`
+	TargetPort    string `json:"targetPort,omitempty"`
+	SubsystemNQN  string `json:"subsystemNQN,omitempty"`
 }
 
 type PlacementMap struct {

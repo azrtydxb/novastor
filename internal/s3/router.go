@@ -139,4 +139,3 @@ func parsePath(urlPath string) (bucket, key string) {
 
 	return p[:slash], p[slash+1:]
 }
-

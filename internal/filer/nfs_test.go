@@ -87,8 +87,8 @@ func waitForAddr(srv *NFSServer, timeout time.Duration) net.Addr {
 func buildRPCCall(xid, prog, vers, proc uint32, payload []byte) []byte {
 	w := newXDRWriter()
 	w.writeUint32(xid)
-	w.writeUint32(rpcCall)     // msg_type = CALL
-	w.writeUint32(rpcVersion)  // rpc_vers = 2
+	w.writeUint32(rpcCall)    // msg_type = CALL
+	w.writeUint32(rpcVersion) // rpc_vers = 2
 	w.writeUint32(prog)
 	w.writeUint32(vers)
 	w.writeUint32(proc)
@@ -458,9 +458,9 @@ func TestNFSServer_ReadDir(t *testing.T) {
 	// Build READDIR payload.
 	pw := newXDRWriter()
 	pw.writeOpaque(rootHandle)
-	pw.writeUint64(0)                      // cookie (start from beginning)
-	pw.writeFixedOpaque(make([]byte, 8))   // cookieverf
-	pw.writeUint32(4096)                   // dircount
+	pw.writeUint64(0)                    // cookie (start from beginning)
+	pw.writeFixedOpaque(make([]byte, 8)) // cookieverf
+	pw.writeUint32(4096)                 // dircount
 	call := buildRPCCall(6, nfsProg, nfsVersion, nfsProcReadDir, pw.Bytes())
 	sendRPCRecord(t, conn, call)
 	reply := recvRPCRecord(t, conn)
@@ -545,13 +545,13 @@ func TestNFSServer_Create(t *testing.T) {
 	pw.writeString("newfile.txt")
 	pw.writeUint32(createUnchecked) // createhow3 = UNCHECKED
 	// sattr3.
-	pw.writeBool(true)     // set_mode
-	pw.writeUint32(0644)   // mode
-	pw.writeBool(false)    // set_uid
-	pw.writeBool(false)    // set_gid
-	pw.writeBool(false)    // set_size
-	pw.writeUint32(0)      // set_atime = DONT_CHANGE
-	pw.writeUint32(0)      // set_mtime = DONT_CHANGE
+	pw.writeBool(true)   // set_mode
+	pw.writeUint32(0644) // mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(false)  // set_size
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
 	call := buildRPCCall(7, nfsProg, nfsVersion, nfsProcCreate, pw.Bytes())
 	sendRPCRecord(t, conn, call)
 	reply := recvRPCRecord(t, conn)
@@ -598,10 +598,10 @@ func TestNFSServer_ReadWrite(t *testing.T) {
 	writeData := []byte("hello NFS v3")
 	pw := newXDRWriter()
 	pw.writeOpaque(rootHandle)
-	pw.writeUint64(0)                    // offset
+	pw.writeUint64(0)                      // offset
 	pw.writeUint32(uint32(len(writeData))) // count
-	pw.writeUint32(writeFileSync)        // stable
-	pw.writeOpaque(writeData)            // data
+	pw.writeUint32(writeFileSync)          // stable
+	pw.writeOpaque(writeData)              // data
 	call := buildRPCCall(8, nfsProg, nfsVersion, nfsProcWrite, pw.Bytes())
 	sendRPCRecord(t, conn, call)
 	reply := recvRPCRecord(t, conn)
@@ -830,13 +830,13 @@ func TestNFSServer_Mkdir(t *testing.T) {
 	pw.writeOpaque(rootHandle)
 	pw.writeString("testdir")
 	// sattr3
-	pw.writeBool(true)    // set_mode
-	pw.writeUint32(0755)  // mode
-	pw.writeBool(false)   // set_uid
-	pw.writeBool(false)   // set_gid
-	pw.writeBool(false)   // set_size
-	pw.writeUint32(0)     // set_atime = DONT_CHANGE
-	pw.writeUint32(0)     // set_mtime = DONT_CHANGE
+	pw.writeBool(true)   // set_mode
+	pw.writeUint32(0755) // mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(false)  // set_size
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
 	call := buildRPCCall(13, nfsProg, nfsVersion, nfsProcMkdir, pw.Bytes())
 	sendRPCRecord(t, conn, call)
 	reply := recvRPCRecord(t, conn)

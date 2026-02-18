@@ -11,15 +11,14 @@ type AgentCollector struct {
 	// DiskStatsFn returns per-device disk statistics: device name, total
 	// bytes, used bytes, and free bytes.
 	DiskStatsFn func() []DiskStats
-
 }
 
 // DiskStats holds capacity information for a single storage device.
 type DiskStats struct {
-	Device    string
-	Total     uint64
-	Used      uint64
-	Free      uint64
+	Device string
+	Total  uint64
+	Used   uint64
+	Free   uint64
 }
 
 // NewAgentCollector creates an AgentCollector with no-op data sources.
@@ -27,8 +26,8 @@ type DiskStats struct {
 // before invoking Collect.
 func NewAgentCollector() *AgentCollector {
 	return &AgentCollector{
-		ChunkCountFn:  func() int64 { return 0 },
-		DiskStatsFn: func() []DiskStats { return nil },
+		ChunkCountFn: func() int64 { return 0 },
+		DiskStatsFn:  func() []DiskStats { return nil },
 	}
 }
 

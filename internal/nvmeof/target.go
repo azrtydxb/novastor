@@ -166,6 +166,88 @@ func (tm *TargetManager) CreateTarget(volumeID string, port int, size int64) err
 	return nil
 }
 
+// CreateTargetWithDevice sets up an NVMe-oF/TCP target backed by a real block
+// device (or loop device). Unlike CreateTarget (which writes a size hint),
+// this function writes the device_path attribute that nvmet actually requires
+// to expose a namespace. listenAddr is written to addr_traddr so the kernel
+// binds the port to a specific IP (required when the node has multiple interfaces).
+func (tm *TargetManager) CreateTargetWithDevice(volumeID string, port int, devicePath, listenAddr string) error {
+	subsysDir := tm.subsystemPath(volumeID)
+	nsDir := tm.namespacePath(volumeID)
+	portDir := tm.portPath(port)
+
+	// Create subsystem directory.
+	if err := tm.configFS.MkdirAll(subsysDir, 0o755); err != nil {
+		return fmt.Errorf("creating subsystem directory: %w", err)
+	}
+
+	// Allow any host to connect.
+	attrPath := filepath.Join(subsysDir, "attr_allow_any_host")
+	if err := tm.configFS.WriteFile(attrPath, []byte("1"), 0o644); err != nil {
+		return fmt.Errorf("setting attr_allow_any_host: %w", err)
+	}
+
+	// Create namespace directory.
+	if err := tm.configFS.MkdirAll(nsDir, 0o755); err != nil {
+		return fmt.Errorf("creating namespace directory: %w", err)
+	}
+
+	// Write namespace device_path — the correct nvmet attribute for a real device.
+	devPathAttr := filepath.Join(nsDir, "device_path")
+	if err := tm.configFS.WriteFile(devPathAttr, []byte(devicePath), 0o644); err != nil {
+		return fmt.Errorf("writing namespace device_path: %w", err)
+	}
+
+	// Enable the namespace.
+	enablePath := filepath.Join(nsDir, "enable")
+	if err := tm.configFS.WriteFile(enablePath, []byte("1"), 0o644); err != nil {
+		return fmt.Errorf("enabling namespace: %w", err)
+	}
+
+	// Create port directory.
+	if err := tm.configFS.MkdirAll(portDir, 0o755); err != nil {
+		return fmt.Errorf("creating port directory: %w", err)
+	}
+
+	// Configure port transport type.
+	trTypePath := filepath.Join(portDir, "addr_trtype")
+	if err := tm.configFS.WriteFile(trTypePath, []byte("tcp"), 0o644); err != nil {
+		return fmt.Errorf("setting port transport type: %w", err)
+	}
+
+	// Configure port address family.
+	adrFamPath := filepath.Join(portDir, "addr_adrfam")
+	if err := tm.configFS.WriteFile(adrFamPath, []byte("ipv4"), 0o644); err != nil {
+		return fmt.Errorf("setting port address family: %w", err)
+	}
+
+	// Configure listen address.
+	trAddrPath := filepath.Join(portDir, "addr_traddr")
+	if err := tm.configFS.WriteFile(trAddrPath, []byte(listenAddr), 0o644); err != nil {
+		return fmt.Errorf("setting port listen address: %w", err)
+	}
+
+	// Configure port service ID (port number as string).
+	trSvcIDPath := filepath.Join(portDir, "addr_trsvcid")
+	if err := tm.configFS.WriteFile(trSvcIDPath, []byte(strconv.Itoa(port)), 0o644); err != nil {
+		return fmt.Errorf("setting port service id: %w", err)
+	}
+
+	// Create the subsystems directory under the port for the symlink.
+	portSubsysDir := filepath.Join(portDir, "subsystems")
+	if err := tm.configFS.MkdirAll(portSubsysDir, 0o755); err != nil {
+		return fmt.Errorf("creating port subsystems directory: %w", err)
+	}
+
+	// Symlink from port/subsystems/<nqn> -> subsystem directory.
+	linkPath := filepath.Join(portSubsysDir, subsystemPrefix+volumeID)
+	if err := tm.configFS.Symlink(subsysDir, linkPath); err != nil {
+		return fmt.Errorf("creating subsystem symlink: %w", err)
+	}
+
+	return nil
+}
+
 // DeleteTarget tears down the NVMe-oF/TCP target for the given volume. It
 // removes the symlink, port, namespace, and subsystem in reverse order.
 func (tm *TargetManager) DeleteTarget(volumeID string) error {

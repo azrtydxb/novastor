@@ -80,7 +80,7 @@ func (p *mockPlacer) Place(count int) []string {
 func setupController() (*ControllerServer, *mockMetadataStore) {
 	store := newMockMetadataStore()
 	placer := &mockPlacer{nodes: []string{"node-1", "node-2", "node-3"}}
-	return NewControllerServer(store, placer), store
+	return NewControllerServer(store, placer, nil), store
 }
 
 // --- CreateVolume tests ---
@@ -185,7 +185,7 @@ func TestCreateVolume_RWX(t *testing.T) {
 func TestCreateVolumeNoNodes(t *testing.T) {
 	store := newMockMetadataStore()
 	placer := &mockPlacer{nodes: nil}
-	cs := NewControllerServer(store, placer)
+	cs := NewControllerServer(store, placer, nil)
 
 	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name: "no-nodes",
@@ -486,7 +486,7 @@ func TestControllerGetCapabilities(t *testing.T) {
 	expected := map[csi.ControllerServiceCapability_RPC_Type]bool{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME:   false,
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT: false,
-		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME:         false,
+		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME:          false,
 	}
 
 	for _, cap := range resp.GetCapabilities() {
