@@ -444,21 +444,242 @@ func TestListVolumes_InvalidToken(t *testing.T) {
 	}
 }
 
-// --- Unimplemented RPCs ---
+// --- ControllerPublishVolume tests ---
 
-func TestControllerPublishVolumeUnimplemented(t *testing.T) {
+func TestControllerPublishVolume_Success(t *testing.T) {
 	cs, _ := setupController()
-	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{})
-	if st, ok := status.FromError(err); !ok || st.Code() != codes.Unimplemented {
-		t.Errorf("expected Unimplemented, got %v", err)
+
+	// Create a volume first.
+	createResp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		Name:          "publish-vol",
+		CapacityRange: &csi.CapacityRange{RequiredBytes: 4 * 1024 * 1024},
+	})
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
+
+	volumeID := createResp.GetVolume().GetVolumeId()
+
+	// Publish the volume to a node.
+	resp, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId: volumeID,
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("ControllerPublishVolume failed: %v", err)
+	}
+
+	// Check publish context contains required fields.
+	pubCtx := resp.GetPublishContext()
+	if pubCtx["volumeId"] != volumeID {
+		t.Errorf("expected volumeId %s in publish context, got %q", volumeID, pubCtx["volumeId"])
+	}
+	if pubCtx["accessType"] != "block" {
+		t.Errorf("expected accessType block, got %q", pubCtx["accessType"])
 	}
 }
 
-func TestControllerUnpublishVolumeUnimplemented(t *testing.T) {
+func TestControllerPublishVolume_RWX(t *testing.T) {
+	cs, _ := setupController()
+
+	// Create an RWX volume.
+	createResp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		Name:          "publish-rwx",
+		CapacityRange: &csi.CapacityRange{RequiredBytes: 4 * 1024 * 1024},
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
+
+	volumeID := createResp.GetVolume().GetVolumeId()
+
+	// Publish the RWX volume.
+	// Note: ControllerPublishVolume doesn't need VolumeCapabilities in the request
+	// since the access type is determined from the volume metadata.
+	resp, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId: volumeID,
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("ControllerPublishVolume RWX failed: %v", err)
+	}
+
+	// RWX volumes without NVMe-oF targets get "block" accessType by default
+	// since the node will handle NFS mounting based on volume context.
+	pubCtx := resp.GetPublishContext()
+	if pubCtx["accessType"] != "block" {
+		t.Errorf("expected accessType block, got %q", pubCtx["accessType"])
+	}
+	if pubCtx["volumeId"] != volumeID {
+		t.Errorf("expected volumeId %s, got %q", volumeID, pubCtx["volumeId"])
+	}
+}
+
+func TestControllerPublishVolume_NoVolumeID(t *testing.T) {
+	cs, _ := setupController()
+	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		NodeId: "node-1",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing volume ID")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestControllerPublishVolume_NoNodeID(t *testing.T) {
+	cs, _ := setupController()
+	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId: "some-volume",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing node ID")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestControllerPublishVolume_NotFound(t *testing.T) {
+	cs, _ := setupController()
+	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId: "nonexistent",
+		NodeId:   "node-1",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-existent volume")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.NotFound {
+		t.Errorf("expected NotFound, got %v", err)
+	}
+}
+
+func TestControllerPublishVolume_Idempotent(t *testing.T) {
+	cs, _ := setupController()
+
+	// Create a volume.
+	createResp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		Name:          "idempotent-vol",
+		CapacityRange: &csi.CapacityRange{RequiredBytes: 4 * 1024 * 1024},
+	})
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
+
+	volumeID := createResp.GetVolume().GetVolumeId()
+
+	// Publish twice - both should succeed.
+	_, err = cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId: volumeID,
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("first publish failed: %v", err)
+	}
+
+	_, err = cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId: volumeID,
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("second publish failed: %v", err)
+	}
+}
+
+// --- ControllerUnpublishVolume tests ---
+
+func TestControllerUnpublishVolume_Success(t *testing.T) {
+	cs, _ := setupController()
+
+	// Create a volume first.
+	createResp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		Name:          "unpublish-vol",
+		CapacityRange: &csi.CapacityRange{RequiredBytes: 4 * 1024 * 1024},
+	})
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
+
+	volumeID := createResp.GetVolume().GetVolumeId()
+
+	// Publish first.
+	_, err = cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId: volumeID,
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("ControllerPublishVolume failed: %v", err)
+	}
+
+	// Unpublish should succeed.
+	_, err = cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: volumeID,
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("ControllerUnpublishVolume failed: %v", err)
+	}
+}
+
+func TestControllerUnpublishVolume_NoVolumeID(t *testing.T) {
 	cs, _ := setupController()
 	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{})
-	if st, ok := status.FromError(err); !ok || st.Code() != codes.Unimplemented {
-		t.Errorf("expected Unimplemented, got %v", err)
+	if err == nil {
+		t.Fatal("expected error for missing volume ID")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestControllerUnpublishVolume_Idempotent(t *testing.T) {
+	cs, _ := setupController()
+
+	// Create a volume.
+	createResp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		Name:          "unpublish-idempotent",
+		CapacityRange: &csi.CapacityRange{RequiredBytes: 4 * 1024 * 1024},
+	})
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
+
+	volumeID := createResp.GetVolume().GetVolumeId()
+
+	// Unpublish multiple times - all should succeed.
+	_, err = cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: volumeID,
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("first unpublish failed: %v", err)
+	}
+
+	_, err = cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: volumeID,
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("second unpublish failed: %v", err)
+	}
+}
+
+func TestControllerUnpublishVolume_NonexistentVolume(t *testing.T) {
+	cs, _ := setupController()
+	// Unpublishing a non-existent volume should succeed idempotently.
+	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: "does-not-exist",
+	})
+	if err != nil {
+		t.Fatalf("expected idempotent unpublish to succeed, got: %v", err)
 	}
 }
 
@@ -480,9 +701,10 @@ func TestControllerGetCapabilities(t *testing.T) {
 	}
 
 	expected := map[csi.ControllerServiceCapability_RPC_Type]bool{
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME:   false,
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT: false,
-		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME:          false,
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME:     false,
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT:   false,
+		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME:            false,
+		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME: false,
 	}
 
 	for _, cap := range resp.GetCapabilities() {

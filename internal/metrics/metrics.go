@@ -158,6 +158,24 @@ var (
 		Buckets:   prometheus.DefBuckets,
 	})
 
+	// VolumePublishDuration tracks the time to publish a volume to a node.
+	VolumePublishDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "novastor",
+		Subsystem: "csi",
+		Name:      "volume_publish_duration_seconds",
+		Help:      "Time to publish a volume to a node",
+		Buckets:   prometheus.DefBuckets,
+	})
+
+	// VolumeUnpublishDuration tracks the time to unpublish a volume from a node.
+	VolumeUnpublishDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "novastor",
+		Subsystem: "csi",
+		Name:      "volume_unpublish_duration_seconds",
+		Help:      "Time to unpublish a volume from a node",
+		Buckets:   prometheus.DefBuckets,
+	})
+
 	// --------------- S3 gateway metrics ---------------
 
 	// S3RequestsTotal counts S3 requests by operation type.
@@ -248,6 +266,8 @@ func Register() {
 	prometheus.MustRegister(VolumeCount)
 	prometheus.MustRegister(VolumeProvisionDuration)
 	prometheus.MustRegister(VolumeDeleteDuration)
+	prometheus.MustRegister(VolumePublishDuration)
+	prometheus.MustRegister(VolumeUnpublishDuration)
 
 	// S3 gateway metrics
 	prometheus.MustRegister(S3RequestsTotal)
