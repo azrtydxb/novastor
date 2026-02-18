@@ -106,9 +106,9 @@ func testStoragePool(t *testing.T, ctx context.Context, k8sClient client.Client)
 					"novastor.io/storage-tier": "nvme",
 				},
 			},
-			DataProtection: novastorv1alpha1.DataProtectionConfig{
+			DataProtection: novastorv1alpha1.DataProtectionSpec{
 				Mode: "replication",
-				Replication: &novastorv1alpha1.ReplicationConfig{
+				Replication: &novastorv1alpha1.ReplicationSpec{
 					Factor:      3,
 					WriteQuorum: 2,
 				},
@@ -191,7 +191,7 @@ func testSharedFilesystem(t *testing.T, ctx context.Context, k8sClient client.Cl
 			Pool:       "e2e-test-pool",
 			Capacity:   "50Gi",
 			AccessMode: "ReadWriteMany",
-			Export: novastorv1alpha1.ExportConfig{
+			Export: &novastorv1alpha1.ExportSpec{
 				Protocol: "nfs",
 			},
 		},
@@ -243,12 +243,12 @@ func testObjectStore(t *testing.T, ctx context.Context, k8sClient client.Client)
 		},
 		Spec: novastorv1alpha1.ObjectStoreSpec{
 			Pool: "e2e-test-pool",
-			Endpoint: novastorv1alpha1.EndpointConfig{
-				Service: novastorv1alpha1.ServiceEndpointConfig{
+			Endpoint: novastorv1alpha1.ObjectEndpointSpec{
+				Service: novastorv1alpha1.ObjectServiceSpec{
 					Port: 9000,
 				},
 			},
-			BucketPolicy: &novastorv1alpha1.BucketPolicy{
+			BucketPolicy: &novastorv1alpha1.BucketPolicySpec{
 				MaxBuckets: 10,
 				Versioning: "disabled",
 			},
