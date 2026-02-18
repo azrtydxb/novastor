@@ -122,23 +122,18 @@ func findNVMeDeviceByNQN(nqn string) (string, error) {
 			continue
 		}
 
-		// The controller directory contains namespace entries (nvme0n1, nvme0n2, …).
-		// Return the path for the first namespace.
-		ctrlDir := filepath.Join(nvmeFabricsRoot, ctrlName)
-		nsEntries, err := os.ReadDir(ctrlDir)
-		if err != nil {
-			return "", fmt.Errorf("reading controller dir %s: %w", ctrlDir, err)
-		}
-		for _, ns := range nsEntries {
-			nsName := ns.Name()
-			// Namespace entries follow the pattern "<ctrlName>n<num>".
-			if strings.HasPrefix(nsName, ctrlName+"n") {
-				return filepath.Join("/dev", nsName), nil
-			}
+		// Derive the block device path from the controller name.
+		// NVMe-TCP controllers may expose the block device as:
+		//   /dev/<ctrlName>n1           (single-path, e.g. nvme0n1)
+		//   /dev/<ctrlName>n1 via multipath (kernel uses nvme-subsystem symlink)
+		// The canonical namespace block device is always /dev/<ctrlName>n1.
+		devPath := filepath.Join("/dev", ctrlName+"n1")
+		if _, statErr := os.Stat(devPath); statErr == nil {
+			return devPath, nil
 		}
 
-		// Controller found but no namespaces yet; signal not-ready.
-		return "", fmt.Errorf("controller %s found but no namespaces available", ctrlName)
+		// Controller found but namespace not yet visible in /dev.
+		return "", fmt.Errorf("controller %s found but %s not yet available", ctrlName, devPath)
 	}
 
 	return "", fmt.Errorf("no nvme controller found for nqn %s", nqn)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // NodeMeta holds registration and capacity information for a storage agent node.
@@ -75,4 +76,22 @@ func (s *RaftStore) ListNodeMetas(_ context.Context) ([]*NodeMeta, error) {
 		metas = append(metas, &meta)
 	}
 	return metas, nil
+}
+
+// ListLiveNodeMetas returns nodes whose LastHeartbeat is within the given TTL.
+// Nodes that have not sent a heartbeat recently are considered stale and excluded.
+// This avoids accumulating dead entries from pods that have restarted with new IPs.
+func (s *RaftStore) ListLiveNodeMetas(ctx context.Context, ttl time.Duration) ([]*NodeMeta, error) {
+	all, err := s.ListNodeMetas(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cutoff := time.Now().Add(-ttl).Unix()
+	live := make([]*NodeMeta, 0, len(all))
+	for _, m := range all {
+		if m.LastHeartbeat >= cutoff {
+			live = append(live, m)
+		}
+	}
+	return live, nil
 }

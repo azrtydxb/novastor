@@ -118,13 +118,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		ChunkIDs:  chunkIDs,
 	}
 
-	// Build accessible topology from the first placed node.
-	topology := &csi.Topology{
-		Segments: map[string]string{
-			"novastor.io/node": nodeIDs[0],
-		},
-	}
-
 	// Set volume context for RWX (NFS-backed) volumes.
 	volContext := map[string]string{}
 	if hasRWXCapability(req.GetVolumeCapabilities()) {
@@ -164,10 +157,9 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
-			VolumeId:           volumeID,
-			CapacityBytes:      int64(requiredBytes),
-			AccessibleTopology: []*csi.Topology{topology},
-			VolumeContext:      volContext,
+			VolumeId:      volumeID,
+			CapacityBytes: int64(requiredBytes),
+			VolumeContext: volContext,
 		},
 	}, nil
 }

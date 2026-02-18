@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -215,27 +216,67 @@ func main() {
 	// Create placement engine with known nodes.
 	placer := placement.NewRoundRobin(nodeIDs)
 
+	// knownNodes tracks the set of addresses currently in the placer so that
+	// stale entries (dead pods) can be removed on the next sync cycle.
+	knownNodes := make(map[string]struct{})
+	knownNodesMu := sync.Mutex{}
+
+	// nodeTTL is how long a node entry is considered fresh. Agents heartbeat
+	// every 30 seconds; entries older than 3× that are almost certainly stale
+	// (dead pod, restarted pod with a new IP, etc.). TTL filtering here avoids
+	// the slow per-entry TCP probes that were needed before.
+	const nodeTTL = 90 * time.Second
+
 	// Sync node list from metadata service: discover ready agents dynamically.
 	// This runs once at startup and every 30 seconds thereafter so that nodes
 	// joining or leaving the cluster are reflected without a CSI restart.
+	// On each sync we replace the full active set, removing stale addresses.
 	syncNodes := func() {
 		nodes, err := metaClient.ListNodeMetas(ctx)
 		if err != nil {
 			log.Printf("Warning: failed to list node metas: %v", err)
 			return
 		}
+		cutoff := time.Now().Add(-nodeTTL).Unix()
+		currentNodes := make(map[string]struct{})
 		for _, n := range nodes {
 			if n.Status != "ready" || n.Address == "" {
 				continue
 			}
-			// Skip unroutable 0.0.0.0 addresses left by pods that
-			// registered before the host-IP fix was deployed.
+			// Skip nodes whose last heartbeat is older than nodeTTL — they are
+			// stale entries left over from pods that restarted with new IPs.
+			if n.LastHeartbeat < cutoff {
+				log.Printf("Skipping stale storage node at %s (last heartbeat %ds ago)",
+					n.Address, time.Now().Unix()-n.LastHeartbeat)
+				continue
+			}
+			// Skip unroutable 0.0.0.0 or host-IP addresses; only accept
+			// pod-network IPs that are directly reachable from the controller pod.
 			host, _, splitErr := net.SplitHostPort(n.Address)
 			if splitErr != nil || host == "0.0.0.0" || host == "" {
 				continue
 			}
-			placer.AddNode(n.Address)
-			log.Printf("Discovered storage node %s at %s", n.NodeID, n.Address)
+			currentNodes[n.Address] = struct{}{}
+		}
+
+		knownNodesMu.Lock()
+		defer knownNodesMu.Unlock()
+
+		// Remove nodes that are no longer active.
+		for addr := range knownNodes {
+			if _, ok := currentNodes[addr]; !ok {
+				placer.RemoveNode(addr)
+				log.Printf("Removed stale storage node at %s", addr)
+				delete(knownNodes, addr)
+			}
+		}
+		// Add newly discovered nodes.
+		for addr := range currentNodes {
+			if _, ok := knownNodes[addr]; !ok {
+				placer.AddNode(addr)
+				log.Printf("Discovered storage node at %s", addr)
+				knownNodes[addr] = struct{}{}
+			}
 		}
 	}
 	syncNodes()

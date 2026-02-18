@@ -204,37 +204,57 @@ func (tm *TargetManager) CreateTargetWithDevice(volumeID string, port int, devic
 		return fmt.Errorf("enabling namespace: %w", err)
 	}
 
-	// Create port directory.
-	if err := tm.configFS.MkdirAll(portDir, 0o755); err != nil {
-		return fmt.Errorf("creating port directory: %w", err)
-	}
-
-	// Configure port transport type.
-	trTypePath := filepath.Join(portDir, "addr_trtype")
-	if err := tm.configFS.WriteFile(trTypePath, []byte("tcp"), 0o644); err != nil {
-		return fmt.Errorf("setting port transport type: %w", err)
-	}
-
-	// Configure port address family.
-	adrFamPath := filepath.Join(portDir, "addr_adrfam")
-	if err := tm.configFS.WriteFile(adrFamPath, []byte("ipv4"), 0o644); err != nil {
-		return fmt.Errorf("setting port address family: %w", err)
-	}
-
-	// Configure listen address.
-	trAddrPath := filepath.Join(portDir, "addr_traddr")
-	if err := tm.configFS.WriteFile(trAddrPath, []byte(listenAddr), 0o644); err != nil {
-		return fmt.Errorf("setting port listen address: %w", err)
-	}
-
-	// Configure port service ID (port number as string).
-	trSvcIDPath := filepath.Join(portDir, "addr_trsvcid")
-	if err := tm.configFS.WriteFile(trSvcIDPath, []byte(strconv.Itoa(port)), 0o644); err != nil {
-		return fmt.Errorf("setting port service id: %w", err)
-	}
-
-	// Create the subsystems directory under the port for the symlink.
+	// Create or reuse the shared port. The port directory persists across agent
+	// pod restarts (it lives in the host kernel's configfs). If it exists but
+	// was configured with a specific addr_traddr (e.g. an old pod IP) and has
+	// no active subsystem symlinks, the kernel rejects new symlinks with
+	// EADDRNOTAVAIL. In that case we delete and recreate the port directory.
 	portSubsysDir := filepath.Join(portDir, "subsystems")
+	needPortCreate := false
+	if _, statErr := os.Stat(filepath.Join(portDir, "addr_trtype")); os.IsNotExist(statErr) {
+		needPortCreate = true
+	} else {
+		// Port exists — check if addr_traddr matches what we want.
+		addrData, readErr := os.ReadFile(filepath.Join(portDir, "addr_traddr"))
+		curAddr := strings.TrimSpace(string(addrData))
+		if readErr == nil && curAddr != listenAddr {
+			// Wrong listen address. Reset the port if it has no active symlinks.
+			existingLinks, _ := os.ReadDir(portSubsysDir)
+			if len(existingLinks) == 0 {
+				if err := tm.configFS.Remove(portDir); err == nil {
+					needPortCreate = true
+				}
+			}
+		}
+	}
+
+	if needPortCreate {
+		if err := tm.configFS.MkdirAll(portDir, 0o755); err != nil {
+			return fmt.Errorf("creating port directory: %w", err)
+		}
+
+		trTypePath := filepath.Join(portDir, "addr_trtype")
+		if err := tm.configFS.WriteFile(trTypePath, []byte("tcp"), 0o644); err != nil {
+			return fmt.Errorf("setting port transport type: %w", err)
+		}
+
+		adrFamPath := filepath.Join(portDir, "addr_adrfam")
+		if err := tm.configFS.WriteFile(adrFamPath, []byte("ipv4"), 0o644); err != nil {
+			return fmt.Errorf("setting port address family: %w", err)
+		}
+
+		trAddrPath := filepath.Join(portDir, "addr_traddr")
+		if err := tm.configFS.WriteFile(trAddrPath, []byte(listenAddr), 0o644); err != nil {
+			return fmt.Errorf("setting port listen address: %w", err)
+		}
+
+		trSvcIDPath := filepath.Join(portDir, "addr_trsvcid")
+		if err := tm.configFS.WriteFile(trSvcIDPath, []byte(strconv.Itoa(port)), 0o644); err != nil {
+			return fmt.Errorf("setting port service id: %w", err)
+		}
+	}
+
+	// Ensure the port's subsystems virtual directory is accessible.
 	if err := tm.configFS.MkdirAll(portSubsysDir, 0o755); err != nil {
 		return fmt.Errorf("creating port subsystems directory: %w", err)
 	}
