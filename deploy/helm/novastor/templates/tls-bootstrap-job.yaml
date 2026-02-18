@@ -1,0 +1,123 @@
+{{- if and (include "novastor.tls.enabled" .) (not .Values.global.tls.ca.certPEM) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "novastor.fullname" . }}-tls-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install, pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "novastor.fullname" . }}-tls-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install, pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "novastor.fullname" . }}-tls-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install, pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "novastor.fullname" . }}-tls-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "novastor.fullname" . }}-tls-bootstrap
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "novastor.fullname" . }}-tls-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install, pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "novastor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: tls-bootstrap
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "novastor.fullname" . }}-tls-bootstrap
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: bootstrap
+          image: {{ .Values.global.tls.bootstrapImage.registry }}/{{ .Values.global.tls.bootstrapImage.repository }}:{{ .Values.global.tls.bootstrapImage.tag }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              SECRET_NAME="{{ include "novastor.tls.volumeName" . }}"
+              NAMESPACE="{{ .Release.Namespace }}"
+
+              # Check if secret already exists with valid CA
+              if kubectl get secret "$SECRET_NAME" -n "$NAMESPACE" 2>/dev/null; then
+                EXISTING_CA=$(kubectl get secret "$SECRET_NAME" -n "$NAMESPACE" -o jsonpath='{.data.ca\.crt}' 2>/dev/null || echo "")
+                if [ -n "$EXISTING_CA" ] && [ "$EXISTING_CA" != "" ]; then
+                  echo "Secret $SECRET_NAME already exists with valid CA certificate, skipping bootstrap"
+                  exit 0
+                fi
+              fi
+
+              # Generate certificates using novastorctl
+              /novastorctl cert bootstrap --output-dir /tmp/certs
+
+              # Create or update the secret with generated certificates
+              kubectl create secret generic "$SECRET_NAME" \
+                --from-file=ca.crt=/tmp/certs/ca.crt \
+                --from-file=ca.key=/tmp/certs/ca.key \
+                --from-file=server.crt=/tmp/certs/server.crt \
+                --from-file=server.key=/tmp/certs/server.key \
+                --from-file=client.crt=/tmp/certs/client.crt \
+                --from-file=client.key=/tmp/certs/client.key \
+                -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
+
+              echo "TLS bootstrap completed successfully"
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+{{- end }}

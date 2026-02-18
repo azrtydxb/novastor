@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
@@ -195,4 +197,118 @@ func TestMTLS_RoundTrip(t *testing.T) {
 	if resp.Status != healthpb.HealthCheckResponse_SERVING {
 		t.Errorf("unexpected health status: %v", resp.Status)
 	}
+}
+
+// TestMTLS_RejectsConnectionWithoutClientCert verifies that the server
+// configured with mTLS rejects connections from clients that don't present
+// a valid client certificate.
+func TestMTLS_RejectsConnectionWithoutClientCert(t *testing.T) {
+	caCertPEM, caKeyPEM, err := GenerateCA("TestOrg")
+	if err != nil {
+		t.Fatalf("GenerateCA: %v", err)
+	}
+
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.crt")
+	if err := WriteCertFiles(caPath, filepath.Join(dir, "ca.key"), caCertPEM, caKeyPEM); err != nil {
+		t.Fatalf("writing CA: %v", err)
+	}
+
+	serverCertPath, serverKeyPath := writeTempCerts(t, dir, caCertPEM, caKeyPEM, "server", true, []string{"localhost"})
+
+	// Create server with mTLS (requires client certificate).
+	serverOpt, err := NewServerTLS(TLSConfig{
+		CACertPath: caPath,
+		CertPath:   serverCertPath,
+		KeyPath:    serverKeyPath,
+	})
+	if err != nil {
+		t.Fatalf("NewServerTLS: %v", err)
+	}
+
+	srv := grpc.NewServer(serverOpt)
+	healthSrv := health.NewServer()
+	healthpb.RegisterHealthServer(srv, healthSrv)
+
+	lis, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer lis.Close()
+
+	go func() {
+		if serveErr := srv.Serve(lis); serveErr != nil {
+			// Server stopped; expected on cleanup.
+		}
+	}()
+	defer srv.Stop()
+
+	// Try to connect with a client that does NOT present a certificate.
+	// This should fail because the server requires client certificates.
+	// Use TLS credentials without a client certificate.
+	addr := lis.Addr().String()
+	conn, err := grpc.NewClient(
+		fmt.Sprintf("dns:///%s", addr),
+		grpc.WithTransportCredentials(grpcNoClientCertCreds()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient (no client cert): %v", err)
+	}
+	defer conn.Close()
+
+	client := healthpb.NewHealthClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// The connection should succeed at the TCP level, but RPC calls should fail
+	// because the server requires a client certificate.
+	_, err = client.Check(ctx, &healthpb.HealthCheckRequest{})
+	if err == nil {
+		t.Fatal("expected error when calling RPC without client certificate, got nil")
+	}
+	// The error should indicate a connection problem (typically "connection closed",
+	// "transport is closing", or "certificate required" depending on the TLS implementation).
+}
+
+// grpcNoClientCertCreds returns TLS credentials that don't present a client certificate.
+// This is used only for testing that mTLS properly rejects unauthenticated connections.
+func grpcNoClientCertCreds() grpcNoClientCert {
+	return grpcNoClientCert{}
+}
+
+type grpcNoClientCert struct{}
+
+type noAuthInfo struct{}
+
+func (noAuthInfo) AuthType() string {
+	return "no-auth"
+}
+
+func (c grpcNoClientCert) ClientHandshake(ctx context.Context, authority string, rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
+	// Perform TLS handshake but without sending a client certificate.
+	tlsConn := tls.Client(rawConn, &tls.Config{
+		InsecureSkipVerify: true, // Skip CA verification for test purposes
+		MinVersion:         tls.VersionTLS12,
+	})
+	if err := tlsConn.Handshake(); err != nil {
+		return nil, nil, err
+	}
+	// Return empty AuthInfo since we're not providing client certs
+	return tlsConn, noAuthInfo{}, nil
+}
+
+func (c grpcNoClientCert) ServerHandshake(conn net.Conn) (net.Conn, credentials.AuthInfo, error) {
+	return conn, noAuthInfo{}, nil
+}
+
+func (c grpcNoClientCert) Info() credentials.ProtocolInfo {
+	return credentials.ProtocolInfo{}
+}
+
+func (c grpcNoClientCert) Clone() credentials.TransportCredentials {
+	return grpcNoClientCert{}
+}
+
+func (c grpcNoClientCert) OverrideServerName(s string) error {
+	return nil
 }
