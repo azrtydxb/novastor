@@ -1,0 +1,81 @@
+{{- if .Values.scheduler.webhook.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "novastor.fullname" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  replicas: {{ .Values.scheduler.webhook.replicas }}
+  selector:
+    matchLabels:
+      {{- include "novastor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: webhook
+  template:
+    metadata:
+      labels:
+        {{- include "novastor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: webhook
+    spec:
+      serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: webhook
+          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.scheduler.webhook.image.repository }}:{{ include "novastor.imageTag" . }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          args:
+            - --tls-cert=/etc/webhook-cert/tls.crt
+            - --tls-key=/etc/webhook-cert/tls.key
+            - --port=9443
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+          ports:
+            - name: webhook
+              containerPort: 9443
+              protocol: TCP
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: webhook-cert
+              mountPath: /etc/webhook-cert
+              readOnly: true
+          resources:
+            {{- toYaml .Values.scheduler.webhook.resources | nindent 12 }}
+      volumes:
+        - name: webhook-cert
+          secret:
+            secretName: {{ .Values.scheduler.webhook.cert.existingSecret | default (printf "%s-webhook-cert" (include "novastor.fullname" .)) }}
+      {{- with .Values.scheduler.webhook.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.webhook.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.webhook.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

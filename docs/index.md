@@ -84,6 +84,7 @@ graph TB
 | CSI Node | `novastor-csi` | DaemonSet | CSI socket |
 | NFS Gateway | `novastor-filer` | Deployment | TCP (configurable) |
 | S3 Gateway | `novastor-s3gw` | Deployment (2) | 9000 (HTTP) |
+| Scheduler Webhook | `novastor-webhook` | Deployment (2) | 9443 (webhook), 8080 (metrics), 8081 (health) |
 
 ## Project Links
 

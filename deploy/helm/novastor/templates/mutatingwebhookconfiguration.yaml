@@ -1,0 +1,29 @@
+{{- if .Values.scheduler.webhook.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "novastor.fullname" . }}-scheduler-injector
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+webhooks:
+  - name: scheduler.novastor.io
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: "*"
+    clientConfig:
+      service:
+        name: {{ include "novastor.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /inject-scheduler
+        port: 443
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.scheduler.webhook.failurePolicy }}
+    timeoutSeconds: {{ .Values.scheduler.webhook.timeoutSeconds }}
+{{- end }}

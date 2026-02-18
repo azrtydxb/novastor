@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7
+
+# ============================================================
+# Build stage
+# ============================================================
+FROM golang:1.25-alpine AS builder
+
+LABEL stage=builder
+
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
+
+ARG TARGETARCH=arm64
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+    go build \
+      -trimpath \
+      -ldflags="-s -w \
+        -X main.version=${VERSION} \
+        -X main.commit=${COMMIT} \
+        -X main.date=${BUILD_DATE}" \
+      -o /out/novastor-webhook \
+      ./cmd/webhook
+
+# ============================================================
+# Runtime stage
+# ============================================================
+FROM gcr.io/distroless/static-debian12:nonroot
+
+LABEL org.opencontainers.image.title="novastor-webhook" \
+      org.opencontainers.image.description="NovaStor mutating webhook for scheduler injection" \
+      org.opencontainers.image.source="https://github.com/piwi3910/novastor" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+COPY --from=builder /out/novastor-webhook /usr/local/bin/novastor-webhook
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Webhook server (TLS)
+EXPOSE 9443
+# Prometheus metrics
+EXPOSE 8080
+# Health probes
+EXPOSE 8081
+
+ENTRYPOINT ["/usr/local/bin/novastor-webhook"]
