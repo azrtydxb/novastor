@@ -31,8 +31,7 @@ func formatDevice(ctx context.Context, devicePath, fsType string) error {
 	var cmd *exec.Cmd
 	switch fsType {
 	case "ext4":
-		// -F forces formatting even if the device appears to already be in use.
-		cmd = exec.CommandContext(ctx, "mkfs.ext4", "-F", devicePath)
+		cmd = exec.CommandContext(ctx, "mkfs.ext4", devicePath)
 	default:
 		return fmt.Errorf("unsupported filesystem type: %s", fsType)
 	}
