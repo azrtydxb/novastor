@@ -25,8 +25,8 @@ const (
 	defaultVolumeSize uint64 = 1 * 1024 * 1024 * 1024 // 1 GiB
 
 	// StorageClass parameter keys.
-	paramReplicas    = "replicas"
-	paramDataShards  = "dataShards"
+	paramReplicas     = "replicas"
+	paramDataShards   = "dataShards"
 	paramParityShards = "parityShards"
 
 	// Default protection settings.

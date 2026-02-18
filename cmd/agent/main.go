@@ -44,7 +44,7 @@ func (logReporter) ReportCorruptChunk(_ context.Context, chunkID chunk.ChunkID) 
 // chunk store directory.
 func diskUsedBytes(dir string) uint64 {
 	var total uint64
-	filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
@@ -291,7 +291,7 @@ func main() {
 
 	// Register this node with the metadata service.
 	if metaClient != nil {
-		defer metaClient.Close()
+		defer func() { _ = metaClient.Close() }()
 		// Use the pod IP for gRPC registration so that other components
 		// (e.g. the CSI controller) can dial this agent via the pod network.
 		// Fall back to listenAddr when pod-ip is not set.
@@ -341,7 +341,7 @@ func main() {
 		srv.GracefulStop()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		metricsServer.Shutdown(shutdownCtx)
+		_ = metricsServer.Shutdown(shutdownCtx)
 	}()
 
 	if err := srv.Serve(listener); err != nil {

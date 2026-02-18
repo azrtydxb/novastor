@@ -25,12 +25,12 @@ const (
 
 // ChunkBlockDevice manages a block device assembled from chunks.
 type ChunkBlockDevice struct {
-	volumeID    string
-	chunkStore  chunk.Store
-	metaClient  *metadata.GRPCClient
-	devicePath  string
-	loopDevice  string
-	mu          sync.Mutex
+	volumeID   string
+	chunkStore chunk.Store
+	metaClient *metadata.GRPCClient
+	devicePath string
+	loopDevice string
+	mu         sync.Mutex
 }
 
 // NewChunkBlockDevice creates a new ChunkBlockDevice for the given volume.
@@ -83,7 +83,7 @@ func (cbd *ChunkBlockDevice) Assemble(ctx context.Context) (string, error) {
 	// Calculate expected size and pre-allocate.
 	expectedSize := int64(len(volMeta.ChunkIDs)) * chunkBlockSize
 	if err := devFile.Truncate(expectedSize); err != nil {
-		devFile.Close()
+		_ = devFile.Close()
 		return "", fmt.Errorf("pre-allocating device file: %w", err)
 	}
 
@@ -101,12 +101,12 @@ func (cbd *ChunkBlockDevice) Assemble(ctx context.Context) (string, error) {
 	}
 
 	if err := g.Wait(); err != nil {
-		devFile.Close()
+		_ = devFile.Close()
 		return "", fmt.Errorf("assembling chunks: %w", err)
 	}
 
 	if err := devFile.Sync(); err != nil {
-		devFile.Close()
+		_ = devFile.Close()
 		return "", fmt.Errorf("syncing device file: %w", err)
 	}
 

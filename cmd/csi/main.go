@@ -197,7 +197,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to metadata service at %s: %v", *metaAddr, err)
 	}
-	defer metaClient.Close()
+	defer func() { _ = metaClient.Close() }()
 
 	// Build the NodeChunkClient from agent addresses.
 	nodeChunkClient := agent.NewNodeChunkClient(dialOpts...)
@@ -366,7 +366,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to listen on %s://%s: %v", scheme, addr, err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	srv := grpc.NewServer()
 
@@ -408,7 +408,7 @@ func main() {
 	healthMux := http.NewServeMux()
 	healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 	healthServer := &http.Server{
 		Addr:         ":9808",
