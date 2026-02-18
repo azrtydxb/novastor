@@ -1,0 +1,75 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: novastor-controller-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumes
+  - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - novastor.io
+  resources:
+  - blockvolumes
+  - objectstores
+  - sharedfilesystems
+  - storagepools
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - novastor.io
+  resources:
+  - blockvolumes/finalizers
+  - objectstores/finalizers
+  - sharedfilesystems/finalizers
+  - storagepools/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - novastor.io
+  resources:
+  - blockvolumes/status
+  - objectstores/status
+  - sharedfilesystems/status
+  - storagepools/status
+  verbs:
+  - get
+  - patch
+  - update

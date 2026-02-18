@@ -1,0 +1,13 @@
+apiVersion: novastor.io/v1alpha1
+kind: ObjectStore
+metadata:
+  name: test-objectstore
+  namespace: novastor-test
+spec:
+  pool: test-pool
+  endpoint:
+    service:
+      port: 9000
+  bucketPolicy:
+    maxBuckets: 10
+    versioning: disabled
