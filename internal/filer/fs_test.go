@@ -464,3 +464,104 @@ func TestSymlink(t *testing.T) {
 		t.Errorf("lookup type mismatch: got %s", looked.Type)
 	}
 }
+
+func TestTruncate(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	// Create a file with some data.
+	file, err := fs.Create(ctx, RootIno, "data.bin", 0644)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	payload := []byte("Hello, NovaStor! This is some test data.")
+	_, err = fs.Write(ctx, file.Ino, 0, payload)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// Verify initial size.
+	meta, err := fs.Stat(ctx, file.Ino)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	initialSize := meta.Size
+	if initialSize != int64(len(payload)) {
+		t.Fatalf("initial size mismatch: got %d, want %d", initialSize, len(payload))
+	}
+
+	// Truncate to smaller size.
+	newSize := int64(10)
+	if err := fs.Truncate(ctx, file.Ino, newSize); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+
+	// Verify truncated size.
+	meta, err = fs.Stat(ctx, file.Ino)
+	if err != nil {
+		t.Fatalf("Stat after truncate: %v", err)
+	}
+	if meta.Size != newSize {
+		t.Errorf("size after truncate: got %d, want %d", meta.Size, newSize)
+	}
+
+	// Verify data was truncated.
+	data, err := fs.Read(ctx, file.Ino, 0, 100)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	expectedData := payload[:newSize]
+	if string(data) != string(expectedData) {
+		t.Errorf("data after truncate: got %q, want %q", data, expectedData)
+	}
+
+	// Truncate to zero.
+	if err := fs.Truncate(ctx, file.Ino, 0); err != nil {
+		t.Fatalf("Truncate to zero: %v", err)
+	}
+
+	meta, err = fs.Stat(ctx, file.Ino)
+	if err != nil {
+		t.Fatalf("Stat after truncate to zero: %v", err)
+	}
+	if meta.Size != 0 {
+		t.Errorf("size after truncate to zero: got %d, want 0", meta.Size)
+	}
+
+	data, err = fs.Read(ctx, file.Ino, 0, 100)
+	if err != nil {
+		t.Fatalf("Read after truncate to zero: %v", err)
+	}
+	if len(data) != 0 {
+		t.Errorf("data after truncate to zero: got %d bytes, want 0", len(data))
+	}
+
+	// Truncate to larger size (extend with zeros).
+	extendedSize := int64(20)
+	if err := fs.Truncate(ctx, file.Ino, extendedSize); err != nil {
+		t.Fatalf("Truncate extend: %v", err)
+	}
+
+	meta, err = fs.Stat(ctx, file.Ino)
+	if err != nil {
+		t.Fatalf("Stat after extend: %v", err)
+	}
+	if meta.Size != extendedSize {
+		t.Errorf("size after extend: got %d, want %d", meta.Size, extendedSize)
+	}
+
+	data, err = fs.Read(ctx, file.Ino, 0, 100)
+	if err != nil {
+		t.Fatalf("Read after extend: %v", err)
+	}
+	if int64(len(data)) != extendedSize {
+		t.Errorf("data length after extend: got %d, want %d", len(data), extendedSize)
+	}
+	// All bytes should be zero since we truncated to 0 first.
+	for i, b := range data {
+		if b != 0 {
+			t.Errorf("data[%d] after extend: got %d, want 0", i, b)
+		}
+	}
+}
