@@ -290,14 +290,88 @@ func (cs *ControllerServer) ListVolumes(ctx context.Context, req *csi.ListVolume
 	}, nil
 }
 
-// ControllerPublishVolume is handled at the node level.
-func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, _ *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ControllerPublishVolume is not supported")
+// ControllerPublishVolume publishes a volume to a node.
+// For NovaStor, this is a lightweight validation that the volume exists.
+// The actual volume attachment (NVMe-oF connection or NFS mount) happens
+// at the node level via NodeStageVolume/NodePublishVolume.
+// This implementation is idempotent: republishing an already published
+// volume succeeds with the same publish context.
+func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	start := time.Now()
+	defer func() {
+		metrics.VolumePublishDuration.Observe(time.Since(start).Seconds())
+	}()
+
+	volumeID := req.GetVolumeId()
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
+	}
+
+	nodeID := req.GetNodeId()
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node ID is required")
+	}
+
+	// Verify the volume exists.
+	vm, err := cs.meta.GetVolumeMeta(ctx, volumeID)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "volume %s not found", volumeID)
+	}
+
+	// Build publish context with information the node will need.
+	publishContext := map[string]string{
+		"volumeId": volumeID,
+	}
+
+	// Determine access type from volume metadata.
+	// For RWX (NFS) volumes, the CreateVolume sets volume context with accessMode="RWX".
+	// For block volumes with NVMe-oF targets, SubsystemNQN will be populated.
+	if vm.SubsystemNQN != "" {
+		// RWO block volume with NVMe-oF target.
+		publishContext["accessType"] = "nvmeof"
+		publishContext["subsystemNQN"] = vm.SubsystemNQN
+		publishContext["targetAddress"] = vm.TargetAddress
+		publishContext["targetPort"] = vm.TargetPort
+		publishContext["targetNodeID"] = vm.TargetNodeID
+	} else {
+		// Basic block volume (without NVMe-oF) or NFS volume.
+		// The node will determine the actual access method based on
+		// volume capabilities passed to NodeStageVolume/NodePublishVolume.
+		publishContext["accessType"] = "block"
+	}
+
+	return &csi.ControllerPublishVolumeResponse{
+		PublishContext: publishContext,
+	}, nil
 }
 
-// ControllerUnpublishVolume is handled at the node level.
-func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, _ *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ControllerUnpublishVolume is not supported")
+// ControllerUnpublishVolume unpublishes a volume from a node.
+// For NovaStor, this is a no-op at the controller level since the
+// actual detachment happens at the node level. This implementation
+// is idempotent: unpublishing a non-existent or already unpublished
+// volume succeeds.
+func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+	start := time.Now()
+	defer func() {
+		metrics.VolumeUnpublishDuration.Observe(time.Since(start).Seconds())
+	}()
+
+	volumeID := req.GetVolumeId()
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
+	}
+
+	// NodeID is optional per CSI spec for unpublish (can be empty for forced cleanup).
+	// We don't enforce node-specific tracking at the controller level.
+
+	// Verify the volume exists. If not, succeed idempotently per CSI spec.
+	if _, err := cs.meta.GetVolumeMeta(ctx, volumeID); err != nil {
+		// Volume doesn't exist or was already deleted - succeed idempotently.
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
+	// No controller-side state to clean up. The node handles the actual detachment.
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
 
 // GetCapacity is not supported.
@@ -311,6 +385,7 @@ func (cs *ControllerServer) ControllerGetCapabilities(_ context.Context, _ *csi.
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
 		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
+		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
 	}
 
 	var capabilities []*csi.ControllerServiceCapability
