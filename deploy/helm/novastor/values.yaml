@@ -173,6 +173,38 @@ filer:
   tolerations: []
   affinity: {}
 
+scheduler:
+  webhook:
+    # enabled -- Set to true to deploy the mutating webhook that injects the NovaStor scheduler name.
+    enabled: true
+    replicas: 2
+    image:
+      repository: novastor-webhook
+    resources:
+      requests:
+        cpu: 100m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    service:
+      type: ClusterIP
+      metricsEnabled: true
+    # failurePolicy -- Failure policy for the webhook. "Ignore" allows pod creation to proceed if webhook is down.
+    failurePolicy: Ignore
+    # timeoutSeconds -- Timeout for the webhook admission request.
+    timeoutSeconds: 5
+    cert:
+      # existingSecret -- Name of an existing secret containing TLS cert/key. If empty, certificates are auto-generated.
+      existingSecret: ""
+      # cert -- PEM-encoded TLS certificate (only used when existingSecret is set).
+      cert: ""
+      # key -- PEM-encoded TLS private key (only used when existingSecret is set).
+      key: ""
+
 storageClass:
   name: novastor-block
   isDefault: false

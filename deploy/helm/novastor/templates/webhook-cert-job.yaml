@@ -1,0 +1,41 @@
+{{- if and .Values.scheduler.webhook.enabled (not .Values.scheduler.webhook.cert.existingSecret) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "novastor.fullname" . }}-webhook-cert-gen
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      name: {{ include "novastor.fullname" . }}-webhook-cert-gen
+      labels:
+        {{- include "novastor.labels" . | nindent 8 }}
+        app.kubernetes.io/component: webhook
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      containers:
+        - name: cert-gen
+          image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - create
+            - --host={{ include "novastor.fullname" . }}-webhook,{{ include "novastor.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+            - --namespace={{ .Release.Namespace }}
+            - --secret-name={{ include "novastor.fullname" . }}-webhook-cert
+          env:
+            - name: POD_NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: SECRET_NAME
+              value: {{ include "novastor.fullname" . }}-webhook-cert
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        fsGroup: 2000
+{{- end }}
