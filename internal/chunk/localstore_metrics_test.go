@@ -10,8 +10,12 @@ import (
 
 // TestChunkStoreMetrics verifies that chunk store operations
 // properly increment their corresponding Prometheus metrics.
+//
+// Note: This test creates its own registry to avoid interference with
+// the global registry. The metrics are global variables, so the test
+// verifies they are being incremented rather than checking exact values.
 func TestChunkStoreMetrics(t *testing.T) {
-	// Use a test registry that doesn't interfere with the global one.
+	// Create a custom registry for this test to isolate from other tests.
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(metrics.ChunkOpsTotal)
 	reg.MustRegister(metrics.ChunkBytesTotal)
@@ -26,38 +30,26 @@ func TestChunkStoreMetrics(t *testing.T) {
 	// Write a chunk with computed checksum.
 	data := []byte("test data for metrics")
 	c := &Chunk{
-		ID:   ChunkID("test-chunk"),
+		ID:   ChunkID("test-chunk-metrics"),
 		Data: data,
 	}
 	c.Checksum = c.ComputeChecksum()
+
+	// Get baseline write count from our custom registry.
+	writeBefore := getMetricValue(reg, "novastor_agent_chunk_ops_total", "operation", "write")
 
 	if err := store.Put(ctx, c); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	// Check write operation metric.
-	writeOps, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gathering metrics: %v", err)
+	// Check that write operation incremented the metric.
+	writeAfter := getMetricValue(reg, "novastor_agent_chunk_ops_total", "operation", "write")
+	if writeAfter != writeBefore+1 {
+		t.Errorf("expected write count to increment by 1, got %f -> %f", writeBefore, writeAfter)
 	}
-	foundWriteOp := false
-	for _, mf := range writeOps {
-		if mf.GetName() == "novastor_agent_chunk_ops_total" {
-			for _, m := range mf.GetMetric() {
-				for _, label := range m.Label {
-					if label.GetName() == "operation" && label.GetValue() == "write" {
-						if m.Counter.GetValue() != 1 {
-							t.Errorf("expected 1 write operation, got %f", m.Counter.GetValue())
-						}
-						foundWriteOp = true
-					}
-				}
-			}
-		}
-	}
-	if !foundWriteOp {
-		t.Error("write operation metric not found or not incremented")
-	}
+
+	// Get baseline read count.
+	readBefore := getMetricValue(reg, "novastor_agent_chunk_ops_total", "operation", "read")
 
 	// Read the chunk and check metrics.
 	_, err = store.Get(ctx, c.ID)
@@ -65,56 +57,43 @@ func TestChunkStoreMetrics(t *testing.T) {
 		t.Fatalf("Get failed: %v", err)
 	}
 
-	// Check read operation metric.
-	readOps, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gathering metrics: %v", err)
+	// Check that read operation incremented the metric.
+	readAfter := getMetricValue(reg, "novastor_agent_chunk_ops_total", "operation", "read")
+	if readAfter != readBefore+1 {
+		t.Errorf("expected read count to increment by 1, got %f -> %f", readBefore, readAfter)
 	}
-	foundReadOp := false
-	for _, mf := range readOps {
-		if mf.GetName() == "novastor_agent_chunk_ops_total" {
-			for _, m := range mf.GetMetric() {
-				for _, label := range m.Label {
-					if label.GetName() == "operation" && label.GetValue() == "read" {
-						if m.Counter.GetValue() != 1 {
-							t.Errorf("expected 1 read operation, got %f", m.Counter.GetValue())
-						}
-						foundReadOp = true
-					}
-				}
-			}
-		}
-	}
-	if !foundReadOp {
-		t.Error("read operation metric not found or not incremented")
-	}
+
+	// Get baseline delete count.
+	deleteBefore := getMetricValue(reg, "novastor_agent_chunk_ops_total", "operation", "delete")
 
 	// Delete the chunk and check metrics.
 	if err := store.Delete(ctx, c.ID); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
-	// Check delete operation metric.
-	deleteOps, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gathering metrics: %v", err)
+	// Check that delete operation incremented the metric.
+	deleteAfter := getMetricValue(reg, "novastor_agent_chunk_ops_total", "operation", "delete")
+	if deleteAfter != deleteBefore+1 {
+		t.Errorf("expected delete count to increment by 1, got %f -> %f", deleteBefore, deleteAfter)
 	}
-	foundDeleteOp := false
-	for _, mf := range deleteOps {
-		if mf.GetName() == "novastor_agent_chunk_ops_total" {
+}
+
+// getMetricValue retrieves the current value of a metric with the given name and label.
+func getMetricValue(gatherer prometheus.Gatherer, metricName, labelName, labelValue string) float64 {
+	metricFamilies, err := gatherer.Gather()
+	if err != nil {
+		return 0
+	}
+	for _, mf := range metricFamilies {
+		if mf.GetName() == metricName {
 			for _, m := range mf.GetMetric() {
 				for _, label := range m.Label {
-					if label.GetName() == "operation" && label.GetValue() == "delete" {
-						if m.Counter.GetValue() != 1 {
-							t.Errorf("expected 1 delete operation, got %f", m.Counter.GetValue())
-						}
-						foundDeleteOp = true
+					if label.GetName() == labelName && label.GetValue() == labelValue {
+						return m.Counter.GetValue()
 					}
 				}
 			}
 		}
 	}
-	if !foundDeleteOp {
-		t.Error("delete operation metric not found or not incremented")
-	}
+	return 0
 }
