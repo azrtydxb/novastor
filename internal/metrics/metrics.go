@@ -246,6 +246,41 @@ var (
 		Name:      "active_locks",
 		Help:      "Number of active file locks",
 	})
+
+	// --------------- Webhook metrics ---------------
+
+	// WebhookAdmissionReviewsTotal counts admission review requests received.
+	WebhookAdmissionReviewsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "webhook",
+		Name:      "admission_reviews_total",
+		Help:      "Total admission review requests received",
+	}, []string{"operation", "resource"})
+
+	// WebhookAdmissionReviewDuration tracks admission review processing duration.
+	WebhookAdmissionReviewDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "novastor",
+		Subsystem: "webhook",
+		Name:      "admission_review_duration_seconds",
+		Help:      "Admission review processing duration",
+		Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
+	}, []string{"operation", "resource"})
+
+	// WebhookMutationsTotal counts mutation operations performed.
+	WebhookMutationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "webhook",
+		Name:      "mutations_total",
+		Help:      "Total mutation operations performed",
+	}, []string{"resource", "mutation_type"})
+
+	// WebhookErrorsTotal counts webhook errors.
+	WebhookErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "webhook",
+		Name:      "errors_total",
+		Help:      "Total webhook errors",
+	}, []string{"operation", "error_type"})
 )
 
 // Register registers all NovaStor metrics with the default Prometheus registry.
@@ -289,4 +324,10 @@ func Register() {
 	prometheus.MustRegister(NFSOpsTotal)
 	prometheus.MustRegister(NFSOpDuration)
 	prometheus.MustRegister(ActiveLocks)
+
+	// Webhook metrics
+	prometheus.MustRegister(WebhookAdmissionReviewsTotal)
+	prometheus.MustRegister(WebhookAdmissionReviewDuration)
+	prometheus.MustRegister(WebhookMutationsTotal)
+	prometheus.MustRegister(WebhookErrorsTotal)
 }

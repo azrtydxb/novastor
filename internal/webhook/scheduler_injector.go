@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"
@@ -15,6 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/piwi3910/novastor/internal/logging"
+	"github.com/piwi3910/novastor/internal/metrics"
 )
 
 const (
@@ -156,6 +158,8 @@ func (si *SchedulerInjector) usesNovaStorPVCs(ctx context.Context, pod *corev1.P
 
 // ServeHTTP implements the http.Handler interface for the webhook.
 func (si *SchedulerInjector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -164,30 +168,46 @@ func (si *SchedulerInjector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var admissionReview admissionv1.AdmissionReview
 	if err := json.NewDecoder(r.Body).Decode(&admissionReview); err != nil {
 		http.Error(w, fmt.Sprintf("failed to decode request: %v", err), http.StatusBadRequest)
+		metrics.WebhookErrorsTotal.WithLabelValues("decode", "bad_request").Inc()
 		return
 	}
 
 	// Validate that we have a request.
 	if admissionReview.Request == nil {
 		http.Error(w, "nil request", http.StatusBadRequest)
+		metrics.WebhookErrorsTotal.WithLabelValues("validate", "nil_request").Inc()
 		return
 	}
+
+	// Extract labels for metrics.
+	operation := string(admissionReview.Request.Operation)
+	resource := admissionReview.Request.Kind.Kind
 
 	// Only handle CREATE operations on pods.
 	if admissionReview.Request.Kind.Kind != "Pod" || admissionReview.Request.Operation != admissionv1.Create {
 		http.Error(w, "expected CREATE operation on Pod", http.StatusBadRequest)
+		metrics.WebhookErrorsTotal.WithLabelValues(operation, "invalid_resource").Inc()
 		return
 	}
+
+	// Record admission review received.
+	metrics.WebhookAdmissionReviewsTotal.WithLabelValues(operation, resource).Inc()
 
 	// Perform the injection.
 	ctx := r.Context()
 	patch, err := si.Inject(ctx, &admissionReview)
+
+	// Record duration.
+	duration := time.Since(start).Seconds()
+	metrics.WebhookAdmissionReviewDuration.WithLabelValues(operation, resource).Observe(duration)
+
 	if err != nil {
 		logging.L.Error("failed to inject scheduler",
 			zap.Error(err),
 			zap.String("namespace", admissionReview.Request.Namespace),
 			zap.String("pod", admissionReview.Request.Name),
 		)
+		metrics.WebhookErrorsTotal.WithLabelValues(operation, "injection_failed").Inc()
 		// Return a failure response.
 		response := &admissionv1.AdmissionResponse{
 			UID:     admissionReview.Request.UID,
@@ -209,17 +229,24 @@ func (si *SchedulerInjector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}(),
 		}
 		admissionReview.Response = response
+
+		// Record mutation if patch was applied.
+		if len(patch) > 0 {
+			metrics.WebhookMutationsTotal.WithLabelValues(resource, "scheduler_injection").Inc()
+		}
 	}
 
 	responseJSON, err := json.Marshal(admissionReview)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to marshal response: %v", err), http.StatusInternalServerError)
+		metrics.WebhookErrorsTotal.WithLabelValues(operation, "marshal_response").Inc()
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(responseJSON); err != nil {
 		logging.L.Error("failed to write response", zap.Error(err))
+		metrics.WebhookErrorsTotal.WithLabelValues(operation, "write_response").Inc()
 	}
 }
 

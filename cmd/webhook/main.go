@@ -11,12 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/piwi3910/novastor/internal/logging"
+	"github.com/piwi3910/novastor/internal/metrics"
 	"github.com/piwi3910/novastor/internal/webhook"
 )
 
@@ -53,6 +55,9 @@ func main() {
 	// Initialize logging.
 	logging.Init(false)
 	logger := logging.L.Named("webhook")
+
+	// Register Prometheus metrics.
+	metrics.Register()
 
 	logger.Info("starting novastor-webhook", zap.String("version", version), zap.String("commit", commit), zap.String("date", date))
 
@@ -139,12 +144,7 @@ func createRouter(injector *webhook.SchedulerInjector) *http.ServeMux {
 func startMetricsServer(addr string) {
 	logger := logging.L.Named("metrics")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		// For now, return a simple metrics response.
-		// TODO: Integrate with prometheus/client_golang.
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-	})
+	mux.Handle("/metrics", promhttp.Handler())
 
 	server := &http.Server{
 		Addr:         addr,
