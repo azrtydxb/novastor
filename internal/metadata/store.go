@@ -27,6 +27,12 @@ type VolumeMeta struct {
 	TargetAddress string `json:"targetAddress,omitempty"`
 	TargetPort    string `json:"targetPort,omitempty"`
 	SubsystemNQN  string `json:"subsystemNQN,omitempty"`
+
+	// ProtectionProfile specifies the data protection settings for this volume.
+	ProtectionProfile *ProtectionProfile `json:"protectionProfile,omitempty"`
+
+	// ComplianceInfo tracks the current compliance state of this volume.
+	ComplianceInfo *ComplianceInfo `json:"complianceInfo,omitempty"`
 }
 
 type PlacementMap struct {
