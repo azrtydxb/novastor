@@ -96,6 +96,14 @@ func (a *snapshotStoreAdapter) ListVolumesMeta(ctx context.Context) ([]*metadata
 	return a.client.ListVolumesMeta(ctx)
 }
 
+func (a *snapshotStoreAdapter) PutPlacementMap(ctx context.Context, pm *metadata.PlacementMap) error {
+	return a.client.PutPlacementMap(ctx, pm)
+}
+
+func (a *snapshotStoreAdapter) DeletePlacementMap(ctx context.Context, chunkID string) error {
+	return a.client.DeletePlacementMap(ctx, chunkID)
+}
+
 func (a *snapshotStoreAdapter) PutSnapshotMeta(ctx context.Context, meta *novcsi.SnapshotMeta) error {
 	return a.client.PutSnapshot(ctx, &metadata.SnapshotMeta{
 		SnapshotID:     meta.SnapshotID,
