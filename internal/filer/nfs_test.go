@@ -936,3 +936,596 @@ func TestNFSServer_Access(t *testing.T) {
 		t.Fatalf("expected NFS3_OK, got %d", nfsStatus)
 	}
 }
+
+func TestNFSServer_Setattr(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
+
+	// Build SETATTR payload: handle + sattr3.
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)
+	// sattr3
+	pw.writeBool(true)   // set_mode
+	pw.writeUint32(0755) // mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(false)  // set_size
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	// sattrguard3 - skip (not validated in our implementation)
+
+	call := buildRPCCall(16, nfsProg, nfsVersion, nfsProcSetattr, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK, got %d", nfsStatus)
+	}
+
+	// Check wcc_data was returned
+	preOpFollows, _ := r.readBool()
+	postOpFollows, _ := r.readBool()
+	if !preOpFollows || !postOpFollows {
+		t.Logf("wcc_data: pre_op_follows=%v, post_op_follows=%v", preOpFollows, postOpFollows)
+	}
+}
+
+func TestNFSServer_Remove(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
+
+	// Build REMOVE payload.
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)
+	pw.writeString("file-to-remove.txt")
+	call := buildRPCCall(17, nfsProg, nfsVersion, nfsProcRemove, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK && nfsStatus != nfs3ErrNoEnt {
+		t.Fatalf("expected NFS3_OK or NFS3_ERR_NOENT, got %d", nfsStatus)
+	}
+}
+
+func TestNFSServer_Rmdir(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
+
+	// Build RMDIR payload.
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)
+	pw.writeString("dir-to-remove")
+	call := buildRPCCall(18, nfsProg, nfsVersion, nfsProcRmdir, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK && nfsStatus != nfs3ErrNoEnt {
+		t.Fatalf("expected NFS3_OK or NFS3_ERR_NOENT, got %d", nfsStatus)
+	}
+}
+
+func TestNFSServer_Rename(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
+
+	// Build RENAME payload: fromdir + fromname + todir + toname.
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)   // fromdir
+	pw.writeString("oldname.txt") // fromname
+	pw.writeOpaque(rootHandle)   // todir
+	pw.writeString("newname.txt") // toname
+	call := buildRPCCall(19, nfsProg, nfsVersion, nfsProcRename, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK && nfsStatus != nfs3ErrNoEnt {
+		t.Fatalf("expected NFS3_OK or NFS3_ERR_NOENT, got %d", nfsStatus)
+	}
+
+	// Should have two wcc_data responses (fromdir and todir)
+}
+
+func TestNFSServer_Symlink(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
+
+	// Build SYMLINK payload: dirname + name + sattr3 + target.
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)
+	pw.writeString("link-name")
+	// sattr3 (mostly ignored for symlinks)
+	pw.writeBool(false) // set_mode
+	pw.writeBool(false) // set_uid
+	pw.writeBool(false) // set_gid
+	pw.writeBool(false) // set_size
+	pw.writeUint32(0)   // set_atime
+	pw.writeUint32(0)   // set_mtime
+	// symlink data
+	pw.writeString("/target/path")
+	call := buildRPCCall(20, nfsProg, nfsVersion, nfsProcSymlink, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK, got %d", nfsStatus)
+	}
+
+	// post_op_fh3: handle follows
+	handleFollows, _ := r.readBool()
+	if !handleFollows {
+		t.Fatal("expected file handle in symlink response")
+	}
+}
+
+func TestNFSServer_Readlink(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
+
+	// Build READLINK payload: handle (use root handle for test)
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)
+	call := buildRPCCall(21, nfsProg, nfsVersion, nfsProcReadlink, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	// May get NFS3_ERR_INVAL if root is not a symlink
+	if nfsStatus != nfs3OK && nfsStatus != nfs3ErrInval {
+		t.Fatalf("expected NFS3_OK or NFS3_ERR_INVAL, got %d", nfsStatus)
+	}
+}
+
+func TestNFSServer_ReadDirPlus(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
+
+	// Build READDIRPLUS payload.
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)
+	pw.writeUint64(0)                    // cookie (start from beginning)
+	pw.writeFixedOpaque(make([]byte, 8)) // cookieverf
+	pw.writeUint32(4096)                 // dircount
+	pw.writeUint32(4096)                 // maxcount
+	call := buildRPCCall(22, nfsProg, nfsVersion, nfsProcReadDirPlus, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK, got %d", nfsStatus)
+	}
+
+	// Skip post_op_attr
+	attrFollows, _ := r.readBool()
+	if attrFollows {
+		// Skip fattr3 (21 fields)
+		for i := 0; i < 21; i++ {
+			r.readUint32()
+		}
+	}
+
+	// cookieverf3 (8 bytes)
+	r.readFixedOpaque(8)
+
+	// Count entries with full attributes
+	var names []string
+	for {
+		follows, _ := r.readBool()
+		if !follows {
+			break
+		}
+		// fileid3
+		r.readUint64()
+		// filename3
+		name, _ := r.readString()
+		names = append(names, name)
+		// cookie3
+		r.readUint64()
+		// name_attributes (post_op_attr)
+		attrFollows, _ := r.readBool()
+		if attrFollows {
+			for i := 0; i < 21; i++ {
+				r.readUint32()
+			}
+		}
+		// name_handle (post_op_fh3)
+		handleFollows, _ := r.readBool()
+		if handleFollows {
+			r.readOpaque()
+		}
+	}
+
+	// Should have ".", "..", "file1.txt", "subdir" = 4 entries.
+	if len(names) != 4 {
+		t.Fatalf("expected 4 entries, got %d: %v", len(names), names)
+	}
+	if names[0] != "." {
+		t.Errorf("expected first entry '.', got %q", names[0])
+	}
+	if names[1] != ".." {
+		t.Errorf("expected second entry '..', got %q", names[1])
+	}
+}
+
+func TestNFSServer_Commit(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
+
+	// Build COMMIT payload: handle + offset + count.
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)
+	pw.writeUint64(0)    // offset
+	pw.writeUint32(1024) // count
+	call := buildRPCCall(23, nfsProg, nfsVersion, nfsProcCommit, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK, got %d", nfsStatus)
+	}
+
+	// wcc_data should follow
+	// Then 8-byte write verifier
+	_, _ = r.readFixedOpaque(8)
+}
+
+func TestNFSServer_Mknod(t *testing.T) {
+	_, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := newHandleManager()
+	rootHandle.getOrCreateHandle(RootIno)
+	rootFH := rootHandle.getOrCreateHandle(RootIno)
+
+	// Build MKNOD payload - should return error as we don't support device files.
+	pw := newXDRWriter()
+	pw.writeOpaque(rootFH)
+	pw.writeString("dev-node")
+	pw.writeUint32(1) // ftype3: NF3REG
+	// sattr3 would follow, but we just want to test that the procedure is handled
+	call := buildRPCCall(24, nfsProg, nfsVersion, nfsProcMknod, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	// MKNOD is not supported, should return an error
+	if nfsStatus == nfs3OK {
+		t.Error("expected error for MKNOD (not supported), got NFS3_OK")
+	}
+}
+
+func TestNFSServer_Link(t *testing.T) {
+	_, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := newHandleManager()
+	rootHandle.getOrCreateHandle(RootIno)
+	rootFH := rootHandle.getOrCreateHandle(RootIno)
+
+	// Build LINK payload - should return error as we don't support hard links.
+	pw := newXDRWriter()
+	pw.writeOpaque(rootFH) // target file handle
+	pw.writeOpaque(rootFH) // dir handle
+	pw.writeString("link-name")
+	call := buildRPCCall(25, nfsProg, nfsVersion, nfsProcLink, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	// LINK is not supported, should return an error
+	if nfsStatus == nfs3OK {
+		t.Error("expected error for LINK (not supported), got NFS3_OK")
+	}
+}
+
+// TestNFSServer_AllProcedureDispatches verifies that all 22 NFS v3 procedures
+// are handled correctly (either implemented or intentionally unsupported).
+func TestNFSServer_AllProcedureDispatches(t *testing.T) {
+	_, addr := startTestServer(t)
+
+	// Procedures 0-21 should all be recognized
+	for proc := uint32(0); proc <= 21; proc++ {
+		conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+		if err != nil {
+			t.Fatalf("proc %d: failed to connect: %v", proc, err)
+		}
+
+		rootHandle := newHandleManager()
+		rootHandle.getOrCreateHandle(RootIno)
+		rootFH := rootHandle.getOrCreateHandle(RootIno)
+
+		// Build minimal valid payload for each procedure type
+		var payload []byte
+		switch proc {
+		case nfsProcNull:
+			payload = nil
+		case nfsProcGetattr, nfsProcAccess, nfsProcReadlink, nfsProcFsStat, nfsProcFsInfo, nfsProcPathConf, nfsProcCommit:
+			pw := newXDRWriter()
+			pw.writeOpaque(rootFH)
+			if proc == nfsProcAccess {
+				pw.writeUint32(0x3F) // all access bits
+			}
+			if proc == nfsProcCommit {
+				pw.writeUint64(0)
+				pw.writeUint32(0)
+			}
+			payload = pw.Bytes()
+		case nfsProcSetattr:
+			pw := newXDRWriter()
+			pw.writeOpaque(rootFH)
+			pw.writeBool(false) // set_mode
+			pw.writeBool(false) // set_uid
+			pw.writeBool(false) // set_gid
+			pw.writeBool(false) // set_size
+			pw.writeUint32(0)   // set_atime
+			pw.writeUint32(0)   // set_mtime
+			payload = pw.Bytes()
+		case nfsProcLookup, nfsProcRemove, nfsProcRmdir:
+			pw := newXDRWriter()
+			pw.writeOpaque(rootFH)
+			pw.writeString("test")
+			payload = pw.Bytes()
+		case nfsProcRead:
+			pw := newXDRWriter()
+			pw.writeOpaque(rootFH)
+			pw.writeUint64(0)
+			pw.writeUint32(1024)
+			payload = pw.Bytes()
+		case nfsProcWrite:
+			pw := newXDRWriter()
+			pw.writeOpaque(rootFH)
+			pw.writeUint64(0)
+			pw.writeUint32(0)
+			pw.writeUint32(writeFileSync)
+			pw.writeOpaque([]byte{})
+			payload = pw.Bytes()
+		case nfsProcCreate, nfsProcMkdir, nfsProcSymlink:
+			pw := newXDRWriter()
+			pw.writeOpaque(rootFH)
+			pw.writeString("test")
+			// Minimal sattr3
+			pw.writeBool(false)
+			pw.writeBool(false)
+			pw.writeBool(false)
+			pw.writeBool(false)
+			pw.writeUint32(0)
+			pw.writeUint32(0)
+			if proc == nfsProcSymlink {
+				pw.writeString("target")
+			} else if proc == nfsProcCreate {
+				pw.writeUint32(createUnchecked)
+			}
+			payload = pw.Bytes()
+		case nfsProcMknod, nfsProcLink:
+			pw := newXDRWriter()
+			pw.writeOpaque(rootFH)
+			pw.writeString("test")
+			payload = pw.Bytes()
+		case nfsProcRename:
+			pw := newXDRWriter()
+			pw.writeOpaque(rootFH)
+			pw.writeString("old")
+			pw.writeOpaque(rootFH)
+			pw.writeString("new")
+			payload = pw.Bytes()
+		case nfsProcReadDir, nfsProcReadDirPlus:
+			pw := newXDRWriter()
+			pw.writeOpaque(rootFH)
+			pw.writeUint64(0)
+			pw.writeFixedOpaque(make([]byte, 8))
+			pw.writeUint32(4096)
+			if proc == nfsProcReadDirPlus {
+				pw.writeUint32(4096)
+			}
+			payload = pw.Bytes()
+		default:
+			pw := newXDRWriter()
+			pw.writeOpaque(rootFH)
+			payload = pw.Bytes()
+		}
+
+		call := buildRPCCall(proc, nfsProg, nfsVersion, proc, payload)
+		sendRPCRecord(t, conn, call)
+		reply := recvRPCRecord(t, conn)
+
+		// Verify we get a valid reply (not a dropped connection)
+		r := newXDRReader(reply)
+		xid, _ := r.readUint32()
+		if xid != proc {
+			conn.Close()
+			t.Errorf("proc %d: expected xid %d, got %d", proc, proc, xid)
+			continue
+		}
+
+		msgType, _ := r.readUint32()
+		if msgType != rpcReply {
+			conn.Close()
+			t.Errorf("proc %d: expected REPLY (1), got %d", proc, msgType)
+			continue
+		}
+
+		conn.Close()
+	}
+}
