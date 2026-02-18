@@ -1,0 +1,161 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: storagequotas.novastor.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+spec:
+  group: novastor.io
+  names:
+    kind: StorageQuota
+    listKind: StorageQuotaList
+    plural: storagequotas
+    singular: storagequota
+    shortNames:
+      - sq
+    categories:
+      - novastor
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Scope
+          type: string
+          jsonPath: .spec.scope.kind
+        - name: Scope Name
+          type: string
+          jsonPath: .spec.scope.name
+        - name: Storage Limit
+          type: string
+          jsonPath: .spec.storage.hard
+        - name: Used
+          type: string
+          jsonPath: .status.storage.used
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+      schema:
+        openAPIV3Schema:
+          description: StorageQuota defines storage consumption limits for a scope. Scopes can be namespaces (tenant-level), specific storage pools, or individual buckets.
+          type: object
+          properties:
+            apiVersion:
+              description: 'APIVersion defines the versioned schema of this representation of an object.'
+              type: string
+            kind:
+              description: 'Kind is a string value representing the REST resource this object represents.'
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: StorageQuotaSpec defines the desired state of StorageQuota.
+              type: object
+              required:
+                - scope
+              properties:
+                scope:
+                  description: Scope defines the target of this quota.
+                  type: object
+                  required:
+                    - kind
+                    - name
+                  properties:
+                    kind:
+                      description: 'Kind is the scope type: Namespace, StoragePool, Bucket, or Volume.'
+                      type: string
+                      enum:
+                        - Namespace
+                        - StoragePool
+                        - Bucket
+                        - Volume
+                    name:
+                      description: 'Name identifies the scope target. For Namespace: the namespace name, For StoragePool: the pool name, For Bucket: the bucket name, For Volume: the volume ID'
+                      type: string
+                storage:
+                  description: Storage defines storage limits.
+                  type: object
+                  properties:
+                    hard:
+                      description: 'Hard is the hard limit in bytes. Requests exceeding this limit are rejected.'
+                      type: integer
+                      format: int64
+                    soft:
+                      description: 'Soft is the soft limit in bytes. When exceeded, warnings are issued but requests are allowed.'
+                      type: integer
+                      format: int64
+                  required:
+                    - hard
+                objectCount:
+                  description: ObjectCount defines object/bucket count limits.
+                  type: object
+                  properties:
+                    hard:
+                      description: 'Hard is the hard limit for object/bucket count.'
+                      type: integer
+                      format: int64
+                  required:
+                    - hard
+            status:
+              description: StorageQuotaStatus defines the observed state of StorageQuota.
+              type: object
+              properties:
+                phase:
+                  description: 'Phase indicates the quota enforcement state.'
+                  type: string
+                  enum:
+                    - Active
+                    - Exceeded
+                    - Warning
+                storage:
+                  description: Storage reports storage usage.
+                  type: object
+                  properties:
+                    used:
+                      description: 'Used is the current usage in bytes.'
+                      type: integer
+                      format: int64
+                    usedString:
+                      description: 'UsedString is the current usage in human-readable format.'
+                      type: string
+                objectCount:
+                  description: ObjectCount reports object/bucket count usage.
+                  type: object
+                  properties:
+                    used:
+                      description: 'Used is the current count.'
+                      type: integer
+                      format: int64
+                conditions:
+                  description: 'Conditions represent the latest available observations.'
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      lastTransitionTime:
+                        description: The last time the condition transitioned.
+                        type: string
+                        format: date-time
+                      message:
+                        description: A human-readable message indicating details about the transition.
+                        type: string
+                      observedGeneration:
+                        description: The generation of the resource when the condition was set.
+                        type: integer
+                        format: int64
+                      reason:
+                        description: The reason for the condition's last transition.
+                        type: string
+                      status:
+                        description: 'Status of the condition, one of True, False, Unknown.'
+                        type: string
+                      type:
+                        description: 'Type of condition, e.g. QuotaExceeded.'
+                        type: string

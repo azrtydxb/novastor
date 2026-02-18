@@ -386,7 +386,7 @@ func main() {
 	nvmeTargetClient := novcsi.NewNodeTargetClient(dialOpts...)
 
 	// Build sub-controllers.
-	controller := novcsi.NewControllerServer(metaClient, placer, nvmeTargetClient)
+	controller := novcsi.NewControllerServer(metaClient, placer, nvmeTargetClient, nil)
 	snapAdapter := &snapshotStoreAdapter{client: metaClient}
 	snapshotCtrl := novcsi.NewSnapshotController(snapAdapter)
 	expandCtrl := novcsi.NewExpandController(metaClient, placer)

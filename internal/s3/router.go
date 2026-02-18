@@ -11,17 +11,20 @@ type Gateway struct {
 	objects    ObjectStore
 	chunks     ChunkStore
 	multiparts MultipartStore
+	quota      QuotaChecker
 	accessKey  string
 	secretKey  string
 }
 
 // NewGateway creates a new S3 gateway with the provided stores and credentials.
-func NewGateway(buckets BucketStore, objects ObjectStore, chunks ChunkStore, multiparts MultipartStore, accessKey, secretKey string) *Gateway {
+// quota may be nil to disable quota checking.
+func NewGateway(buckets BucketStore, objects ObjectStore, chunks ChunkStore, multiparts MultipartStore, quota QuotaChecker, accessKey, secretKey string) *Gateway {
 	return &Gateway{
 		buckets:    buckets,
 		objects:    objects,
 		chunks:     chunks,
 		multiparts: multiparts,
+		quota:      quota,
 		accessKey:  accessKey,
 		secretKey:  secretKey,
 	}

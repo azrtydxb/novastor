@@ -94,7 +94,7 @@ func main() {
 	chunkStore := agent.NewLocalChunkStore(chunkClient)
 
 	// Wire the S3 gateway with real dependencies.
-	gateway := s3gw.NewGateway(adapter, adapter, chunkStore, adapter, *accessKey, *secretKey)
+	gateway := s3gw.NewGateway(adapter, adapter, chunkStore, adapter, nil, *accessKey, *secretKey)
 
 	// Create a handler that serves both S3 API and metrics.
 	mux := http.NewServeMux()
