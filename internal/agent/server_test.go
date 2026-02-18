@@ -66,7 +66,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 		conn:   conn,
 		server: srv,
 		cleanup: func() {
-			conn.Close()
+			_ = conn.Close()
 			srv.GracefulStop()
 		},
 	}

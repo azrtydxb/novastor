@@ -69,7 +69,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create Raft store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Main context for the metadata service lifetime.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -142,6 +142,6 @@ func main() {
 	grpcServer.GracefulStop()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-	metricsServer.Shutdown(shutdownCtx)
+	_ = metricsServer.Shutdown(shutdownCtx)
 	log.Println("Metadata service stopped")
 }

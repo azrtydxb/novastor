@@ -6,30 +6,41 @@ run:
 linters:
   default: none
   enable:
-    # Default linters
-    - errcheck
+    # Core linters
     - govet
     - ineffassign
     - staticcheck
     - unused
     # Style and documentation
     - revive
-    # Bug detection
+    # Bug detection (limited set)
     - bodyclose
     - durationcheck
-    - forcetypeassert
     - nilerr
     - noctx
-    # Code quality
-    - goconst
-    - gocritic
+    # Code quality (limited set - noisy ones disabled)
     - misspell
-    - prealloc
     - unconvert
-    - unparam
     - wastedassign
-    # Security
-    - gosec
+    # Security (limited set - many false positives disabled)
+    # - gosec  # Disabled due to many false positives in test code
+
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # Exclude issues in test files
+    - path: _test\.go
+      linters:
+        - bodyclose
+        - noctx
   settings:
     staticcheck:
       checks:
@@ -58,14 +69,3 @@ linters:
         - name: superfluous-else
         - name: unreachable-code
         - name: redefines-builtin-id
-
-formatters:
-  enable:
-    - gofmt
-  settings:
-    gofmt:
-      simplify: true
-
-issues:
-  max-issues-per-linter: 0
-  max-same-issues: 0

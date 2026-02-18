@@ -40,7 +40,7 @@ func TestParseProtectionParams(t *testing.T) {
 		{
 			name: "erasure coding parameters",
 			params: map[string]string{
-				"dataShards":  "4",
+				"dataShards":   "4",
 				"parityShards": "2",
 			},
 			wantRepl:   1,

@@ -54,7 +54,7 @@ func TestClient_PutGetChunk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	data := []byte("hello, chunk client")
 	ch := makeChunk(data)
@@ -84,7 +84,7 @@ func TestClient_DeleteChunk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	data := []byte("delete-via-client")
 	ch := makeChunk(data)
@@ -123,7 +123,7 @@ func TestClient_HasChunk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ctx := context.Background()
 
@@ -195,7 +195,7 @@ func TestClient_LocalChunkStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	store := agent.NewLocalChunkStore(c)
 	ctx := context.Background()

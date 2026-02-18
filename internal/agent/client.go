@@ -139,7 +139,7 @@ func (n *NodeChunkClient) AddNode(nodeID, addr string) error {
 	n.clients[nodeID] = c
 	n.mu.Unlock()
 	if exists {
-		old.Close()
+		_ = old.Close()
 	}
 	return nil
 }
@@ -151,7 +151,7 @@ func (n *NodeChunkClient) RemoveNode(nodeID string) {
 	delete(n.clients, nodeID)
 	n.mu.Unlock()
 	if exists {
-		c.Close()
+		_ = c.Close()
 	}
 }
 

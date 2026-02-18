@@ -180,7 +180,7 @@ func main() {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Fprintf(os.Stdout, "novastor-controller %s (commit: %s, built: %s)\n", version, commit, date)
+		_, _ = fmt.Fprintf(os.Stdout, "novastor-controller %s (commit: %s, built: %s)\n", version, commit, date)
 		os.Exit(0)
 	}
 

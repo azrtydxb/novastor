@@ -80,14 +80,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to metadata service at %s: %v", *metaAddr, err)
 	}
-	defer metaClient.Close()
+	defer func() { _ = metaClient.Close() }()
 
 	// Connect to the chunk agent.
 	chunkClient, err := agent.Dial(*agentAddr, dialOpts...)
 	if err != nil {
 		log.Fatalf("Failed to connect to chunk agent at %s: %v", *agentAddr, err)
 	}
-	defer chunkClient.Close()
+	defer func() { _ = chunkClient.Close() }()
 
 	// Create adapters from metadata client to S3 interfaces.
 	adapter := s3gw.NewMetadataAdapter(metaClient)
@@ -102,7 +102,7 @@ func main() {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	srv := &http.Server{
@@ -118,7 +118,7 @@ func main() {
 	metricsMux.Handle("/metrics", promhttp.Handler())
 	metricsMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 	metricsSrv := &http.Server{
 		Addr:         *metricsAddr,
