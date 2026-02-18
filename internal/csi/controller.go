@@ -3,6 +3,7 @@ package csi
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -22,6 +23,14 @@ const (
 
 	// defaultVolumeSize is the fallback volume size when none is requested.
 	defaultVolumeSize uint64 = 1 * 1024 * 1024 * 1024 // 1 GiB
+
+	// StorageClass parameter keys.
+	paramReplicas    = "replicas"
+	paramDataShards  = "dataShards"
+	paramParityShards = "parityShards"
+
+	// Default protection settings.
+	defaultReplicas = 1
 )
 
 // MetadataStore is the subset of the metadata service used by the controller.
@@ -97,6 +106,86 @@ func hasRWXCapability(caps []*csi.VolumeCapability) bool {
 	return false
 }
 
+// protectionConfig holds parsed protection parameters from StorageClass.
+type protectionConfig struct {
+	replicas     int
+	dataShards   int
+	parityShards int
+}
+
+// parseProtectionParams extracts protection parameters from StorageClass parameters.
+// Returns default configuration (1 replica, no erasure coding) if no parameters are specified.
+func parseProtectionParams(params map[string]string) protectionConfig {
+	cfg := protectionConfig{
+		replicas: defaultReplicas,
+	}
+
+	if params == nil {
+		return cfg
+	}
+
+	if v, ok := params[paramReplicas]; ok {
+		if r, err := strconv.Atoi(v); err == nil && r > 0 {
+			cfg.replicas = r
+		}
+	}
+
+	if v, ok := params[paramDataShards]; ok {
+		if d, err := strconv.Atoi(v); err == nil && d > 0 {
+			cfg.dataShards = d
+		}
+	}
+
+	if v, ok := params[paramParityShards]; ok {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 {
+			cfg.parityShards = p
+		}
+	}
+
+	return cfg
+}
+
+// toProtectionProfile converts protectionConfig to metadata.ProtectionProfile.
+// Returns nil if using default (1 replica, no EC).
+func (cfg protectionConfig) toProtectionProfile() *metadata.ProtectionProfile {
+	// Default case: single replica, no protection profile needed.
+	if cfg.replicas <= 1 && cfg.dataShards == 0 {
+		return nil
+	}
+
+	profile := &metadata.ProtectionProfile{}
+
+	if cfg.dataShards > 0 && cfg.parityShards > 0 {
+		// Erasure coding mode.
+		profile.Mode = metadata.ProtectionModeErasureCoding
+		profile.ErasureCoding = &metadata.ErasureCodingProfile{
+			DataShards:   cfg.dataShards,
+			ParityShards: cfg.parityShards,
+		}
+	} else if cfg.replicas > 1 {
+		// Replication mode.
+		profile.Mode = metadata.ProtectionModeReplication
+		profile.Replication = &metadata.ReplicationProfile{
+			Factor:      cfg.replicas,
+			WriteQuorum: cfg.replicas/2 + 1, // Majority quorum.
+		}
+	}
+
+	return profile
+}
+
+// requiredNodes returns the number of nodes needed for the protection scheme.
+func (cfg protectionConfig) requiredNodes() int {
+	if cfg.dataShards > 0 && cfg.parityShards > 0 {
+		// Erasure coding: need data + parity shards.
+		return cfg.dataShards + cfg.parityShards
+	}
+	if cfg.replicas > 0 {
+		return cfg.replicas
+	}
+	return 1
+}
+
 // CreateVolume provisions a new volume by computing chunks and persisting metadata.
 func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	start := time.Now()
@@ -107,6 +196,9 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume name is required")
 	}
+
+	// Parse protection parameters from StorageClass.
+	protCfg := parseProtectionParams(req.GetParameters())
 
 	// Determine requested capacity.
 	requiredBytes := defaultVolumeSize
@@ -119,10 +211,19 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// Calculate chunk count (round up).
 	chunkCount := int((requiredBytes + chunkSize - 1) / chunkSize)
 
+	// Calculate how many nodes we need for placement.
+	// For replication: each chunk needs 'replicas' nodes.
+	// For erasure coding: each chunk needs dataShards + parityShards nodes.
+	nodesPerChunk := protCfg.requiredNodes()
+
 	// Place chunks across storage nodes.
-	nodeIDs := cs.placer.Place(chunkCount)
-	if len(nodeIDs) == 0 {
-		return nil, status.Error(codes.ResourceExhausted, "no storage nodes available for placement")
+	// We need chunkCount * nodesPerChunk placement slots.
+	totalSlots := chunkCount * nodesPerChunk
+	nodeIDs := cs.placer.Place(totalSlots)
+	if len(nodeIDs) < totalSlots {
+		return nil, status.Errorf(codes.ResourceExhausted,
+			"not enough storage nodes: need %d for %d chunks with protection factor %d, got %d",
+			totalSlots, chunkCount, nodesPerChunk, len(nodeIDs))
 	}
 
 	volumeID := uuid.New().String()
@@ -133,25 +234,36 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	vm := &metadata.VolumeMeta{
-		VolumeID:  volumeID,
-		SizeBytes: requiredBytes,
-		ChunkIDs:  chunkIDs,
+		VolumeID:          volumeID,
+		SizeBytes:         requiredBytes,
+		ChunkIDs:          chunkIDs,
+		ProtectionProfile: protCfg.toProtectionProfile(),
 	}
 
-	// Write placement maps for each chunk. This is critical for recovery:
-	// if a node fails, the recovery manager uses these maps to know which
-	// chunks were on that node and need re-replication.
-	// Each chunk is placed on the node at the same index in nodeIDs.
+	// Write placement maps for each chunk with multiple nodes for protection.
+	// Each chunk is placed on 'nodesPerChunk' consecutive nodes from nodeIDs.
 	for i, chunkID := range chunkIDs {
-		if i < len(nodeIDs) {
-			pm := &metadata.PlacementMap{
-				ChunkID: chunkID,
-				Nodes:   []string{nodeIDs[i]},
-			}
-			if err := cs.meta.PutPlacementMap(ctx, pm); err != nil {
-				return nil, status.Errorf(codes.Internal, "writing placement map for chunk %s: %v", chunkID, err)
-			}
+		// Calculate the slice of nodes for this chunk.
+		startIdx := i * nodesPerChunk
+		endIdx := startIdx + nodesPerChunk
+		if endIdx > len(nodeIDs) {
+			endIdx = len(nodeIDs)
 		}
+		chunkNodes := nodeIDs[startIdx:endIdx]
+
+		pm := &metadata.PlacementMap{
+			ChunkID: chunkID,
+			Nodes:   chunkNodes,
+		}
+		if err := cs.meta.PutPlacementMap(ctx, pm); err != nil {
+			return nil, status.Errorf(codes.Internal, "writing placement map for chunk %s: %v", chunkID, err)
+		}
+
+		logging.L.Debug("placed chunk with protection",
+			zap.String("volumeID", volumeID),
+			zap.String("chunkID", chunkID),
+			zap.Strings("nodes", chunkNodes),
+			zap.Int("replicas", nodesPerChunk))
 	}
 
 	// Set volume context for RWX (NFS-backed) volumes.
