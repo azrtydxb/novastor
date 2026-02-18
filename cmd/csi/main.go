@@ -162,6 +162,7 @@ func main() {
 	nodeID := flag.String("node-id", "", "Node ID for this CSI node")
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
 	agentAddrs := flag.String("agent-addrs", "", "Comma-separated list of agent addresses (nodeID=addr,...)")
+	failureDomain := flag.String("failure-domain", "node", "CRUSH failure domain for placement: node, rack, or zone")
 	tlsCA := flag.String("tls-ca", "", "Path to CA certificate for mTLS")
 	tlsCert := flag.String("tls-cert", "", "Path to client certificate for mTLS")
 	tlsKey := flag.String("tls-key", "", "Path to client key for mTLS")
@@ -221,8 +222,11 @@ func main() {
 		}
 	}
 
-	// Create placement engine with known nodes.
-	placer := placement.NewRoundRobin(nodeIDs)
+	// Create CRUSH placement engine with configured failure domain.
+	// Nodes are populated from metadata service during syncNodes.
+	placer := placement.NewCRUSHPlacer(nil)
+	placer.SetFailureDomain(*failureDomain)
+	log.Printf("CRUSH placement engine initialized with failure domain: %s", *failureDomain)
 
 	// knownNodes tracks the set of addresses currently in the placer so that
 	// stale entries (dead pods) can be removed on the next sync cycle.
@@ -251,7 +255,7 @@ func main() {
 			return
 		}
 		cutoff := time.Now().Add(-nodeTTL).Unix()
-		currentNodes := make(map[string]struct{})
+		currentNodes := make(map[string]metadata.NodeMeta)
 		for _, n := range nodes {
 			if n.Status != "ready" || n.Address == "" {
 				continue
@@ -269,7 +273,7 @@ func main() {
 			if splitErr != nil || host == "0.0.0.0" || host == "" {
 				continue
 			}
-			currentNodes[n.Address] = struct{}{}
+			currentNodes[n.Address] = *n
 		}
 
 		knownNodesMu.Lock()
@@ -283,11 +287,22 @@ func main() {
 				delete(knownNodes, addr)
 			}
 		}
-		// Add newly discovered nodes.
-		for addr := range currentNodes {
-			if _, ok := knownNodes[addr]; !ok {
-				placer.AddNode(addr)
-				log.Printf("Discovered storage node at %s", addr)
+		// Add or update newly discovered nodes with full topology info.
+		for addr, n := range currentNodes {
+			weight := 1.0
+			if n.TotalCapacity > 0 {
+				// Normalize weight by capacity: 1TB = 1.0 weight unit
+				weight = float64(n.TotalCapacity) / (1024 * 1024 * 1024 * 1024)
+			}
+			placer.AddWeightedNode(placement.Node{
+				ID:     addr,
+				Weight: weight,
+				Zone:   n.Zone,
+				Rack:   n.Rack,
+			})
+			if _, exists := knownNodes[addr]; !exists {
+				log.Printf("Discovered storage node at %s (zone=%s, rack=%s, weight=%.2f)",
+					addr, n.Zone, n.Rack, weight)
 				knownNodes[addr] = struct{}{}
 			}
 		}
