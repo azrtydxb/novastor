@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -10,6 +12,16 @@ import (
 	"github.com/piwi3910/novastor/internal/metadata"
 	"github.com/spf13/cobra"
 )
+
+// jsonSnapshot represents a snapshot in JSON output format.
+type jsonSnapshot struct {
+	SnapshotID     string   `json:"snapshotId"`
+	SourceVolumeID string   `json:"sourceVolumeId"`
+	SizeBytes      uint64   `json:"sizeBytes"`
+	ChunkIDs       []string `json:"chunkIds"`
+	ReadyToUse     bool     `json:"readyToUse"`
+	Created        string   `json:"created"`
+}
 
 var snapshotCmd = &cobra.Command{
 	Use:     "snapshot",
@@ -34,12 +46,16 @@ var snapshotListCmd = &cobra.Command{
 		}
 
 		if len(snapshots) == 0 {
+			if output == "json" {
+				return json.NewEncoder(os.Stdout).Encode([]jsonSnapshot{})
+			}
 			fmt.Println("No snapshots found.")
 			return nil
 		}
 
 		headers := []string{"SNAPSHOT ID", "SOURCE VOLUME", "SIZE (BYTES)", "CHUNKS", "READY", "CREATED"}
 		var rows [][]string
+		var jsonSnaps []jsonSnapshot
 		for _, s := range snapshots {
 			created := time.Unix(0, s.CreationTime).UTC().Format("2006-01-02T15:04:05Z")
 			rows = append(rows, []string{
@@ -50,8 +66,16 @@ var snapshotListCmd = &cobra.Command{
 				strconv.FormatBool(s.ReadyToUse),
 				created,
 			})
+			jsonSnaps = append(jsonSnaps, jsonSnapshot{
+				SnapshotID:     s.SnapshotID,
+				SourceVolumeID: s.SourceVolumeID,
+				SizeBytes:      s.SizeBytes,
+				ChunkIDs:       s.ChunkIDs,
+				ReadyToUse:     s.ReadyToUse,
+				Created:        created,
+			})
 		}
-		printTable(headers, rows)
+		printTableOrJSON(headers, rows, jsonSnaps)
 		return nil
 	},
 }

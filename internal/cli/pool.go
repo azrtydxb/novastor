@@ -2,11 +2,22 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/spf13/cobra"
 )
+
+// jsonPool represents a storage pool in JSON output format.
+type jsonPool struct {
+	Nodes             int     `json:"nodes"`
+	Ready             int     `json:"ready"`
+	TotalCapacity     int64   `json:"totalCapacity"`
+	AvailableCapacity int64   `json:"availableCapacity"`
+	UsedPercent       float64 `json:"usedPercent"`
+}
 
 var poolCmd = &cobra.Command{
 	Use:   "pool",
@@ -31,6 +42,9 @@ var poolListCmd = &cobra.Command{
 		}
 
 		if len(nodes) == 0 {
+			if output == "json" {
+				return json.NewEncoder(os.Stdout).Encode([]jsonPool{})
+			}
 			fmt.Println("No storage nodes registered.")
 			return nil
 		}
@@ -47,10 +61,13 @@ var poolListCmd = &cobra.Command{
 		}
 
 		headers := []string{"NODES", "READY", "TOTAL CAPACITY", "AVAILABLE", "USED %"}
-		usedPct := "0.0"
+		usedPct := 0.0
 		if totalCapacity > 0 {
-			pct := float64(totalCapacity-availableCapacity) / float64(totalCapacity) * 100
-			usedPct = strconv.FormatFloat(pct, 'f', 1, 64)
+			usedPct = float64(totalCapacity-availableCapacity) / float64(totalCapacity) * 100
+		}
+		usedPctStr := "0.0"
+		if totalCapacity > 0 {
+			usedPctStr = strconv.FormatFloat(usedPct, 'f', 1, 64)
 		}
 		rows := [][]string{
 			{
@@ -58,10 +75,17 @@ var poolListCmd = &cobra.Command{
 				strconv.Itoa(readyCount),
 				formatBytes(totalCapacity),
 				formatBytes(availableCapacity),
-				usedPct + "%",
+				usedPctStr + "%",
 			},
 		}
-		printTable(headers, rows)
+		jsonPools := []jsonPool{{
+			Nodes:             len(nodes),
+			Ready:             readyCount,
+			TotalCapacity:     totalCapacity,
+			AvailableCapacity: availableCapacity,
+			UsedPercent:       usedPct,
+		}}
+		printTableOrJSON(headers, rows, jsonPools)
 		return nil
 	},
 }

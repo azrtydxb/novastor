@@ -18,6 +18,7 @@ import (
 type GRPCClient struct {
 	client pb.MetadataServiceClient
 	conn   *grpc.ClientConn
+	addr   string
 }
 
 // NewGRPCClient wraps an existing gRPC client connection.
@@ -37,7 +38,16 @@ func Dial(addr string, opts ...grpc.DialOption) (*GRPCClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dialing metadata service at %s: %w", addr, err)
 	}
-	return NewGRPCClient(conn), nil
+	return &GRPCClient{
+		client: pb.NewMetadataServiceClient(conn),
+		conn:   conn,
+		addr:   addr,
+	}, nil
+}
+
+// Addr returns the address this client is connected to.
+func (c *GRPCClient) Addr() string {
+	return c.addr
 }
 
 // Close shuts down the underlying gRPC connection.
