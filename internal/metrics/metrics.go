@@ -281,6 +281,65 @@ var (
 		Name:      "errors_total",
 		Help:      "Total webhook errors",
 	}, []string{"operation", "error_type"})
+
+	// --------------- Data Mover metrics ---------------
+
+	// DataMoverTasksPending is the number of pending healing tasks.
+	DataMoverTasksPending = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "datamover",
+		Name:      "tasks_pending",
+		Help:      "Number of pending healing tasks",
+	})
+
+	// DataMoverTasksInProgress is the number of in-progress healing tasks.
+	DataMoverTasksInProgress = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "datamover",
+		Name:      "tasks_in_progress",
+		Help:      "Number of in-progress healing tasks",
+	})
+
+	// DataMoverTasksCompleted counts total completed healing tasks.
+	DataMoverTasksCompleted = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "datamover",
+		Name:      "tasks_completed_total",
+		Help:      "Total completed healing tasks",
+	})
+
+	// DataMoverTasksFailed counts total failed healing tasks.
+	DataMoverTasksFailed = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "datamover",
+		Name:      "tasks_failed_total",
+		Help:      "Total failed healing tasks",
+	})
+
+	// DataMoverTaskDuration tracks healing task duration.
+	DataMoverTaskDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "novastor",
+		Subsystem: "datamover",
+		Name:      "task_duration_seconds",
+		Help:      "Healing task duration",
+		Buckets:   prometheus.ExponentialBucketsRange(1, 600, 10),
+	})
+
+	// DataMoverBytesTransferred counts total bytes transferred by healing.
+	DataMoverBytesTransferred = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "datamover",
+		Name:      "bytes_transferred_total",
+		Help:      "Total bytes transferred by healing operations",
+	})
+
+	// DataMoverBandwidthLimit is the current bandwidth limit in bytes/sec.
+	DataMoverBandwidthLimit = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "datamover",
+		Name:      "bandwidth_limit_bytes",
+		Help:      "Current bandwidth limit in bytes per second",
+	})
 )
 
 // Register registers all NovaStor metrics with the default Prometheus registry.
@@ -330,4 +389,13 @@ func Register() {
 	prometheus.MustRegister(WebhookAdmissionReviewDuration)
 	prometheus.MustRegister(WebhookMutationsTotal)
 	prometheus.MustRegister(WebhookErrorsTotal)
+
+	// Data Mover metrics
+	prometheus.MustRegister(DataMoverTasksPending)
+	prometheus.MustRegister(DataMoverTasksInProgress)
+	prometheus.MustRegister(DataMoverTasksCompleted)
+	prometheus.MustRegister(DataMoverTasksFailed)
+	prometheus.MustRegister(DataMoverTaskDuration)
+	prometheus.MustRegister(DataMoverBytesTransferred)
+	prometheus.MustRegister(DataMoverBandwidthLimit)
 }
