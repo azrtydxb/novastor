@@ -1074,9 +1074,9 @@ func TestNFSServer_Rename(t *testing.T) {
 
 	// Build RENAME payload: fromdir + fromname + todir + toname.
 	pw := newXDRWriter()
-	pw.writeOpaque(rootHandle)   // fromdir
+	pw.writeOpaque(rootHandle)    // fromdir
 	pw.writeString("oldname.txt") // fromname
-	pw.writeOpaque(rootHandle)   // todir
+	pw.writeOpaque(rootHandle)    // todir
 	pw.writeString("newname.txt") // toname
 	call := buildRPCCall(19, nfsProg, nfsVersion, nfsProcRename, pw.Bytes())
 	sendRPCRecord(t, conn, call)
