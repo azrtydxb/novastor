@@ -327,10 +327,12 @@ func TestNodePublishVolume_Success(t *testing.T) {
 	mounter := &mockMounter{}
 	ns := newTestNodeService("node-1", mounter)
 
+	targetPath := t.TempDir()
+
 	resp, err := ns.NodePublishVolume(context.Background(), &csi.NodePublishVolumeRequest{
 		VolumeId:          "vol-001",
 		StagingTargetPath: "/staging/path",
-		TargetPath:        "/target/path",
+		TargetPath:        targetPath,
 		VolumeCapability: &csi.VolumeCapability{
 			AccessType: &csi.VolumeCapability_Mount{
 				Mount: &csi.VolumeCapability_MountVolume{},
@@ -350,8 +352,8 @@ func TestNodePublishVolume_Success(t *testing.T) {
 	if mounter.mountSource != "/staging/path" {
 		t.Errorf("expected mount source %q, got %q", "/staging/path", mounter.mountSource)
 	}
-	if mounter.mountTarget != "/target/path" {
-		t.Errorf("expected mount target %q, got %q", "/target/path", mounter.mountTarget)
+	if mounter.mountTarget != targetPath {
+		t.Errorf("expected mount target %q, got %q", targetPath, mounter.mountTarget)
 	}
 }
 
@@ -397,10 +399,12 @@ func TestNodePublishVolume_MountError(t *testing.T) {
 	mounter := &mockMounter{mountErr: errors.New("mount failed")}
 	ns := newTestNodeService("node-1", mounter)
 
+	targetPath := t.TempDir()
+
 	_, err := ns.NodePublishVolume(context.Background(), &csi.NodePublishVolumeRequest{
 		VolumeId:          "vol-001",
 		StagingTargetPath: "/staging/path",
-		TargetPath:        "/target/path",
+		TargetPath:        targetPath,
 		VolumeCapability: &csi.VolumeCapability{
 			AccessType: &csi.VolumeCapability_Mount{
 				Mount: &csi.VolumeCapability_MountVolume{},

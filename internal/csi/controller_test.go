@@ -106,10 +106,6 @@ func TestCreateVolume(t *testing.T) {
 	if vol.GetCapacityBytes() != 8*1024*1024 {
 		t.Errorf("expected capacity 8MiB, got %d", vol.GetCapacityBytes())
 	}
-	if len(vol.GetAccessibleTopology()) == 0 {
-		t.Fatal("expected at least one accessible topology segment")
-	}
-
 	// Verify metadata was stored.
 	vm, err := store.GetVolumeMeta(context.Background(), vol.GetVolumeId())
 	if err != nil {

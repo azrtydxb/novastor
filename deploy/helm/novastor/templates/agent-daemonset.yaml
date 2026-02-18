@@ -7,6 +7,12 @@ metadata:
     {{- include "novastor.labels" . | nindent 4 }}
     app.kubernetes.io/component: agent
 spec:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # maxUnavailable=1 ensures one node at a time is updated. With hostNetwork,
+      # the old pod must fully terminate before the new pod can bind the same ports.
+      maxUnavailable: 1
   selector:
     matchLabels:
       {{- include "novastor.selectorLabels" . | nindent 6 }}

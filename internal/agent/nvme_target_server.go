@@ -25,8 +25,9 @@ const (
 	// volumesDir is where sparse backing files are stored.
 	volumesDir = "/var/lib/novastor/volumes"
 
-	// nqnPrefix is the NVMe Qualified Name prefix for NovaStor volumes.
-	nqnPrefix = "nqn.2024-01.io.novastor:vol-"
+	// nqnPrefix must match the subsystemPrefix in internal/nvmeof/target.go so that
+	// the NQN advertised to initiators exactly equals the nvmet configfs directory name.
+	nqnPrefix = "novastor-"
 )
 
 // NVMeTargetServer implements the NVMeTargetService gRPC server. It creates
@@ -103,7 +104,7 @@ func (s *NVMeTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 				zap.String("volumeID", volumeID),
 				zap.String("loopDev", loopDev),
 			)
-			if err := s.targetManager.CreateTargetWithDevice(volumeID, nvmeTargetPort, loopDev, s.hostIP); err != nil {
+			if err := s.targetManager.CreateTargetWithDevice(volumeID, nvmeTargetPort, loopDev, "0.0.0.0"); err != nil {
 				return nil, status.Errorf(codes.Internal, "recreating nvmet target for volume %s: %v", volumeID, err)
 			}
 			nqn := nqnPrefix + volumeID
@@ -134,7 +135,10 @@ func (s *NVMeTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	logging.L.Info("nvme target: loop device attached", zap.String("volumeID", volumeID), zap.String("loopDev", loopDev))
 
 	// Register the nvmet target backed by the loop device.
-	if err := s.targetManager.CreateTargetWithDevice(volumeID, nvmeTargetPort, loopDev, s.hostIP); err != nil {
+	// Use "0.0.0.0" as the kernel listen address so nvmet binds on all interfaces
+	// (the host IP is valid for initiator advertisement but not for kernel binding
+	// when the agent runs in a separate network namespace).
+	if err := s.targetManager.CreateTargetWithDevice(volumeID, nvmeTargetPort, loopDev, "0.0.0.0"); err != nil {
 		_ = detachLoopDevice(ctx, loopDev)
 		return nil, status.Errorf(codes.Internal, "creating nvmet target for volume %s: %v", volumeID, err)
 	}

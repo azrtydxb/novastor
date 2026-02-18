@@ -240,6 +240,11 @@ func (ns *NodeService) NodePublishVolume(ctx context.Context, req *csi.NodePubli
 		return &csi.NodePublishVolumeResponse{}, nil
 	}
 
+	// Ensure the target directory exists (required by CSI spec for NodePublishVolume).
+	if err := os.MkdirAll(targetPath, 0o750); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create target path %s: %v", targetPath, err)
+	}
+
 	logging.L.Info("NodePublishVolume: bind-mounting", zap.String("stagingPath", stagingPath), zap.String("targetPath", targetPath), zap.String("volumeID", req.GetVolumeId()))
 
 	if err := ns.mounter.Mount(stagingPath, targetPath); err != nil {
