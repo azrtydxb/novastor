@@ -73,3 +73,4 @@ nav:
       - S3 API Compatibility: api/s3.md
   - Development:
       - Contributing: development/contributing.md
+      - Testing: development/testing.md
