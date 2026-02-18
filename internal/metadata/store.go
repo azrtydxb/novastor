@@ -16,6 +16,35 @@ import (
 	"github.com/piwi3910/novastor/internal/metrics"
 )
 
+// VolumeProtectionMode specifies the data protection mode for a volume.
+type VolumeProtectionMode string
+
+const (
+	// ProtectionModeReplication uses synchronous replication across multiple nodes.
+	ProtectionModeReplication VolumeProtectionMode = "replication"
+	// ProtectionModeErasureCoding uses Reed-Solomon erasure coding.
+	ProtectionModeErasureCoding VolumeProtectionMode = "erasure-coding"
+)
+
+// DataProtectionConfig holds the data protection configuration for a volume.
+type DataProtectionConfig struct {
+	Mode          VolumeProtectionMode `json:"mode"`
+	Replication   *ReplicationConfig   `json:"replication,omitempty"`
+	ErasureCoding *ErasureCodingConfig `json:"erasureCoding,omitempty"`
+}
+
+// ReplicationConfig holds replication-specific configuration.
+type ReplicationConfig struct {
+	Factor      int `json:"factor"`
+	WriteQuorum int `json:"writeQuorum"`
+}
+
+// ErasureCodingConfig holds erasure coding specific configuration.
+type ErasureCodingConfig struct {
+	DataShards   int `json:"dataShards"`
+	ParityShards int `json:"parityShards"`
+}
+
 // VolumeMeta stores metadata about a provisioned volume.
 type VolumeMeta struct {
 	VolumeID  string   `json:"volumeID"`
@@ -23,8 +52,8 @@ type VolumeMeta struct {
 	SizeBytes uint64   `json:"sizeBytes"`
 	ChunkIDs  []string `json:"chunkIDs"`
 
-	// DataProtection stores the replication factor for this volume.
-	DataProtection *DataProtection `json:"dataProtection,omitempty"`
+	// DataProtection specifies how the volume's data is protected.
+	DataProtection *DataProtectionConfig `json:"dataProtection,omitempty"`
 
 	// NVMe-oF target fields populated by the CSI controller after target creation.
 	TargetNodeID  string `json:"targetNodeID,omitempty"`
@@ -37,15 +66,6 @@ type VolumeMeta struct {
 
 	// ComplianceInfo tracks the current compliance state of this volume.
 	ComplianceInfo *ComplianceInfo `json:"complianceInfo,omitempty"`
-}
-
-// DataProtection describes how data is protected for a volume.
-type DataProtection struct {
-	// Mode is the protection mode: "replication" or "erasureCoding".
-	Mode string `json:"mode"`
-
-	// ReplicationFactor is the number of replicas (1-5).
-	ReplicationFactor int `json:"replicationFactor,omitempty"`
 }
 
 type PlacementMap struct {
