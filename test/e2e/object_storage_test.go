@@ -313,7 +313,7 @@ func generateSigV4Header(method, path, host, amzDate string) string {
 	canonicalRequestHash := sha256Hex([]byte(canonicalRequest))
 	stringToSign := "AWS4-HMAC-SHA256\n" +
 		amzDate + "\n" +
-		dateStamp+"/us-east-1/s3/aws4_request\n" +
+		dateStamp + "/us-east-1/s3/aws4_request\n" +
 		canonicalRequestHash
 
 	// Derive signing key and compute signature
