@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -21,6 +22,7 @@ import (
 	"github.com/piwi3910/novastor/internal/logging"
 	"github.com/piwi3910/novastor/internal/metadata"
 	"github.com/piwi3910/novastor/internal/operator"
+	"github.com/piwi3910/novastor/internal/transport"
 )
 
 var (
@@ -155,6 +157,10 @@ func main() {
 	var recoveryEnabled bool
 	var heartbeatTimeoutStr string
 	var recoveryConcurrency int
+	var tlsCA string
+	var tlsCert string
+	var tlsKey string
+	var tlsRotationInterval time.Duration
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to.")
@@ -164,6 +170,10 @@ func main() {
 	flag.BoolVar(&recoveryEnabled, "recovery-enabled", true, "Enable automatic node failure recovery.")
 	flag.StringVar(&heartbeatTimeoutStr, "heartbeat-timeout", "60s", "Duration after which a node without heartbeat is considered down.")
 	flag.IntVar(&recoveryConcurrency, "recovery-concurrency", 4, "Maximum number of concurrent chunk recovery operations.")
+	flag.StringVar(&tlsCA, "tls-ca", "", "Path to CA certificate for mTLS")
+	flag.StringVar(&tlsCert, "tls-cert", "", "Path to client certificate for mTLS")
+	flag.StringVar(&tlsKey, "tls-key", "", "Path to client key for mTLS")
+	flag.DurationVar(&tlsRotationInterval, "tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 
 	opts := crzap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -228,7 +238,30 @@ func main() {
 			os.Exit(1)
 		}
 
-		metaClient, dialErr := metadata.Dial(metaAddr)
+		// Build gRPC dial options for TLS if certificates are provided.
+		ctx := context.Background()
+		var dialOpts []grpc.DialOption
+		if tlsCA != "" && tlsCert != "" && tlsKey != "" {
+			rotator := transport.NewCertRotator(tlsCert, tlsKey, tlsRotationInterval)
+			rotator.Start(ctx)
+			setupLog.Info("TLS certificate rotation enabled",
+				"certPath", tlsCert,
+				"keyPath", tlsKey,
+				"interval", tlsRotationInterval,
+			)
+			tlsOpt, tlsErr := transport.NewClientTLSWithRotation(transport.TLSConfig{
+				CACertPath: tlsCA,
+				CertPath:   tlsCert,
+				KeyPath:    tlsKey,
+			}, rotator)
+			if tlsErr != nil {
+				setupLog.Error(tlsErr, "failed to configure TLS")
+				os.Exit(1)
+			}
+			dialOpts = append(dialOpts, tlsOpt)
+		}
+
+		metaClient, dialErr := metadata.Dial(metaAddr, dialOpts...)
 		if dialErr != nil {
 			setupLog.Error(dialErr, "unable to connect to metadata service", "address", metaAddr)
 			os.Exit(1)

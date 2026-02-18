@@ -74,3 +74,68 @@ Global image tag helper
 {{- define "novastor.imageTag" -}}
 {{- .Values.global.image.tag | default .Chart.AppVersion }}
 {{- end }}
+
+{{/*
+TLS enabled helper - returns "true" if TLS should be enabled, "" otherwise
+This helper properly handles the case where global.tls.enabled is explicitly set to false
+*/}}
+{{- define "novastor.tls.enabled" -}}
+{{- if hasKey .Values.global "tls" }}
+  {{- if hasKey .Values.global.tls "enabled" }}
+    {{- if .Values.global.tls.enabled }}true{{- end }}
+  {{- else }}
+    {{- true }}
+  {{- end }}
+{{- else }}
+  {{- true }}
+{{- end }}
+{{- end }}
+
+{{/*
+TLS certificate volume name
+*/}}
+{{- define "novastor.tls.volumeName" -}}
+{{- printf "%s-tls-certs" (include "novastor.fullname" .) }}
+{{- end }}
+
+{{/*
+TLS certificate mount path
+*/}}
+{{- define "novastor.tls.mountPath" -}}
+/var/run/novastor/tls
+{{- end }}
+
+{{/*
+TLS CA certificate path
+*/}}
+{{- define "novastor.tls.caPath" -}}
+{{- printf "%s/ca.crt" (include "novastor.tls.mountPath" .) }}
+{{- end }}
+
+{{/*
+TLS server certificate path (for components that accept connections)
+*/}}
+{{- define "novastor.tls.serverCertPath" -}}
+{{- printf "%s/server.crt" (include "novastor.tls.mountPath" .) }}
+{{- end }}
+
+{{/*
+TLS server key path (for components that accept connections)
+*/}}
+{{- define "novastor.tls.serverKeyPath" -}}
+{{- printf "%s/server.key" (include "novastor.tls.mountPath" .) }}
+{{- end }}
+
+{{/*
+TLS client certificate path (for components that initiate connections)
+*/}}
+{{- define "novastor.tls.clientCertPath" -}}
+{{- printf "%s/client.crt" (include "novastor.tls.mountPath" .) }}
+{{- end }}
+
+{{/*
+TLS client key path (for components that initiate connections)
+*/}}
+{{- define "novastor.tls.clientKeyPath" -}}
+{{- printf "%s/client.key" (include "novastor.tls.mountPath" .) }}
+{{- end }}
