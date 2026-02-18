@@ -63,3 +63,17 @@ func (n *NodeTargetClient) DeleteTarget(ctx context.Context, agentAddr string, v
 	}
 	return c.DeleteTarget(ctx, volumeID)
 }
+
+// Close closes all cached gRPC connections.
+func (n *NodeTargetClient) Close() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var firstErr error
+	for addr, client := range n.clients {
+		if err := client.Close(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("closing connection to %s: %w", addr, err)
+		}
+	}
+	n.clients = make(map[string]*agent.NVMeTargetClient)
+	return firstErr
+}

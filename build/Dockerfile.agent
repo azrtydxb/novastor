@@ -39,8 +39,21 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
 # ============================================================
 # Runtime stage
 # ============================================================
-# alpine is required for util-linux (losetup) to manage loop devices for
-# NVMe-oF backing files.
+# NOTE: We intentionally use Alpine instead of a distroless base here.
+# Distroless images would provide a smaller attack surface, but this
+# agent requires util-linux (losetup) and related system tooling to
+# manage loop devices for NVMe-oF backing files. Alpine provides these
+# tools via apk while still being relatively small.
+#
+# To mitigate the increased attack surface compared to distroless, we:
+#   - Install only the minimal required packages (util-linux, ca-certificates).
+#   - Avoid adding a shell or extra utilities beyond what BusyBox/Alpine
+#     already provide.
+#
+# Future hardening: consider replacing this with a custom distroless-style
+# image that contains only the novastor-agent binary and the minimal
+# losetup/util-linux dependencies needed for NVMe-oF, or an even more
+# minimal Alpine variant, once that image is available and validated.
 FROM alpine:3.20
 
 LABEL org.opencontainers.image.title="novastor-agent" \

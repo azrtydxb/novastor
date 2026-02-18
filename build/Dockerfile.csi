@@ -34,8 +34,24 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
 # ============================================================
 # Runtime stage
 # ============================================================
-# alpine is required for nvme-cli, e2fsprogs (mkfs.ext4), and util-linux (blkid/mount).
-# distroless cannot run these host-level tools.
+# NOTE: We intentionally use Alpine here instead of a distroless image because we
+#       require host-level tools:
+#         - nvme-cli   : nvme connect / disconnect for NVMe-oF initiator
+#         - e2fsprogs  : mkfs.ext4 for formatting new block devices
+#         - util-linux : blkid (filesystem detection) and mount/umount
+#       These tools are not available in standard distroless images, and the CSI
+#       driver must execute them to fulfill its responsibilities.
+#
+#       Security tradeoff: Alpine includes a package manager and a shell, which
+#       increases the attack surface compared to a distroless image that contains
+#       only the application and its runtime dependencies. We mitigate this risk by
+#       running a single-purpose binary via ENTRYPOINT and installing only the
+#       minimal required packages.
+#
+#       Future hardening: If feasible, we may create a custom minimal image
+#       (e.g., distroless-style base with just the nvme/e2fs/util-linux binaries
+#       copied in) or switch to a more minimal Alpine variant while preserving the
+#       required functionality.
 FROM alpine:3.20
 
 LABEL org.opencontainers.image.title="novastor-csi" \

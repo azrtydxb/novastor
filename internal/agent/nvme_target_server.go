@@ -54,6 +54,8 @@ func (s *NVMeTargetServer) Register(srv *grpc.Server) {
 
 // CreateTarget creates a sparse file, attaches a loop device, and exposes it
 // as an NVMe-oF/TCP target via the nvmet configfs interface.
+// This function is idempotent: if a target for the same volumeID already exists,
+// it returns the existing target's connection parameters instead of failing.
 func (s *NVMeTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTargetRequest) (*pb.CreateTargetResponse, error) {
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
@@ -64,6 +66,26 @@ func (s *NVMeTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 		return nil, status.Error(codes.InvalidArgument, "size_bytes must be positive")
 	}
 
+	// Check if target already exists (idempotency).
+	existingTargets, listErr := s.targetManager.ListTargets()
+	if listErr == nil {
+		for _, existingVolumeID := range existingTargets {
+			if existingVolumeID == volumeID {
+				// Target already exists; return its connection parameters.
+				nqn := nqnPrefix + volumeID
+				logging.L.Info("nvme target: target already exists, returning existing connection params",
+					zap.String("volumeID", volumeID),
+					zap.String("nqn", nqn),
+				)
+				return &pb.CreateTargetResponse{
+					SubsystemNqn:  nqn,
+					TargetAddress: s.hostIP,
+					TargetPort:    fmt.Sprintf("%d", nvmeTargetPort),
+				}, nil
+			}
+		}
+	}
+
 	// Ensure the volumes directory exists.
 	if err := os.MkdirAll(volumesDir, 0o750); err != nil {
 		return nil, status.Errorf(codes.Internal, "creating volumes directory: %v", err)
@@ -71,17 +93,42 @@ func (s *NVMeTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 
 	imgPath := filepath.Join(volumesDir, volumeID+".img")
 
-	// Create a sparse file of the requested size using truncate.
-	truncCmd := exec.CommandContext(ctx, "truncate", "-s", fmt.Sprintf("%d", sizeBytes), imgPath)
-	if out, err := truncCmd.CombinedOutput(); err != nil {
-		return nil, status.Errorf(codes.Internal, "creating sparse file %s: %v: %s", imgPath, err, string(out))
+	// Check if backing file already exists (partial create scenario).
+	if _, err := os.Stat(imgPath); err == nil {
+		// Backing file exists; check if it's attached as a loop device.
+		if loopDev, findErr := findLoopDevice(ctx, imgPath); findErr == nil && loopDev != "" {
+			// Loop device is attached; check if nvmet target exists.
+			// If target exists, we already returned above. If not, recreate just the target.
+			logging.L.Info("nvme target: backing file and loop device exist, recreating nvmet target",
+				zap.String("volumeID", volumeID),
+				zap.String("loopDev", loopDev),
+			)
+			if err := s.targetManager.CreateTargetWithDevice(volumeID, nvmeTargetPort, loopDev, s.hostIP); err != nil {
+				return nil, status.Errorf(codes.Internal, "recreating nvmet target for volume %s: %v", volumeID, err)
+			}
+			nqn := nqnPrefix + volumeID
+			return &pb.CreateTargetResponse{
+				SubsystemNqn:  nqn,
+				TargetAddress: s.hostIP,
+				TargetPort:    fmt.Sprintf("%d", nvmeTargetPort),
+			}, nil
+		}
+		// Backing file exists but no loop device; reattach it.
+		logging.L.Info("nvme target: backing file exists, reattaching loop device", zap.String("volumeID", volumeID))
 	}
-	logging.L.Info("nvme target: sparse file created", zap.String("volumeID", volumeID), zap.String("path", imgPath), zap.Int64("sizeBytes", sizeBytes))
+
+	// Create a sparse file of the requested size using truncate (if it doesn't exist).
+	if _, err := os.Stat(imgPath); os.IsNotExist(err) {
+		truncCmd := exec.CommandContext(ctx, "truncate", "-s", fmt.Sprintf("%d", sizeBytes), imgPath)
+		if out, err := truncCmd.CombinedOutput(); err != nil {
+			return nil, status.Errorf(codes.Internal, "creating sparse file %s: %v: %s", imgPath, err, string(out))
+		}
+		logging.L.Info("nvme target: sparse file created", zap.String("volumeID", volumeID), zap.String("path", imgPath), zap.Int64("sizeBytes", sizeBytes))
+	}
 
 	// Attach a loop device to the sparse file.
 	loopDev, err := attachLoopDevice(ctx, imgPath)
 	if err != nil {
-		_ = os.Remove(imgPath)
 		return nil, status.Errorf(codes.Internal, "attaching loop device for %s: %v", imgPath, err)
 	}
 	logging.L.Info("nvme target: loop device attached", zap.String("volumeID", volumeID), zap.String("loopDev", loopDev))
@@ -89,7 +136,6 @@ func (s *NVMeTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	// Register the nvmet target backed by the loop device.
 	if err := s.targetManager.CreateTargetWithDevice(volumeID, nvmeTargetPort, loopDev, s.hostIP); err != nil {
 		_ = detachLoopDevice(ctx, loopDev)
-		_ = os.Remove(imgPath)
 		return nil, status.Errorf(codes.Internal, "creating nvmet target for volume %s: %v", volumeID, err)
 	}
 
