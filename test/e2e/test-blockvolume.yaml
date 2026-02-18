@@ -1,0 +1,9 @@
+apiVersion: novastor.io/v1alpha1
+kind: BlockVolume
+metadata:
+  name: test-blockvolume
+  namespace: novastor-test
+spec:
+  pool: test-pool
+  size: "10Gi"
+  accessMode: ReadWriteOnce
