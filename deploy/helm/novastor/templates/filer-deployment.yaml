@@ -29,19 +29,25 @@ spec:
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           args:
             - --listen=:2049
+            - --metrics-addr=:8080
             - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
           ports:
             - name: nfs
               containerPort: 2049
               protocol: TCP
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
           livenessProbe:
-            tcpSocket:
-              port: nfs
+            httpGet:
+              path: /healthz
+              port: 8080
             initialDelaySeconds: 15
             periodSeconds: 20
           readinessProbe:
-            tcpSocket:
-              port: nfs
+            httpGet:
+              path: /healthz
+              port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
