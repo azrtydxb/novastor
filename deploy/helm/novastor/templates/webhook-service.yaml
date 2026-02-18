@@ -1,0 +1,26 @@
+{{- if .Values.scheduler.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "novastor.fullname" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  type: {{ .Values.scheduler.webhook.service.type }}
+  ports:
+    - name: webhook
+      port: 443
+      targetPort: webhook
+      protocol: TCP
+    {{- if .Values.scheduler.webhook.service.metricsEnabled }}
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "novastor.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+{{- end }}

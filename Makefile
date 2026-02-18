@@ -11,7 +11,7 @@ SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
 # All binaries
-BINARIES = controller agent meta csi filer s3gw cli
+BINARIES = controller agent meta csi filer s3gw webhook cli
 
 .PHONY: all
 all: build-all
@@ -112,6 +112,10 @@ build-s3gw: fmt vet ## Build S3 gateway binary.
 .PHONY: build-cli
 build-cli: fmt vet ## Build novastorctl CLI tool.
 	go build -o bin/novastorctl ./cmd/cli/
+
+.PHONY: build-webhook
+build-webhook: fmt vet ## Build webhook server binary.
+	go build -o bin/novastor-webhook ./cmd/webhook/
 
 ##@ Docker
 

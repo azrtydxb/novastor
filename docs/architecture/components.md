@@ -352,3 +352,67 @@ type PlacementMap struct {
 ```
 
 Each entry maps a chunk ID to the list of nodes that hold replicas of that chunk. During recovery, the placement map is updated to reflect the new node assignments after re-replication.
+
+---
+
+## Scheduler Webhook
+
+**Binary**: `novastor-webhook` | **Package**: `internal/webhook/` | **K8s Resource**: Deployment
+
+The Scheduler Webhook is a mutating admission webhook that automatically injects the NovaStor custom scheduler name into pods that use NovaStor PVCs. This enables data-locality scheduling without requiring users to manually set `spec.schedulerName`.
+
+### Responsibilities
+
+- Intercepts pod creation requests via the Kubernetes MutatingAdmissionWebhook API
+- Inspects pod volumes for PVC references
+- Looks up each PVC's storage class to determine if it uses NovaStor provisioner
+- Injects `schedulerName: novastor-scheduler` when NovaStor PVCs are detected
+- Respects opt-out annotation for pods that should not use the custom scheduler
+
+### Configuration
+
+| Flag | Default | Description |
+|---|---|---|
+| `--tls-cert` | `/etc/webhook-cert/tls.crt` | TLS certificate file path |
+| `--tls-key` | `/etc/webhook-cert/tls.key` | TLS private key file path |
+| `--port` | `9443` | Webhook HTTPS server port |
+| `--metrics-bind-address` | `:8080` | Prometheus metrics endpoint |
+| `--health-probe-bind-address` | `:8081` | Health/readiness probe endpoint |
+
+### Helm Values
+
+| Value | Default | Description |
+|---|---|---|
+| `scheduler.webhook.enabled` | `true` | Enable the webhook deployment |
+| `scheduler.webhook.replicas` | `2` | Number of webhook pods |
+| `scheduler.webhook.failurePolicy` | `Ignore` | Webhook failure policy (Ignore/Fail) |
+| `scheduler.webhook.timeoutSeconds` | `5` | Webhook admission timeout |
+| `scheduler.webhook.cert.existingSecret` | `""` | Existing secret with TLS cert/key |
+
+### Annotations
+
+| Annotation | Value | Description |
+|---|---|---|
+| `novastor.io/skip-scheduler-injection` | `"true"` | Skip scheduler injection for this pod |
+
+### Detection Logic
+
+The webhook determines if a pod uses NovaStor storage by:
+
+1. Iterating through `spec.volumes` for PVC references
+2. Fetching each PVC's `spec.storageClassName`
+3. Fetching the StorageClass resource
+4. Checking if `provisioner` equals `novastor.csi.novastor.io`
+
+If any PVC uses a NovaStor storage class, the scheduler name is injected.
+
+### Failure Policy
+
+The default `failurePolicy: Ignore` ensures that pod creation proceeds even if the webhook is temporarily unavailable. Pods will fall back to the default Kubernetes scheduler in this case.
+
+### TLS Certificates
+
+The webhook requires TLS certificates for HTTPS communication with the Kubernetes API server. When `scheduler.webhook.cert.existingSecret` is empty, Helm automatically generates self-signed certificates using a post-install hook job.
+
+For production deployments, provide certificates via `scheduler.webhook.cert.existingSecret` or use cert-manager.
+
