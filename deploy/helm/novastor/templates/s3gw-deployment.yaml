@@ -29,6 +29,7 @@ spec:
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           args:
             - --listen=:9000
+            - --metrics-addr=:8081
             - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
           env:
             - name: S3_ACCESS_KEY
@@ -45,16 +46,19 @@ spec:
             - name: s3
               containerPort: 9000
               protocol: TCP
+            - name: metrics
+              containerPort: 8081
+              protocol: TCP
           livenessProbe:
             httpGet:
               path: /healthz
-              port: s3
+              port: 8081
             initialDelaySeconds: 15
             periodSeconds: 20
           readinessProbe:
             httpGet:
               path: /healthz
-              port: s3
+              port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:

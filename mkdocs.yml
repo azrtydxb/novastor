@@ -62,6 +62,7 @@ nav:
       - Component Details: architecture/components.md
   - Deployment:
       - Quick Start: deployment/quickstart.md
+      - File & S3 Gateway Deployment: deployment/gateway-deployment.md
       - Helm Chart Reference: deployment/helm-values.md
       - RBAC Configuration: deployment/rbac.md
   - Operations:
