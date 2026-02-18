@@ -147,7 +147,7 @@ func (s *FUSEServer) Mounted() bool {
 
 // fuseRootNode represents the root directory of the FUSE filesystem.
 type fuseRootNode struct {
-	fs   *FileSystem
+	fs *FileSystem
 	fs.Inode
 }
 
