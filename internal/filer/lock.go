@@ -3,6 +3,8 @@ package filer
 import (
 	"fmt"
 	"sync"
+
+	"github.com/piwi3910/novastor/internal/metrics"
 )
 
 // LockType represents the type of a file lock.
@@ -78,6 +80,7 @@ func (lm *LockManager) Lock(lock *FileLock) error {
 	}
 
 	lm.locks[lock.Ino] = append(lm.locks[lock.Ino], lock)
+	lm.updateActiveLocks()
 	return nil
 }
 
@@ -93,6 +96,7 @@ func (lm *LockManager) Unlock(owner string, ino uint64, start, end int64) error 
 			if len(lm.locks[ino]) == 0 {
 				delete(lm.locks, ino)
 			}
+			lm.updateActiveLocks()
 			return nil
 		}
 	}
@@ -131,4 +135,14 @@ func (lm *LockManager) ReleaseAll(owner string) {
 			lm.locks[ino] = filtered
 		}
 	}
+	lm.updateActiveLocks()
+}
+
+// updateActiveLocks updates the active locks metric. Must be called with lm.mu held.
+func (lm *LockManager) updateActiveLocks() {
+	total := 0
+	for _, locks := range lm.locks {
+		total += len(locks)
+	}
+	metrics.ActiveLocks.Set(float64(total))
 }

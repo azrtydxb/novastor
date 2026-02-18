@@ -7,12 +7,20 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/piwi3910/novastor/internal/metrics"
 )
 
 const chunkSize = 4 * 1024 * 1024 // 4 MB
 
 // handlePutObject handles PUT /<bucket>/<key>.
 func (g *Gateway) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	start := time.Now()
+	defer func() {
+		metrics.S3RequestsTotal.WithLabelValues("PutObject").Inc()
+		metrics.S3RequestDuration.WithLabelValues("PutObject").Observe(time.Since(start).Seconds())
+	}()
+
 	ctx := r.Context()
 
 	// Verify bucket exists.
@@ -26,6 +34,8 @@ func (g *Gateway) handlePutObject(w http.ResponseWriter, r *http.Request, bucket
 		writeS3Error(w, "InternalError", "failed to read request body", http.StatusInternalServerError)
 		return
 	}
+
+	metrics.S3BytesIn.Add(float64(len(body)))
 
 	// Compute ETag as MD5 hex of the entire body.
 	etag := fmt.Sprintf("%x", md5.Sum(body))
@@ -77,6 +87,12 @@ func (g *Gateway) handlePutObject(w http.ResponseWriter, r *http.Request, bucket
 
 // handleGetObject handles GET /<bucket>/<key>.
 func (g *Gateway) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	start := time.Now()
+	defer func() {
+		metrics.S3RequestsTotal.WithLabelValues("GetObject").Inc()
+		metrics.S3RequestDuration.WithLabelValues("GetObject").Observe(time.Since(start).Seconds())
+	}()
+
 	ctx := r.Context()
 
 	obj, err := g.objects.GetObject(ctx, bucket, key)
@@ -91,20 +107,30 @@ func (g *Gateway) handleGetObject(w http.ResponseWriter, r *http.Request, bucket
 	w.Header().Set("Last-Modified", time.Unix(obj.ModTime, 0).UTC().Format(http.TimeFormat))
 	w.WriteHeader(http.StatusOK)
 
+	bytesWritten := int64(0)
 	for _, cid := range obj.ChunkIDs {
 		data, err := g.chunks.GetChunkData(ctx, cid)
 		if err != nil {
 			// Headers already sent; nothing we can do but stop writing.
 			return
 		}
-		if _, err := w.Write(data); err != nil {
+		n, err := w.Write(data)
+		bytesWritten += int64(n)
+		if err != nil {
 			return
 		}
 	}
+	metrics.S3BytesOut.Add(float64(bytesWritten))
 }
 
 // handleHeadObject handles HEAD /<bucket>/<key>.
 func (g *Gateway) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	start := time.Now()
+	defer func() {
+		metrics.S3RequestsTotal.WithLabelValues("HeadObject").Inc()
+		metrics.S3RequestDuration.WithLabelValues("HeadObject").Observe(time.Since(start).Seconds())
+	}()
+
 	ctx := r.Context()
 
 	obj, err := g.objects.GetObject(ctx, bucket, key)
@@ -122,6 +148,12 @@ func (g *Gateway) handleHeadObject(w http.ResponseWriter, r *http.Request, bucke
 
 // handleDeleteObject handles DELETE /<bucket>/<key>.
 func (g *Gateway) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	start := time.Now()
+	defer func() {
+		metrics.S3RequestsTotal.WithLabelValues("DeleteObject").Inc()
+		metrics.S3RequestDuration.WithLabelValues("DeleteObject").Observe(time.Since(start).Seconds())
+	}()
+
 	ctx := r.Context()
 
 	// S3 delete is idempotent: succeed even if the object does not exist.

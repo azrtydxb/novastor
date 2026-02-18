@@ -12,6 +12,8 @@ import (
 
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
+
+	"github.com/piwi3910/novastor/internal/metrics"
 )
 
 type VolumeMeta struct {
@@ -349,4 +351,35 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return result
+}
+
+// StartMetricsMonitor starts a background goroutine to periodically update
+// Raft state metrics. Call once after creating the RaftStore.
+func (s *RaftStore) StartMetricsMonitor(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				state := s.raft.State()
+				switch state {
+				case raft.Follower:
+					metrics.RaftState.Set(0)
+				case raft.Candidate:
+					metrics.RaftState.Set(1)
+				case raft.Leader:
+					metrics.RaftState.Set(2)
+				default:
+					metrics.RaftState.Set(-1)
+				}
+
+				lastIndex := s.raft.LastIndex()
+				metrics.RaftCommitIndex.Set(float64(lastIndex))
+			}
+		}
+	}()
 }
