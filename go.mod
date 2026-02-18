@@ -6,6 +6,7 @@ require (
 	github.com/container-storage-interface/spec v1.12.0
 	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/google/uuid v1.6.0
+	github.com/hanwen/go-fuse/v2 v2.7.1
 	github.com/hashicorp/raft v1.7.3
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
 	github.com/klauspost/reedsolomon v1.13.2
