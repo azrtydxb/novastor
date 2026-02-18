@@ -13,6 +13,10 @@ spec:
       port: 9000
       targetPort: s3
       protocol: TCP
+    - name: metrics
+      port: 8081
+      targetPort: metrics
+      protocol: TCP
   selector:
     {{- include "novastor.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: s3gw

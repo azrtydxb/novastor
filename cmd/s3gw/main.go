@@ -11,12 +11,16 @@ import (
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
 	"github.com/piwi3910/novastor/internal/agent"
+	"github.com/piwi3910/novastor/internal/logging"
 	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/piwi3910/novastor/internal/metrics"
 	s3gw "github.com/piwi3910/novastor/internal/s3"
 	"github.com/piwi3910/novastor/internal/transport"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
@@ -25,8 +29,14 @@ var (
 	date    = "unknown"
 )
 
+func init() {
+	// Register Prometheus metrics.
+	metrics.Register()
+}
+
 func main() {
-	listenAddr := flag.String("listen", ":9000", "HTTP listen address")
+	listenAddr := flag.String("listen", ":9000", "S3 HTTP listen address")
+	metricsAddr := flag.String("metrics-addr", ":8081", "Metrics HTTP listen address")
 	accessKey := flag.String("access-key", "", "S3 access key")
 	secretKey := flag.String("secret-key", "", "S3 secret key")
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
@@ -86,33 +96,70 @@ func main() {
 	// Wire the S3 gateway with real dependencies.
 	gateway := s3gw.NewGateway(adapter, adapter, chunkStore, adapter, *accessKey, *secretKey)
 
+	// Create a handler that serves both S3 API and metrics.
+	mux := http.NewServeMux()
+	mux.Handle("/", gateway)
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
 	srv := &http.Server{
 		Addr:         *listenAddr,
-		Handler:      gateway,
+		Handler:      mux,
 		ReadTimeout:  60 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
+	}
+
+	// Start metrics server on a separate port.
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	metricsSrv := &http.Server{
+		Addr:         *metricsAddr,
+		Handler:      metricsMux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
 	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 
 	go func() {
-		log.Printf("S3 gateway listening on %s", *listenAddr)
+		logging.L.Info("S3 gateway listening", zap.String("addr", *listenAddr))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("S3 gateway failed: %v", err)
+			logging.L.Error("S3 gateway failed", zap.Error(err))
+		}
+	}()
+
+	go func() {
+		logging.L.Info("metrics server listening", zap.String("addr", *metricsAddr))
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logging.L.Error("metrics server failed", zap.Error(err))
 		}
 	}()
 
 	<-stop
-	log.Println("Shutting down S3 gateway...")
+	logging.L.Info("Shutting down S3 gateway...")
 	cancel() // cancel main context: stops cert rotator
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// Shutdown metrics server.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("S3 gateway shutdown failed: %v", err)
+	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+		logging.L.Error("metrics server shutdown failed", zap.Error(err))
 	}
-	log.Println("S3 gateway stopped")
+
+	// Shutdown S3 API server.
+	s3ShutdownCtx, s3ShutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer s3ShutdownCancel()
+	if err := srv.Shutdown(s3ShutdownCtx); err != nil {
+		logging.L.Error("S3 gateway shutdown failed", zap.Error(err))
+	}
+	logging.L.Info("S3 gateway stopped")
 }

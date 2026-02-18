@@ -11,6 +11,8 @@ Each NovaStor component exposes a `/metrics` HTTP endpoint:
 | Node Agent | 9101 | `http://<agent>:9101/metrics` |
 | Metadata Service | 7002 | `http://<meta>:7002/metrics` |
 | Controller | 8080 | `http://<controller>:8080/metrics` |
+| File Gateway (NFS) | 8080 | `http://<filer>:8080/metrics` |
+| S3 Gateway | 8081 | `http://<s3gw>:8081/metrics` |
 
 ## Prometheus Integration
 
@@ -28,11 +30,13 @@ monitoring:
     scrapeTimeout: 10s
 ```
 
-This creates three ServiceMonitor resources:
+This creates five ServiceMonitor resources:
 
 - `novastor-agent` -- scrapes all agent DaemonSet pods
 - `novastor-meta` -- scrapes all metadata StatefulSet pods
 - `novastor-controller` -- scrapes the controller Deployment
+- `novastor-filer` -- scrapes the filer Deployment pods
+- `novastor-s3gw` -- scrapes the s3gw Deployment pods
 
 ### Manual Prometheus Configuration
 
