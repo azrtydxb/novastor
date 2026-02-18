@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"testing"
+	"time"
 )
 
 func TestRootCommand_HasSubcommands(t *testing.T) {
@@ -11,7 +12,7 @@ func TestRootCommand_HasSubcommands(t *testing.T) {
 	for _, c := range cmds {
 		names[c.Name()] = true
 	}
-	for _, name := range []string{"version", "pool", "volume", "bucket", "status", "node", "snapshot"} {
+	for _, name := range []string{"version", "pool", "volume", "bucket", "status", "node", "snapshot", "compliance", "heal"} {
 		if !names[name] {
 			t.Errorf("missing subcommand: %s", name)
 		}
@@ -89,6 +90,30 @@ func TestSnapshotCommand_HasSubcommands(t *testing.T) {
 	}
 }
 
+func TestComplianceCommand_HasSubcommands(t *testing.T) {
+	names := make(map[string]bool)
+	for _, c := range complianceCmd.Commands() {
+		names[c.Name()] = true
+	}
+	for _, name := range []string{"list", "get"} {
+		if !names[name] {
+			t.Errorf("compliance missing subcommand: %s", name)
+		}
+	}
+}
+
+func TestHealCommand_HasSubcommands(t *testing.T) {
+	names := make(map[string]bool)
+	for _, c := range healCmd.Commands() {
+		names[c.Name()] = true
+	}
+	for _, name := range []string{"status", "nodes", "volumes"} {
+		if !names[name] {
+			t.Errorf("heal missing subcommand: %s", name)
+		}
+	}
+}
+
 func TestVolumeCommand_Aliases(t *testing.T) {
 	if len(volumeCmd.Aliases) == 0 {
 		t.Fatal("volume command should have aliases")
@@ -125,6 +150,27 @@ func TestFormatBytes(t *testing.T) {
 			got := formatBytes(tt.input)
 			if got != tt.expected {
 				t.Errorf("formatBytes(%d) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		name string
+		d    time.Duration
+		want string
+	}{
+		{"less than second", 500 * time.Millisecond, "< 1s"},
+		{"seconds", 30 * time.Second, "30s"},
+		{"minutes", 5 * time.Minute, "5m"},
+		{"hours", 2 * time.Hour, "2.0h"},
+		{"days", 48 * time.Hour, "2.0d"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatDuration(tt.d); got != tt.want {
+				t.Errorf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
 			}
 		})
 	}
