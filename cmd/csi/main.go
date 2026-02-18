@@ -225,10 +225,17 @@ func main() {
 			return
 		}
 		for _, n := range nodes {
-			if n.Status == "ready" && n.Address != "" {
-				placer.AddNode(n.Address)
-				log.Printf("Discovered storage node %s at %s", n.NodeID, n.Address)
+			if n.Status != "ready" || n.Address == "" {
+				continue
 			}
+			// Skip unroutable 0.0.0.0 addresses left by pods that
+			// registered before the host-IP fix was deployed.
+			host, _, splitErr := net.SplitHostPort(n.Address)
+			if splitErr != nil || host == "0.0.0.0" || host == "" {
+				continue
+			}
+			placer.AddNode(n.Address)
+			log.Printf("Discovered storage node %s at %s", n.NodeID, n.Address)
 		}
 	}
 	syncNodes()
