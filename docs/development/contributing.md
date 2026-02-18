@@ -32,7 +32,7 @@ This builds all seven binaries:
 | `novastor-csi` | `cmd/csi/` |
 | `novastor-filer` | `cmd/filer/` |
 | `novastor-s3gw` | `cmd/s3gw/` |
-| `novactl` | `cmd/cli/` |
+| `novastorctl` | `cmd/cli/` |
 
 ### Individual Binaries
 

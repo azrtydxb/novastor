@@ -28,7 +28,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
         -X main.version=${VERSION} \
         -X main.commit=${COMMIT} \
         -X main.date=${BUILD_DATE}" \
-      -o /out/novactl \
+      -o /out/novastorctl \
       ./cmd/cli
 
 # ============================================================
@@ -36,14 +36,14 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
 # ============================================================
 FROM gcr.io/distroless/static-debian12:nonroot
 
-LABEL org.opencontainers.image.title="novactl" \
+LABEL org.opencontainers.image.title="novastorctl" \
       org.opencontainers.image.description="NovaStor CLI tool for managing storage resources" \
       org.opencontainers.image.source="https://github.com/piwi3910/novastor" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-COPY --from=builder /out/novactl /usr/local/bin/novactl
+COPY --from=builder /out/novastorctl /usr/local/bin/novastorctl
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-# novactl is a CLI tool; no ports are exposed.
+# novastorctl is a CLI tool; no ports are exposed.
 
-ENTRYPOINT ["/usr/local/bin/novactl"]
+ENTRYPOINT ["/usr/local/bin/novastorctl"]

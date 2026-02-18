@@ -5,9 +5,9 @@ import "github.com/spf13/cobra"
 var (
 	metaAddr string
 	rootCmd  = &cobra.Command{
-		Use:   "novactl",
+		Use:   "novastorctl",
 		Short: "NovaStor CLI - manage your unified storage cluster",
-		Long:  "novactl is the command-line interface for managing NovaStor storage pools, volumes, filesystems, and object stores.",
+		Long:  "novastorctl is the command-line interface for managing NovaStor storage pools, volumes, filesystems, and object stores.",
 	}
 )
 

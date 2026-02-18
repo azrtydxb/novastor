@@ -60,7 +60,7 @@ graph TB
 | CSI Driver | `novastor-csi` | DaemonSet + Deployment | Kubernetes CSI plugin for block provisioning and attachment |
 | File Gateway | `novastor-filer` | Deployment | NFS server backed by the chunk engine |
 | S3 Gateway | `novastor-s3gw` | Deployment | S3-compatible HTTP API backed by the chunk engine |
-| CLI | `novactl` | — | Administrative command-line tool |
+| CLI | `novastorctl` | — | Administrative command-line tool |
 
 ### Data Protection
 
@@ -173,7 +173,7 @@ bin/novastor-meta
 bin/novastor-csi
 bin/novastor-filer
 bin/novastor-s3gw
-bin/novactl
+bin/novastorctl
 ```
 
 ### Individual targets
@@ -185,7 +185,7 @@ make build-meta         # Metadata service
 make build-csi          # CSI driver
 make build-filer        # File (NFS) gateway
 make build-s3gw         # S3 gateway
-make build-cli          # novactl CLI
+make build-cli          # novastorctl CLI
 ```
 
 ### Code generation
@@ -322,7 +322,7 @@ novastor/
 │   ├── csi/                 # CSI driver entrypoint
 │   ├── filer/               # NFS/file gateway entrypoint
 │   ├── s3gw/                # S3 gateway entrypoint
-│   └── cli/                 # novactl CLI entrypoint
+│   └── cli/                 # novastorctl CLI entrypoint
 ├── api/
 │   ├── v1alpha1/            # CRD type definitions (Go structs)
 │   └── proto/               # Protobuf definitions for gRPC
@@ -338,7 +338,7 @@ novastor/
 │   ├── s3/                  # S3 gateway: auth, bucket, object, multipart
 │   ├── operator/            # Controller reconcile loops and recovery
 │   ├── agent/               # Node agent: chunk server, gRPC handlers
-│   ├── cli/                 # novactl command implementations
+│   ├── cli/                 # novastorctl command implementations
 │   ├── logging/             # Structured logging (zap)
 │   └── metrics/             # Prometheus metrics registration
 ├── deploy/

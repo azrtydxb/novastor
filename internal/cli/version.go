@@ -16,7 +16,7 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("novactl %s (commit: %s)\n", Version, Commit)
+		fmt.Printf("novastorctl %s (commit: %s)\n", Version, Commit)
 	},
 }
 
