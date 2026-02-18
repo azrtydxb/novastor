@@ -100,7 +100,8 @@ func main() {
 	listenAddr := flag.String("listen", ":9100", "gRPC listen address")
 	hostIP := flag.String("host-ip", "", "Host IP address advertised to NVMe-oF initiators (required for NVMe-oF targets)")
 	podIP := flag.String("pod-ip", "", "Pod IP address used for gRPC registration (pod-network routable)")
-	dataDir := flag.String("data-dir", "/var/lib/novastor/chunks", "Chunk storage directory")
+	backendType := flag.String("backend", "local", "Storage backend type (local, memory)")
+	dataDir := flag.String("data-dir", "/var/lib/novastor/chunks", "Chunk storage directory (for local backend)")
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
 	metricsAddr := flag.String("metrics-addr", ":9101", "Prometheus metrics listen address")
 	scrubInterval := flag.Duration("scrub-interval", 24*time.Hour, "Interval between scrub runs")
@@ -137,14 +138,21 @@ func main() {
 	// Register Prometheus metrics.
 	metrics.Register()
 
-	// Create chunk local store.
-	localStore, err := chunk.NewLocalStore(*dataDir)
+	// Create chunk store using the backend factory.
+	backendConfig := map[string]string{}
+	if *dataDir != "" {
+		backendConfig["dir"] = *dataDir
+	}
+	backendStore, err := chunk.CreateBackend(*backendType, backendConfig)
 	if err != nil {
-		logging.L.Fatal("failed to create chunk store", zap.Error(err))
+		logging.L.Fatal("failed to create chunk store",
+			zap.String("backend", *backendType),
+			zap.Error(err),
+		)
 	}
 
-	// Optionally wrap the local store with encryption.
-	var store chunk.Store = localStore
+	// Optionally wrap the backend store with encryption.
+	var store chunk.Store = backendStore
 	if *encryptionEnabled {
 		var km chunk.KeyManager
 		switch {
@@ -168,7 +176,7 @@ func main() {
 		default:
 			logging.L.Fatal("encryption enabled but no key source specified; set --encryption-key-dir or --encryption-master-key")
 		}
-		store = chunk.NewKeyedEncryptedStore(localStore, km)
+		store = chunk.NewKeyedEncryptedStore(backendStore, km)
 	}
 
 	// Wire the AgentCollector to real data sources.
@@ -181,38 +189,39 @@ func main() {
 		}
 		return int64(len(ids))
 	}
+	// Disk stats are only available for local backend.
 	collector.DiskStatsFn = func() []metrics.DiskStats {
-		// Use CapacityStore interface if available.
-		if cs, ok := store.(chunk.CapacityStore); ok {
-			stats, err := cs.Stats(context.Background())
-			if err != nil {
-				logging.L.Warn("metrics: getting store stats failed", zap.Error(err))
-				return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
-			}
-			total := stats.TotalBytes
-			if total < 0 {
-				total = 0
-			}
-			used := stats.UsedBytes
-			if used < 0 {
-				used = 0
-			}
-			free := stats.AvailableBytes
-			if free < 0 {
-				free = 0
-			}
-			return []metrics.DiskStats{
-				{
-					Device: *dataDir,
-					Total:  uint64(total),
-					Used:   uint64(used),
-					Free:   uint64(free),
-				},
-			}
+	// Use CapacityStore interface if available.
+	if cs, ok := store.(chunk.CapacityStore); ok {
+		stats, err := cs.Stats(context.Background())
+		if err != nil {
+			logging.L.Warn("metrics: getting store stats failed", zap.Error(err))
+			return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
 		}
-		// If CapacityStore is not implemented, return zeros.
-		logging.L.Warn("metrics: store does not support capacity stats")
-		return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
+		total := stats.TotalBytes
+		if total < 0 {
+			total = 0
+		}
+		used := stats.UsedBytes
+		if used < 0 {
+			used = 0
+		}
+		free := stats.AvailableBytes
+		if free < 0 {
+			free = 0
+		}
+		return []metrics.DiskStats{
+			{
+				Device: *dataDir,
+				Total:  uint64(total),
+				Used:   uint64(used),
+				Free:   uint64(free),
+			},
+		}
+	}
+	// If CapacityStore is not implemented, return zeros.
+	logging.L.Warn("metrics: store does not support capacity stats")
+	return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
 	}
 
 	// Main context for the agent lifetime.
