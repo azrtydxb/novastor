@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/hashicorp/raft"
+
+	"github.com/piwi3910/novastor/internal/metrics"
 )
 
 // BadgerFSM is a persistent implementation of MetadataFSM backed by BadgerDB.
@@ -45,6 +48,11 @@ func bucketPrefix(bucket string) []byte {
 // Apply handles a single Raft log entry by executing the encoded put or delete
 // operation against BadgerDB. It returns nil on success or an error.
 func (f *BadgerFSM) Apply(log *raft.Log) interface{} {
+	start := time.Now()
+	defer func() {
+		metrics.RaftApplyLatency.Observe(time.Since(start).Seconds())
+	}()
+
 	var op fsmOp
 	if err := json.Unmarshal(log.Data, &op); err != nil {
 		return fmt.Errorf("unmarshaling fsm op: %w", err)
