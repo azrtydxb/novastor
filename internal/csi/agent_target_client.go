@@ -1,0 +1,65 @@
+package csi
+
+import (
+	"context"
+	"fmt"
+	"sync"
+
+	"google.golang.org/grpc"
+
+	"github.com/piwi3910/novastor/internal/agent"
+)
+
+// NodeTargetClient implements AgentTargetClient by managing gRPC connections
+// to agent nodes keyed by agent address. It is safe for concurrent use.
+type NodeTargetClient struct {
+	mu       sync.Mutex
+	clients  map[string]*agent.NVMeTargetClient
+	dialOpts []grpc.DialOption
+}
+
+// NewNodeTargetClient creates a NodeTargetClient that will dial agents using
+// the provided dial options (e.g. TLS credentials).
+func NewNodeTargetClient(opts ...grpc.DialOption) *NodeTargetClient {
+	return &NodeTargetClient{
+		clients:  make(map[string]*agent.NVMeTargetClient),
+		dialOpts: opts,
+	}
+}
+
+// clientFor returns (and caches) an NVMeTargetClient for the given agent address.
+func (n *NodeTargetClient) clientFor(agentAddr string) (*agent.NVMeTargetClient, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if c, ok := n.clients[agentAddr]; ok {
+		return c, nil
+	}
+	c, err := agent.NewNVMeTargetClient(agentAddr, n.dialOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("dialing NVMe target service at %s: %w", agentAddr, err)
+	}
+	n.clients[agentAddr] = c
+	return c, nil
+}
+
+// CreateTarget implements AgentTargetClient.
+func (n *NodeTargetClient) CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64) (string, string, string, error) {
+	c, err := n.clientFor(agentAddr)
+	if err != nil {
+		return "", "", "", err
+	}
+	result, err := c.CreateTarget(ctx, volumeID, sizeBytes)
+	if err != nil {
+		return "", "", "", err
+	}
+	return result.SubsystemNQN, result.TargetAddress, result.TargetPort, nil
+}
+
+// DeleteTarget implements AgentTargetClient.
+func (n *NodeTargetClient) DeleteTarget(ctx context.Context, agentAddr string, volumeID string) error {
+	c, err := n.clientFor(agentAddr)
+	if err != nil {
+		return err
+	}
+	return c.DeleteTarget(ctx, volumeID)
+}
