@@ -16,11 +16,15 @@ import (
 	"github.com/piwi3910/novastor/internal/metrics"
 )
 
+// VolumeMeta stores metadata about a provisioned volume.
 type VolumeMeta struct {
 	VolumeID  string   `json:"volumeID"`
 	Pool      string   `json:"pool"`
 	SizeBytes uint64   `json:"sizeBytes"`
 	ChunkIDs  []string `json:"chunkIDs"`
+
+	// DataProtection stores the replication factor for this volume.
+	DataProtection *DataProtection `json:"dataProtection,omitempty"`
 
 	// NVMe-oF target fields populated by the CSI controller after target creation.
 	TargetNodeID  string `json:"targetNodeID,omitempty"`
@@ -33,6 +37,15 @@ type VolumeMeta struct {
 
 	// ComplianceInfo tracks the current compliance state of this volume.
 	ComplianceInfo *ComplianceInfo `json:"complianceInfo,omitempty"`
+}
+
+// DataProtection describes how data is protected for a volume.
+type DataProtection struct {
+	// Mode is the protection mode: "replication" or "erasureCoding".
+	Mode string `json:"mode"`
+
+	// ReplicationFactor is the number of replicas (1-5).
+	ReplicationFactor int `json:"replicationFactor,omitempty"`
 }
 
 type PlacementMap struct {
