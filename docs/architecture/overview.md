@@ -208,5 +208,6 @@ NovaStor is fully Kubernetes-native:
 | CSI Node | DaemonSet | CSI socket | Volume mount/unmount |
 | NFS Gateway | Deployment | TCP (configurable) | NFS v4.1 file serving |
 | S3 Gateway | Deployment (2 replicas) | 9000 (HTTP) | S3-compatible API |
+| Scheduler Webhook | Deployment (2 replicas) | 9443 (webhook), 8080 (metrics), 8081 (health) | Auto-injects NovaStor scheduler for pods using NovaStor PVCs |
 
 For detailed information about each component, see the [Component Details](components.md) page.
