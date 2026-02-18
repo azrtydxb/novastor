@@ -9,6 +9,28 @@ global:
     tag: "0.1.0"
     pullPolicy: IfNotPresent
   imagePullSecrets: []
+  tls:
+    # enabled -- Enable mutual TLS for all inter-component gRPC communication.
+    # When true, a bootstrap Job generates CA and leaf certificates,
+    # stored in a Secret mounted by all components.
+    enabled: true
+    # bootstrapImage -- Image used for the certificate bootstrap Job.
+    # Uses the main controller image by default which includes the
+    # certificate generation logic from internal/transport/certgen.go.
+    bootstrapImage:
+      registry: ghcr.io/piwi3910
+      repository: novastor-controller
+      tag: "0.1.0"
+    # rotationInterval -- Interval for certificate rotation checks.
+    # The bootstrap Job creates 1-year certificates; this controls
+    # how often components check for updated certificates in the Secret.
+    rotationInterval: 5m
+    # ca -- Pre-existing CA certificate and key. If provided, these will be
+    # used instead of generating a new CA. Set this to null to enable
+    # automatic CA generation.
+    ca:
+      certPEM: null
+      keyPEM: null
 
 nameOverride: ""
 fullnameOverride: ""

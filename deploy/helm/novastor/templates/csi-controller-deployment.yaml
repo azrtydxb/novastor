@@ -23,6 +23,23 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if include "novastor.tls.enabled" . }}
+      initContainers:
+        - name: wait-for-certs
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Waiting for TLS certificates to be available..."
+              while [ ! -f {{ include "novastor.tls.clientCertPath" . }} ]; do
+                sleep 1
+              done
+              echo "Certificates found, proceeding with startup"
+          volumeMounts:
+            - name: tls-certs
+              mountPath: {{ include "novastor.tls.mountPath" . }}
+              readOnly: true
+      {{- end }}
       containers:
         - name: csi-plugin
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.csi.controller.image.repository }}:{{ include "novastor.imageTag" . }}"
@@ -30,6 +47,12 @@ spec:
           args:
             - --endpoint=unix:///csi/csi.sock
             - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+            {{- if include "novastor.tls.enabled" . }}
+            - --tls-ca={{ include "novastor.tls.caPath" . }}
+            - --tls-cert={{ include "novastor.tls.clientCertPath" . }}
+            - --tls-key={{ include "novastor.tls.clientKeyPath" . }}
+            - --tls-rotation-interval={{ .Values.global.tls.rotationInterval }}
+            {{- end }}
           ports:
             - name: healthz
               containerPort: 9808
@@ -49,6 +72,11 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
+            {{- if include "novastor.tls.enabled" . }}
+            - name: tls-certs
+              mountPath: {{ include "novastor.tls.mountPath" . }}
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.csi.controller.resources | nindent 12 }}
         - name: csi-provisioner
@@ -85,3 +113,9 @@ spec:
       volumes:
         - name: socket-dir
           emptyDir: {}
+        {{- if include "novastor.tls.enabled" . }}
+        - name: tls-certs
+          secret:
+            secretName: {{ include "novastor.tls.volumeName" . }}
+            defaultMode: 0o400
+        {{- end }}
