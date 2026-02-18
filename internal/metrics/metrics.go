@@ -176,6 +176,15 @@ var (
 		Buckets:   prometheus.DefBuckets,
 	})
 
+	// CapacityQueryDuration tracks the time to query available capacity.
+	CapacityQueryDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "novastor",
+		Subsystem: "csi",
+		Name:      "capacity_query_duration_seconds",
+		Help:      "Time to query available capacity",
+		Buckets:   prometheus.DefBuckets,
+	})
+
 	// --------------- S3 gateway metrics ---------------
 
 	// S3RequestsTotal counts S3 requests by operation type.
@@ -268,6 +277,7 @@ func Register() {
 	prometheus.MustRegister(VolumeDeleteDuration)
 	prometheus.MustRegister(VolumePublishDuration)
 	prometheus.MustRegister(VolumeUnpublishDuration)
+	prometheus.MustRegister(CapacityQueryDuration)
 
 	// S3 gateway metrics
 	prometheus.MustRegister(S3RequestsTotal)

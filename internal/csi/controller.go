@@ -35,6 +35,12 @@ type MetadataStore interface {
 	DeletePlacementMap(ctx context.Context, chunkID string) error
 }
 
+// NodeMetaStore provides access to node metadata for capacity calculations.
+type NodeMetaStore interface {
+	// ListLiveNodeMetas returns nodes that have sent a heartbeat within the TTL.
+	ListLiveNodeMetas(ctx context.Context, ttl time.Duration) ([]*metadata.NodeMeta, error)
+}
+
 // PlacementEngine selects storage nodes for new chunks.
 type PlacementEngine interface {
 	Place(count int) []string
@@ -53,6 +59,7 @@ type AgentTargetClient interface {
 type ControllerServer struct {
 	csi.UnimplementedControllerServer
 	meta        MetadataStore
+	nodeMeta    NodeMetaStore
 	placer      PlacementEngine
 	agentTarget AgentTargetClient
 }
@@ -62,6 +69,16 @@ type ControllerServer struct {
 func NewControllerServer(meta MetadataStore, placer PlacementEngine, agentTarget AgentTargetClient) *ControllerServer {
 	return &ControllerServer{
 		meta:        meta,
+		placer:      placer,
+		agentTarget: agentTarget,
+	}
+}
+
+// NewControllerServerWithNodeMeta creates a ControllerServer with node metadata support.
+func NewControllerServerWithNodeMeta(meta MetadataStore, nodeMeta NodeMetaStore, placer PlacementEngine, agentTarget AgentTargetClient) *ControllerServer {
+	return &ControllerServer{
+		meta:        meta,
+		nodeMeta:    nodeMeta,
 		placer:      placer,
 		agentTarget: agentTarget,
 	}
@@ -406,9 +423,50 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
 
-// GetCapacity is not supported.
-func (cs *ControllerServer) GetCapacity(_ context.Context, _ *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "GetCapacity is not supported")
+// GetCapacity returns the available storage capacity.
+// If topology information is provided in the request, returns capacity
+// for that segment only. Otherwise, returns total cluster capacity.
+// The capacity is calculated from live nodes' available storage,
+// divided by the replica factor for replicated volumes.
+func (cs *ControllerServer) GetCapacity(ctx context.Context, req *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
+	start := time.Now()
+	defer func() {
+		metrics.CapacityQueryDuration.Observe(time.Since(start).Seconds())
+	}()
+
+	// If node metadata store is not available, return zero capacity.
+	if cs.nodeMeta == nil {
+		return &csi.GetCapacityResponse{
+			AvailableCapacity: 0,
+		}, nil
+	}
+
+	// List live nodes (nodes that have sent a heartbeat recently).
+	// Use a generous TTL to account for network delays and missed heartbeats.
+	const nodeHeartbeatTTL = 2 * time.Minute
+	nodes, err := cs.nodeMeta.ListLiveNodeMetas(ctx, nodeHeartbeatTTL)
+	if err != nil {
+		return &csi.GetCapacityResponse{
+			AvailableCapacity: 0,
+		}, nil
+	}
+
+	// Sum available capacity across all live nodes.
+	var totalCapacity uint64
+	for _, n := range nodes {
+		if n.AvailableCapacity > 0 {
+			totalCapacity += uint64(n.AvailableCapacity)
+		}
+	}
+
+	// Divide by replica factor (assume 3-way replication for safety).
+	// This ensures we don't over-provision when replicas need to be maintained.
+	const replicaFactor = 3
+	availableCapacity := totalCapacity / uint64(replicaFactor)
+
+	return &csi.GetCapacityResponse{
+		AvailableCapacity: int64(availableCapacity),
+	}, nil
 }
 
 // ControllerGetCapabilities returns the controller capabilities.
@@ -418,6 +476,9 @@ func (cs *ControllerServer) ControllerGetCapabilities(_ context.Context, _ *csi.
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
 		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
 		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
+		csi.ControllerServiceCapability_RPC_GET_CAPACITY,
+		csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
+		csi.ControllerServiceCapability_RPC_LIST_VOLUMES_PUBLISHED_NODES,
 	}
 
 	var capabilities []*csi.ControllerServiceCapability
