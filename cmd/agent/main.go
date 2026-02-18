@@ -257,11 +257,30 @@ func main() {
 	chunkServer := agent.NewChunkServer(store)
 	chunkServer.Register(srv)
 
+	// Connect to the metadata service early (needed for NVMe-oF target server).
+	var metaClient *metadata.GRPCClient
+	if *metaAddr != "" {
+		var metaErr error
+		metaClient, metaErr = metadata.Dial(*metaAddr)
+		if metaErr != nil {
+			logging.L.Warn("cannot connect to metadata service; some features disabled",
+				zap.String("metaAddr", *metaAddr),
+				zap.Error(metaErr),
+			)
+		}
+	}
+
 	// Create and register the NVMe target server when a host IP is provided.
 	if *hostIP != "" {
-		nvmeServer := agent.NewNVMeTargetServer(*hostIP)
-		nvmeServer.Register(srv)
-		logging.L.Info("NVMe-oF target service registered", zap.String("hostIP", *hostIP))
+		// NVMe target server requires both chunk store and metadata client
+		// to assemble chunk-backed block devices.
+		if metaClient == nil {
+			logging.L.Warn("NVMe-oF target service disabled: no metadata connection")
+		} else {
+			nvmeServer := agent.NewNVMeTargetServer(*hostIP, store, metaClient)
+			nvmeServer.Register(srv)
+			logging.L.Info("NVMe-oF target service registered (chunk-backed)", zap.String("hostIP", *hostIP))
+		}
 	} else {
 		logging.L.Info("NVMe-oF target service disabled (--host-ip not set)")
 	}
@@ -270,14 +289,8 @@ func main() {
 	scrubber := chunk.NewScrubber(store, logReporter{}, *scrubInterval)
 	scrubber.Start(ctx)
 
-	// Connect to the metadata service and register this node.
-	metaClient, metaErr := metadata.Dial(*metaAddr)
-	if metaErr != nil {
-		logging.L.Warn("cannot connect to metadata service; node registration disabled",
-			zap.String("metaAddr", *metaAddr),
-			zap.Error(metaErr),
-		)
-	} else {
+	// Register this node with the metadata service.
+	if metaClient != nil {
 		defer metaClient.Close()
 		// Use the pod IP for gRPC registration so that other components
 		// (e.g. the CSI controller) can dial this agent via the pod network.
