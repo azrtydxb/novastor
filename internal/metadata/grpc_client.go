@@ -162,6 +162,14 @@ func (c *GRPCClient) ListPlacementMaps(ctx context.Context) ([]*PlacementMap, er
 	return pms, nil
 }
 
+// DeletePlacementMap removes a placement map entry by chunk ID.
+func (c *GRPCClient) DeletePlacementMap(ctx context.Context, chunkID string) error {
+	_, err := c.exec(ctx, "DeletePlacementMap", struct {
+		ChunkID string `json:"chunkID"`
+	}{ChunkID: chunkID})
+	return err
+}
+
 // ---- Object operations ----
 
 // PutObjectMeta stores object metadata via the remote metadata service.

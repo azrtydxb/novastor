@@ -62,6 +62,16 @@ func (m *mockSnapshotStore) ListVolumesMeta(_ context.Context) ([]*metadata.Volu
 	return result, nil
 }
 
+func (m *mockSnapshotStore) PutPlacementMap(_ context.Context, pm *metadata.PlacementMap) error {
+	// No-op for tests.
+	return nil
+}
+
+func (m *mockSnapshotStore) DeletePlacementMap(_ context.Context, chunkID string) error {
+	// No-op for tests.
+	return nil
+}
+
 func (m *mockSnapshotStore) PutSnapshotMeta(_ context.Context, meta *SnapshotMeta) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -51,6 +51,8 @@ func (s *GRPCServer) Execute(ctx context.Context, req *pb.MetadataRequest) (*pb.
 		return s.getPlacementMap(ctx, req.Payload)
 	case "ListPlacementMaps":
 		return s.listPlacementMaps(ctx)
+	case "DeletePlacementMap":
+		return s.deletePlacementMap(ctx, req.Payload)
 
 	// ---- Object operations ----
 	case "PutObjectMeta":
@@ -223,6 +225,19 @@ func (s *GRPCServer) listPlacementMaps(ctx context.Context) (*pb.MetadataRespons
 		return errResp(err), nil
 	}
 	return okResp(pms)
+}
+
+func (s *GRPCServer) deletePlacementMap(ctx context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args struct {
+		ChunkID string `json:"chunkID"`
+	}
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal args: %w", err)), nil
+	}
+	if err := s.store.DeletePlacementMap(ctx, args.ChunkID); err != nil {
+		return errResp(err), nil
+	}
+	return &pb.MetadataResponse{}, nil
 }
 
 // ---- Object operations ----
