@@ -160,3 +160,30 @@ func (p *ProtectionParams) IsErasureCoding() bool {
 func (p *ProtectionParams) IsReplication() bool {
 	return p.Config.Mode == metadata.ProtectionModeReplication
 }
+
+// toProtectionConfig converts ProtectionParams to the controller's internal protectionConfig.
+func (p *ProtectionParams) toProtectionConfig() protectionConfig {
+	cfg := protectionConfig{
+		replicas:     defaultReplicationFactor,
+		dataShards:   0,
+		parityShards: 0,
+	}
+
+	if p.Config == nil {
+		return cfg
+	}
+
+	switch p.Config.Mode {
+	case metadata.ProtectionModeErasureCoding:
+		if p.Config.ErasureCoding != nil {
+			cfg.dataShards = p.Config.ErasureCoding.DataShards
+			cfg.parityShards = p.Config.ErasureCoding.ParityShards
+		}
+	case metadata.ProtectionModeReplication:
+		if p.Config.Replication != nil {
+			cfg.replicas = p.Config.Replication.Factor
+		}
+	}
+
+	return cfg
+}

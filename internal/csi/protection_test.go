@@ -17,14 +17,14 @@ func TestParseProtectionParams(t *testing.T) {
 		{
 			name:       "nil params returns default",
 			params:     nil,
-			wantRepl:   1,
+			wantRepl:   3, // defaultReplicationFactor
 			wantData:   0,
 			wantParity: 0,
 		},
 		{
 			name:       "empty params returns default",
 			params:     map[string]string{},
-			wantRepl:   1,
+			wantRepl:   3, // defaultReplicationFactor
 			wantData:   0,
 			wantParity: 0,
 		},
@@ -43,7 +43,7 @@ func TestParseProtectionParams(t *testing.T) {
 				"dataShards":   "4",
 				"parityShards": "2",
 			},
-			wantRepl:   1,
+			wantRepl:   3, // defaultReplicationFactor is still used
 			wantData:   4,
 			wantParity: 2,
 		},
@@ -52,7 +52,7 @@ func TestParseProtectionParams(t *testing.T) {
 			params: map[string]string{
 				"replicas": "invalid",
 			},
-			wantRepl:   1,
+			wantRepl:   3, // defaultReplicationFactor
 			wantData:   0,
 			wantParity: 0,
 		},
@@ -61,7 +61,7 @@ func TestParseProtectionParams(t *testing.T) {
 			params: map[string]string{
 				"replicas": "-1",
 			},
-			wantRepl:   1,
+			wantRepl:   3, // defaultReplicationFactor
 			wantData:   0,
 			wantParity: 0,
 		},
@@ -70,7 +70,7 @@ func TestParseProtectionParams(t *testing.T) {
 			params: map[string]string{
 				"replicas": "0",
 			},
-			wantRepl:   1,
+			wantRepl:   3, // defaultReplicationFactor
 			wantData:   0,
 			wantParity: 0,
 		},
@@ -99,7 +99,7 @@ func TestProtectionConfig_toProtectionProfile(t *testing.T) {
 		want *metadata.ProtectionProfile
 	}{
 		{
-			name: "default config returns nil",
+			name: "single replica config returns nil",
 			cfg:  protectionConfig{replicas: 1, dataShards: 0, parityShards: 0},
 			want: nil,
 		},

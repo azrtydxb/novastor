@@ -16,34 +16,20 @@ import (
 	"github.com/piwi3910/novastor/internal/metrics"
 )
 
-// VolumeProtectionMode specifies the data protection mode for a volume.
-type VolumeProtectionMode string
+// Type aliases for backward compatibility and code clarity.
+// These types are fully defined in protection.go.
+type VolumeProtectionMode = ProtectionMode
 
-const (
-	// ProtectionModeReplication uses synchronous replication across multiple nodes.
-	ProtectionModeReplication VolumeProtectionMode = "replication"
-	// ProtectionModeErasureCoding uses Reed-Solomon erasure coding.
-	ProtectionModeErasureCoding VolumeProtectionMode = "erasure-coding"
-)
+// DataProtectionConfig is an alias for ProtectionProfile for code clarity.
+// In storage context, we talk about "data protection configuration"
+// while in metadata context we use "protection profile".
+type DataProtectionConfig = ProtectionProfile
 
-// DataProtectionConfig holds the data protection configuration for a volume.
-type DataProtectionConfig struct {
-	Mode          VolumeProtectionMode `json:"mode"`
-	Replication   *ReplicationConfig   `json:"replication,omitempty"`
-	ErasureCoding *ErasureCodingConfig `json:"erasureCoding,omitempty"`
-}
+// ReplicationConfig is an alias for ReplicationProfile.
+type ReplicationConfig = ReplicationProfile
 
-// ReplicationConfig holds replication-specific configuration.
-type ReplicationConfig struct {
-	Factor      int `json:"factor"`
-	WriteQuorum int `json:"writeQuorum"`
-}
-
-// ErasureCodingConfig holds erasure coding specific configuration.
-type ErasureCodingConfig struct {
-	DataShards   int `json:"dataShards"`
-	ParityShards int `json:"parityShards"`
-}
+// ErasureCodingConfig is an alias for ErasureCodingProfile.
+type ErasureCodingConfig = ErasureCodingProfile
 
 // VolumeMeta stores metadata about a provisioned volume.
 type VolumeMeta struct {
