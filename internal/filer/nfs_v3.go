@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/piwi3910/novastor/internal/logging"
+	"github.com/piwi3910/novastor/internal/metrics"
 )
 
 // NFS v3 protocol constants (RFC 1813).
@@ -122,6 +123,14 @@ func (n *nfsV3Handler) Version() uint32 { return nfsVersion }
 
 func (n *nfsV3Handler) HandleProc(proc uint32, _ uint32, payload []byte, _ net.Conn) ([]byte, error) {
 	ctx := context.Background()
+	start := time.Now()
+
+	// Map procedure ID to operation name for metrics.
+	opName := nfsProcName(proc)
+	defer func() {
+		metrics.NFSOpsTotal.WithLabelValues(opName).Inc()
+		metrics.NFSOpDuration.WithLabelValues(opName).Observe(time.Since(start).Seconds())
+	}()
 
 	switch proc {
 	case nfsProcNull:
@@ -171,6 +180,58 @@ func (n *nfsV3Handler) HandleProc(proc uint32, _ uint32, payload []byte, _ net.C
 	default:
 		logging.L.Warn("nfs: unknown procedure", zap.Uint32("proc", proc))
 		return nil, nil
+	}
+}
+
+// nfsProcName maps NFS procedure IDs to operation names for metrics.
+func nfsProcName(proc uint32) string {
+	switch proc {
+	case nfsProcNull:
+		return "null"
+	case nfsProcGetattr:
+		return "getattr"
+	case nfsProcSetattr:
+		return "setattr"
+	case nfsProcLookup:
+		return "lookup"
+	case nfsProcAccess:
+		return "access"
+	case nfsProcReadlink:
+		return "readlink"
+	case nfsProcRead:
+		return "read"
+	case nfsProcWrite:
+		return "write"
+	case nfsProcCreate:
+		return "create"
+	case nfsProcMkdir:
+		return "mkdir"
+	case nfsProcSymlink:
+		return "symlink"
+	case nfsProcMknod:
+		return "mknod"
+	case nfsProcRemove:
+		return "remove"
+	case nfsProcRmdir:
+		return "rmdir"
+	case nfsProcRename:
+		return "rename"
+	case nfsProcLink:
+		return "link"
+	case nfsProcReadDir:
+		return "readdir"
+	case nfsProcReadDirPlus:
+		return "readdirplus"
+	case nfsProcFsStat:
+		return "fsstat"
+	case nfsProcFsInfo:
+		return "fsinfo"
+	case nfsProcPathConf:
+		return "pathconf"
+	case nfsProcCommit:
+		return "commit"
+	default:
+		return "unknown"
 	}
 }
 
