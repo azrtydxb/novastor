@@ -1,0 +1,13 @@
+apiVersion: novastor.io/v1alpha1
+kind: StoragePool
+metadata:
+  name: test-pool
+spec:
+  nodeSelector:
+    matchLabels:
+      novastor.io/storage-tier: nvme
+  dataProtection:
+    mode: replication
+    replication:
+      factor: 3
+      writeQuorum: 2

@@ -1,0 +1,11 @@
+apiVersion: novastor.io/v1alpha1
+kind: SharedFilesystem
+metadata:
+  name: test-filesystem
+  namespace: novastor-test
+spec:
+  pool: test-pool
+  capacity: "50Gi"
+  accessMode: ReadWriteMany
+  export:
+    protocol: nfs
