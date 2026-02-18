@@ -143,3 +143,27 @@ func (s *KeyedEncryptedStore) Has(ctx context.Context, id ChunkID) (bool, error)
 func (s *KeyedEncryptedStore) List(ctx context.Context) ([]ChunkID, error) {
 	return s.inner.List(ctx)
 }
+
+// Stats delegates to the inner store if it implements CapacityStore.
+func (s *KeyedEncryptedStore) Stats(ctx context.Context) (*StoreStats, error) {
+	if cs, ok := s.inner.(CapacityStore); ok {
+		return cs.Stats(ctx)
+	}
+	return nil, fmt.Errorf("inner store does not support capacity stats")
+}
+
+// GetMeta delegates to the inner store if it implements ChunkMetaStore.
+func (s *KeyedEncryptedStore) GetMeta(ctx context.Context, id ChunkID) (*ChunkMeta, error) {
+	if cms, ok := s.inner.(ChunkMetaStore); ok {
+		return cms.GetMeta(ctx, id)
+	}
+	return nil, fmt.Errorf("inner store does not support metadata retrieval")
+}
+
+// HealthCheck delegates to the inner store if it implements HealthCheckStore.
+func (s *KeyedEncryptedStore) HealthCheck(ctx context.Context) error {
+	if hcs, ok := s.inner.(HealthCheckStore); ok {
+		return hcs.HealthCheck(ctx)
+	}
+	return fmt.Errorf("inner store does not support health checks")
+}

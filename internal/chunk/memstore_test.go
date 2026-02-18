@@ -2,27 +2,11 @@ package chunk
 
 import (
 	"context"
-	"os"
 	"testing"
 )
 
-func setupLocalStore(t *testing.T) (*LocalStore, func()) {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "novastor-chunk-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	store, err := NewLocalStore(dir)
-	if err != nil {
-		os.RemoveAll(dir)
-		t.Fatalf("failed to create local store: %v", err)
-	}
-	return store, func() { os.RemoveAll(dir) }
-}
-
-func TestLocalStore_PutGet(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_PutGet(t *testing.T) {
+	store := NewMemoryStore()
 	ctx := context.Background()
 	data := []byte("hello chunk world")
 	c := &Chunk{ID: NewChunkID(data), Data: data}
@@ -39,18 +23,16 @@ func TestLocalStore_PutGet(t *testing.T) {
 	}
 }
 
-func TestLocalStore_GetNotFound(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_GetNotFound(t *testing.T) {
+	store := NewMemoryStore()
 	_, err := store.Get(context.Background(), ChunkID("nonexistent"))
 	if err == nil {
 		t.Error("Get should fail for nonexistent chunk")
 	}
 }
 
-func TestLocalStore_Delete(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_Delete(t *testing.T) {
+	store := NewMemoryStore()
 	ctx := context.Background()
 	data := []byte("delete me")
 	c := &Chunk{ID: NewChunkID(data), Data: data}
@@ -65,17 +47,15 @@ func TestLocalStore_Delete(t *testing.T) {
 	}
 }
 
-func TestLocalStore_DeleteNonexistent(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_DeleteNonexistent(t *testing.T) {
+	store := NewMemoryStore()
 	if err := store.Delete(context.Background(), ChunkID("nonexistent")); err != nil {
 		t.Errorf("Delete nonexistent should not error, got: %v", err)
 	}
 }
 
-func TestLocalStore_Has(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_Has(t *testing.T) {
+	store := NewMemoryStore()
 	ctx := context.Background()
 	data := []byte("exists")
 	c := &Chunk{ID: NewChunkID(data), Data: data}
@@ -91,9 +71,8 @@ func TestLocalStore_Has(t *testing.T) {
 	}
 }
 
-func TestLocalStore_List(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_List(t *testing.T) {
+	store := NewMemoryStore()
 	ctx := context.Background()
 	ids, _ := store.List(ctx)
 	if len(ids) != 0 {
@@ -111,29 +90,31 @@ func TestLocalStore_List(t *testing.T) {
 	}
 }
 
-func TestLocalStore_ChecksumVerifiedOnGet(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_Close(t *testing.T) {
+	store := NewMemoryStore()
 	ctx := context.Background()
-	data := []byte("integrity check")
+	data := []byte("close test")
 	c := &Chunk{ID: NewChunkID(data), Data: data}
 	c.Checksum = c.ComputeChecksum()
 	_ = store.Put(ctx, c)
-	path := store.chunkPath(c.ID)
-	_ = os.WriteFile(path, []byte("corrupted"), 0o644)
-	_, err := store.Get(ctx, c.ID)
-	if err == nil {
-		t.Error("Get should fail on corrupted chunk")
+
+	if err := store.Close(); err != nil {
+		t.Errorf("Close failed: %v", err)
+	}
+
+	// After close, store should be empty.
+	ids, _ := store.List(ctx)
+	if len(ids) != 0 {
+		t.Errorf("List after Close = %d, want 0", len(ids))
 	}
 }
 
-func TestLocalStore_ImplementsCapacityStore(t *testing.T) {
-	var _ CapacityStore = &LocalStore{}
+func TestMemoryStore_ImplementsCapacityStore(t *testing.T) {
+	var _ CapacityStore = &MemoryStore{}
 }
 
-func TestLocalStore_Stats(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_Stats(t *testing.T) {
+	store := NewMemoryStore()
 	ctx := context.Background()
 
 	// Stats on empty store.
@@ -171,19 +152,17 @@ func TestLocalStore_Stats(t *testing.T) {
 	if stats.UsedBytes < 5*1024*1024 {
 		t.Errorf("UsedBytes = %d, want >= %d", stats.UsedBytes, 5*1024*1024)
 	}
-	// Available should be less than total after adding data.
-	if stats.AvailableBytes >= stats.TotalBytes {
-		t.Errorf("AvailableBytes = %d, TotalBytes = %d, want Available < Total", stats.AvailableBytes, stats.TotalBytes)
+	if stats.AvailableBytes != stats.TotalBytes-stats.UsedBytes {
+		t.Errorf("AvailableBytes = %d, TotalBytes-UsedBytes = %d", stats.AvailableBytes, stats.TotalBytes-stats.UsedBytes)
 	}
 }
 
-func TestLocalStore_ImplementsChunkMetaStore(t *testing.T) {
-	var _ ChunkMetaStore = &LocalStore{}
+func TestMemoryStore_ImplementsChunkMetaStore(t *testing.T) {
+	var _ ChunkMetaStore = &MemoryStore{}
 }
 
-func TestLocalStore_GetMeta(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_GetMeta(t *testing.T) {
+	store := NewMemoryStore()
 	ctx := context.Background()
 
 	data := []byte("test metadata without loading full chunk")
@@ -208,25 +187,71 @@ func TestLocalStore_GetMeta(t *testing.T) {
 	}
 }
 
-func TestLocalStore_GetMetaNotFound(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_GetMetaNotFound(t *testing.T) {
+	store := NewMemoryStore()
 	_, err := store.GetMeta(context.Background(), ChunkID("nonexistent"))
 	if err == nil {
 		t.Error("GetMeta should fail for nonexistent chunk")
 	}
 }
 
-func TestLocalStore_ImplementsHealthCheckStore(t *testing.T) {
-	var _ HealthCheckStore = &LocalStore{}
+func TestMemoryStore_ImplementsHealthCheckStore(t *testing.T) {
+	var _ HealthCheckStore = &MemoryStore{}
 }
 
-func TestLocalStore_HealthCheck(t *testing.T) {
-	store, cleanup := setupLocalStore(t)
-	defer cleanup()
+func TestMemoryStore_HealthCheck(t *testing.T) {
+	store := NewMemoryStore()
 	ctx := context.Background()
 
 	if err := store.HealthCheck(ctx); err != nil {
 		t.Errorf("HealthCheck failed: %v", err)
+	}
+}
+
+func TestMemoryStore_DeleteUpdatesStats(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+
+	// Add a chunk.
+	data := make([]byte, 1024*1024)
+	c := &Chunk{ID: NewChunkID(data), Data: data}
+	c.Checksum = c.ComputeChecksum()
+	_ = store.Put(ctx, c)
+
+	stats, _ := store.Stats(ctx)
+	if stats.UsedBytes == 0 {
+		t.Error("UsedBytes should be > 0 after Put")
+	}
+
+	// Delete the chunk.
+	_ = store.Delete(ctx, c.ID)
+
+	stats, _ = store.Stats(ctx)
+	if stats.UsedBytes != 0 {
+		t.Errorf("UsedBytes = %d, want 0 after Delete", stats.UsedBytes)
+	}
+}
+
+func TestMemoryStore_PutReplacesExisting(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+
+	data1 := make([]byte, 1024)
+	c1 := &Chunk{ID: "test-chunk", Data: data1}
+	c1.Checksum = c1.ComputeChecksum()
+	_ = store.Put(ctx, c1)
+
+	stats, _ := store.Stats(ctx)
+	usedAfterFirstPut := stats.UsedBytes
+
+	// Replace with larger data.
+	data2 := make([]byte, 2048)
+	c2 := &Chunk{ID: "test-chunk", Data: data2}
+	c2.Checksum = c2.ComputeChecksum()
+	_ = store.Put(ctx, c2)
+
+	stats, _ = store.Stats(ctx)
+	if stats.UsedBytes != usedAfterFirstPut+1024 {
+		t.Errorf("UsedBytes = %d, want %d (increase by size of new chunk)", stats.UsedBytes, usedAfterFirstPut+1024)
 	}
 }
