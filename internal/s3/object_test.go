@@ -16,7 +16,7 @@ func TestPutObject_Success(t *testing.T) {
 	body := []byte("hello, world!")
 
 	req := httptest.NewRequest(http.MethodPut, "/test-bucket/mykey", bytes.NewReader(body))
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 
 	g.ServeHTTP(w, req)
@@ -41,7 +41,7 @@ func TestGetObject_Success(t *testing.T) {
 
 	// Put the object first.
 	putReq := httptest.NewRequest(http.MethodPut, "/test-bucket/fox.txt", bytes.NewReader(body))
-	putReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(putReq, putReq.Method, putReq.URL.Path)
 	putReq.Header.Set("Content-Type", "text/plain")
 	putW := httptest.NewRecorder()
 	g.ServeHTTP(putW, putReq)
@@ -52,7 +52,7 @@ func TestGetObject_Success(t *testing.T) {
 
 	// Get the object.
 	getReq := httptest.NewRequest(http.MethodGet, "/test-bucket/fox.txt", nil)
-	getReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(getReq, getReq.Method, getReq.URL.Path)
 	getW := httptest.NewRecorder()
 	g.ServeHTTP(getW, getReq)
 
@@ -81,7 +81,7 @@ func TestGetObject_NotFound(t *testing.T) {
 	seedBucket(t, bs, "test-bucket")
 
 	req := httptest.NewRequest(http.MethodGet, "/test-bucket/nonexistent", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	g.ServeHTTP(w, req)
 
@@ -97,7 +97,7 @@ func TestHeadObject_Success(t *testing.T) {
 
 	// Put the object.
 	putReq := httptest.NewRequest(http.MethodPut, "/test-bucket/headkey", bytes.NewReader(body))
-	putReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(putReq, putReq.Method, putReq.URL.Path)
 	putW := httptest.NewRecorder()
 	g.ServeHTTP(putW, putReq)
 
@@ -107,7 +107,7 @@ func TestHeadObject_Success(t *testing.T) {
 
 	// Head the object.
 	headReq := httptest.NewRequest(http.MethodHead, "/test-bucket/headkey", nil)
-	headReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(headReq, headReq.Method, headReq.URL.Path)
 	headW := httptest.NewRecorder()
 	g.ServeHTTP(headW, headReq)
 
@@ -139,7 +139,7 @@ func TestDeleteObject_Success(t *testing.T) {
 
 	// Put the object.
 	putReq := httptest.NewRequest(http.MethodPut, "/test-bucket/delkey", bytes.NewReader(body))
-	putReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(putReq, putReq.Method, putReq.URL.Path)
 	putW := httptest.NewRecorder()
 	g.ServeHTTP(putW, putReq)
 
@@ -149,7 +149,7 @@ func TestDeleteObject_Success(t *testing.T) {
 
 	// Delete the object.
 	delReq := httptest.NewRequest(http.MethodDelete, "/test-bucket/delkey", nil)
-	delReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(delReq, delReq.Method, delReq.URL.Path)
 	delW := httptest.NewRecorder()
 	g.ServeHTTP(delW, delReq)
 
@@ -159,7 +159,7 @@ func TestDeleteObject_Success(t *testing.T) {
 
 	// Verify object is gone.
 	getReq := httptest.NewRequest(http.MethodGet, "/test-bucket/delkey", nil)
-	getReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(getReq, getReq.Method, getReq.URL.Path)
 	getW := httptest.NewRecorder()
 	g.ServeHTTP(getW, getReq)
 
@@ -174,7 +174,7 @@ func TestDeleteObject_NotFound(t *testing.T) {
 
 	// Delete a non-existent object -- should still return 204 (idempotent).
 	req := httptest.NewRequest(http.MethodDelete, "/test-bucket/ghost", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	g.ServeHTTP(w, req)
 

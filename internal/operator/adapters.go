@@ -86,8 +86,8 @@ func (a *MetadataPlacementAdapter) UpdatePlacement(ctx context.Context, chunkID 
 // the source agent node and writing it to the destination agent node
 // using the agent gRPC client.
 type GRPCChunkReplicator struct {
-	mu       sync.RWMutex
-	clients  map[string]*agent.Client
+	mu         sync.RWMutex
+	clients    map[string]*agent.Client
 	metaClient *metadata.GRPCClient
 }
 

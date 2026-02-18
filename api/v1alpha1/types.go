@@ -188,7 +188,7 @@ type ObjectServiceSpec struct {
 }
 
 type BucketPolicySpec struct {
-	MaxBuckets int    `json:"maxBuckets,omitempty"`
+	MaxBuckets int `json:"maxBuckets,omitempty"`
 	// +kubebuilder:validation:Enum=enabled;disabled;suspended
 	Versioning string `json:"versioning,omitempty"`
 }

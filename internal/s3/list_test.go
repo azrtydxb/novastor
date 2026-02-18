@@ -13,7 +13,7 @@ import (
 func putTestObject(t *testing.T, g *Gateway, bucket, key string, data []byte) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPut, "/"+bucket+"/"+key, bytes.NewReader(data))
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	g.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusOK {
@@ -39,7 +39,7 @@ func TestListObjectsV2_Basic(t *testing.T) {
 	putTestObject(t, g, "test-bucket", "file3.txt", []byte("three"))
 
 	req := httptest.NewRequest(http.MethodGet, "/test-bucket", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	g.ServeHTTP(w, req)
 
@@ -70,7 +70,7 @@ func TestListObjectsV2_WithPrefix(t *testing.T) {
 	putTestObject(t, g, "test-bucket", "images/logo.png", []byte("logo"))
 
 	req := httptest.NewRequest(http.MethodGet, "/test-bucket?prefix=docs/", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	g.ServeHTTP(w, req)
 
@@ -101,7 +101,7 @@ func TestListObjectsV2_WithDelimiter(t *testing.T) {
 	putTestObject(t, g, "test-bucket", "photos/top.jpg", []byte("top"))
 
 	req := httptest.NewRequest(http.MethodGet, "/test-bucket?prefix=photos/&delimiter=/", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	g.ServeHTTP(w, req)
 
@@ -142,7 +142,7 @@ func TestListObjectsV2_MaxKeys(t *testing.T) {
 	putTestObject(t, g, "test-bucket", "c.txt", []byte("c"))
 
 	req := httptest.NewRequest(http.MethodGet, "/test-bucket?max-keys=2", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	g.ServeHTTP(w, req)
 
@@ -168,7 +168,7 @@ func TestListObjectsV2_EmptyBucket(t *testing.T) {
 	seedBucket(t, bs, "test-bucket")
 
 	req := httptest.NewRequest(http.MethodGet, "/test-bucket", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	g.ServeHTTP(w, req)
 

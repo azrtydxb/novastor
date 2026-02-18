@@ -34,7 +34,7 @@ func TestGetPluginCapabilities(t *testing.T) {
 	}
 
 	expected := map[csi.PluginCapability_Service_Type]bool{
-		csi.PluginCapability_Service_CONTROLLER_SERVICE:              false,
+		csi.PluginCapability_Service_CONTROLLER_SERVICE:               false,
 		csi.PluginCapability_Service_VOLUME_ACCESSIBILITY_CONSTRAINTS: false,
 	}
 

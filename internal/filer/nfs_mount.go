@@ -14,21 +14,21 @@ const (
 	mountVersion uint32 = 3
 
 	// MOUNT v3 procedures.
-	mountProcNull   uint32 = 0
-	mountProcMnt    uint32 = 1
-	mountProcDump   uint32 = 2
-	mountProcUmnt   uint32 = 3
+	mountProcNull    uint32 = 0
+	mountProcMnt     uint32 = 1
+	mountProcDump    uint32 = 2
+	mountProcUmnt    uint32 = 3
 	mountProcUmntAll uint32 = 4
-	mountProcExport uint32 = 5
+	mountProcExport  uint32 = 5
 
 	// MOUNT v3 status codes.
-	mntOK          uint32 = 0
-	mntErrPerm     uint32 = 1
-	mntErrNoEnt    uint32 = 2
-	mntErrIO       uint32 = 5
-	mntErrAccess   uint32 = 13
-	mntErrNotDir   uint32 = 20
-	mntErrInval    uint32 = 22
+	mntOK        uint32 = 0
+	mntErrPerm   uint32 = 1
+	mntErrNoEnt  uint32 = 2
+	mntErrIO     uint32 = 5
+	mntErrAccess uint32 = 13
+	mntErrNotDir uint32 = 20
+	mntErrInval  uint32 = 22
 )
 
 // mountHandler implements the MOUNT v3 program.
@@ -93,7 +93,7 @@ func (m *mountHandler) handleMnt(payload []byte) ([]byte, error) {
 	// fhandle3: opaque file handle
 	w.writeOpaque(rootHandle)
 	// auth_flavors: list of supported auth flavors (just AUTH_NONE)
-	w.writeUint32(1)     // count
+	w.writeUint32(1)        // count
 	w.writeUint32(authNone) // AUTH_NONE
 
 	return w.Bytes(), nil

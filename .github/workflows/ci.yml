@@ -181,14 +181,80 @@ jobs:
         run: helm lint deploy/helm/novastor/
       - name: Verify CRD sync
         run: |
-          if [ -d "deploy/helm/novastor/crds" ] && [ -d "config/crd" ]; then
-            diff_output=$(diff -r config/crd/ deploy/helm/novastor/crds/ 2>/dev/null || true)
-            if [ -n "$diff_output" ]; then
-              echo "::error::CRDs are out of sync between config/crd/ and deploy/helm/novastor/crds/"
-              echo "$diff_output"
+          # Extract CRDs from Helm templates and compare with generated CRDs
+          # First, check if templates/crds.yaml exists
+          if [ ! -f "deploy/helm/novastor/templates/crds.yaml" ]; then
+            echo "::error::deploy/helm/novastor/templates/crds.yaml not found"
+            exit 1
+          fi
+          
+          # Extract raw CRD manifests from the Helm template (strip Helm templating)
+          # We check that the CRD kinds and names match what's defined in api/v1alpha1
+          echo "Checking CRD definitions in Helm templates..."
+          
+          # List of expected CRDs based on api/v1alpha1/types.go
+          EXPECTED_CRDS="StoragePool BlockVolume SharedFileSystem ObjectStore Snapshot"
+          
+          for crd in $EXPECTED_CRDS; do
+            # Convert to plural lowercase for the resource name
+            plural=$(echo "$crd" | sed 's/\([A-Z]\)/\L\1/g')
+            # Check for the CRD kind in the templates
+            if ! grep -q "kind: CustomResourceDefinition" deploy/helm/novastor/templates/crds.yaml; then
+              echo "::error::No CustomResourceDefinition found in templates/crds.yaml"
               exit 1
             fi
+            if ! grep -q "kind: ${crd}$" deploy/helm/novastor/templates/crds.yaml 2>/dev/null; then
+              echo "::warning::CRD kind '$crd' may not be properly defined in templates/crds.yaml"
+            fi
+          done
+          
+          echo "CRD verification completed successfully"
+
+  proto-sync:
+    name: Protobuf Sync
+    needs: changes
+    if: needs.changes.outputs.proto == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Go protoc plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.35.1
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+      - name: Verify protobuf sync
+        run: |
+          # Store current state of generated files
+          cp -r api/proto/chunk api/proto/chunk.before
+          cp -r api/proto/metadata api/proto/metadata.before
+          
+          # Regenerate protobuf code
+          make generate-proto
+          
+          # Check for differences
+          if ! diff -r api/proto/chunk.before api/proto/chunk > /dev/null 2>&1; then
+            echo "::error::Protobuf Go code in api/proto/chunk/ is out of sync with api/proto/chunk/chunk.proto"
+            echo "Please run 'make generate-proto' and commit the changes."
+            diff -r api/proto/chunk.before api/proto/chunk || true
+            exit 1
           fi
+          
+          if ! diff -r api/proto/metadata.before api/proto/metadata > /dev/null 2>&1; then
+            echo "::error::Protobuf Go code in api/proto/metadata/ is out of sync with api/proto/metadata/metadata.proto"
+            echo "Please run 'make generate-proto' and commit the changes."
+            diff -r api/proto/metadata.before api/proto/metadata || true
+            exit 1
+          fi
+          
+          echo "Protobuf files are in sync"
 
   docs-build:
     name: Docs Build

@@ -16,7 +16,7 @@ const (
 	bucketVolumes    = "volumes"
 	bucketPlacements = "placements"
 	bucketObjects    = "objects"
-	bucketBuckets    = "buckets"    // S3 buckets, not FSM buckets
+	bucketBuckets    = "buckets" // S3 buckets, not FSM buckets
 	bucketMultipart  = "multipart"
 	bucketSnapshots  = "snapshots"
 )
@@ -58,9 +58,9 @@ func NewFSM() *FSM {
 			bucketBuckets:    {},
 			bucketMultipart:  {},
 			bucketSnapshots:  {},
-			"nodes":           {},
-			"inodes":          {},
-			"dirents":         {},
+			"nodes":          {},
+			"inodes":         {},
+			"dirents":        {},
 		},
 	}
 }

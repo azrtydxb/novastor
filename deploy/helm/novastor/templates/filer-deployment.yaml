@@ -19,6 +19,10 @@ spec:
         app.kubernetes.io/component: filer
     spec:
       serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: filer
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.filer.image.repository }}:{{ include "novastor.imageTag" . }}"

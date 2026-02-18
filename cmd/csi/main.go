@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -264,6 +265,25 @@ func main() {
 	csi.RegisterControllerServer(srv, composite)
 
 	log.Printf("CSI driver listening on %s://%s", scheme, addr)
+
+	// Start a lightweight HTTP health server for Kubernetes probes.
+	healthMux := http.NewServeMux()
+	healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	healthServer := &http.Server{
+		Addr:         ":9808",
+		Handler:      healthMux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+	}
+	go func() {
+		log.Printf("CSI health server listening on :9808")
+		if err := healthServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("Health server error: %v", err)
+		}
+	}()
 
 	// Graceful shutdown on SIGTERM/SIGINT.
 	stop := make(chan os.Signal, 1)

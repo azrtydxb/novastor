@@ -486,7 +486,7 @@ func TestControllerGetCapabilities(t *testing.T) {
 	expected := map[csi.ControllerServiceCapability_RPC_Type]bool{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME:   false,
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT: false,
-		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME:         false,
+		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME:          false,
 	}
 
 	for _, cap := range resp.GetCapabilities() {

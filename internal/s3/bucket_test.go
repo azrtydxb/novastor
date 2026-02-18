@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -186,8 +188,116 @@ func newTestGateway() (*Gateway, *memBucketStore) {
 	return gw, bs
 }
 
+const testAmzDate = "20250101T000000Z"
+
 func authHeader() string {
-	return fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/20250101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=abc", testAccessKey)
+	return authHeaderForRequest("GET", "/", "host", "localhost", testAmzDate)
+}
+
+// setAuthHeaders sets all required authentication headers on the request
+// This should be used instead of manually setting Authorization header
+func setAuthHeaders(req *http.Request, method, path string) {
+	host := req.Host
+	if host == "" {
+		host = "localhost"
+	}
+	// Build canonical query string for signature
+	canonicalQueryString := buildTestCanonicalQueryString(req.URL.Query())
+	req.Header.Set("Authorization", authHeaderForRequestWithQuery(method, path, canonicalQueryString, "host", host, testAmzDate))
+	req.Header.Set("X-Amz-Date", testAmzDate)
+}
+
+// buildTestCanonicalQueryString builds a canonical query string for testing
+func buildTestCanonicalQueryString(query url.Values) string {
+	if len(query) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(query))
+	for k := range query {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		values := query[k]
+		sort.Strings(values)
+		for _, v := range values {
+			parts = append(parts, url.QueryEscape(k)+"="+url.QueryEscape(v))
+		}
+	}
+	return strings.Join(parts, "&")
+}
+
+// authHeaderForRequestWithQuery generates a valid SigV4 Authorization header with query string
+func authHeaderForRequestWithQuery(method, path, queryString, signedHeaders, host, amzDate string) string {
+	dateStamp := amzDate[:8]
+	credential := fmt.Sprintf("%s/%s/us-east-1/s3/aws4_request", testAccessKey, dateStamp)
+
+	// Build canonical request - must match buildCanonicalRequest format exactly
+	canonicalRequest := method + "\n" +
+		path + "\n" +
+		queryString + "\n" +
+		"host:" + host + "\n" +
+		"\n" +
+		signedHeaders + "\n" +
+		"UNSIGNED-PAYLOAD"
+
+	// Build string to sign
+	canonicalRequestHash := sha256Hex([]byte(canonicalRequest))
+	stringToSign := "AWS4-HMAC-SHA256\n" +
+		amzDate + "\n" +
+		dateStamp + "/us-east-1/s3/aws4_request\n" +
+		canonicalRequestHash
+
+	// Derive signing key
+	signingKey := deriveSigningKey(testSecretKey, dateStamp, "us-east-1", "s3")
+
+	// Compute signature
+	signature := hmacSHA256Hex(signingKey, []byte(stringToSign))
+
+	return fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s, SignedHeaders=%s, Signature=%s",
+		credential, signedHeaders, signature)
+}
+
+// authHeaderForRequest generates a valid SigV4 Authorization header for testing
+// The canonical request format must match buildCanonicalRequest in auth.go:
+//
+//	Method + "\n" +
+//	Path + "\n" +
+//	QueryString + "\n" +
+//	CanonicalHeaders + "\n" +
+//	SignedHeaders + "\n" +
+//	PayloadHash
+func authHeaderForRequest(method, path, signedHeaders, host, amzDate string) string {
+	dateStamp := amzDate[:8]
+	credential := fmt.Sprintf("%s/%s/us-east-1/s3/aws4_request", testAccessKey, dateStamp)
+
+	// Build canonical request - must match buildCanonicalRequest format exactly
+	// Format: method\npath\nquery\nheaders\nsignedHeaders\npayloadHash
+	// Note: buildCanonicalRequest adds each component with \n, including empty query string
+	canonicalRequest := method + "\n" +
+		path + "\n" +
+		"" + "\n" + // query string (empty, but still has \n)
+		"host:" + host + "\n" + // canonical headers
+		"\n" + // blank line after headers
+		signedHeaders + "\n" +
+		"UNSIGNED-PAYLOAD"
+
+	// Build string to sign
+	canonicalRequestHash := sha256Hex([]byte(canonicalRequest))
+	stringToSign := "AWS4-HMAC-SHA256\n" +
+		amzDate + "\n" +
+		dateStamp + "/us-east-1/s3/aws4_request\n" +
+		canonicalRequestHash
+
+	// Derive signing key
+	signingKey := deriveSigningKey(testSecretKey, dateStamp, "us-east-1", "s3")
+
+	// Compute signature
+	signature := hmacSHA256Hex(signingKey, []byte(stringToSign))
+
+	return fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s, SignedHeaders=%s, Signature=%s",
+		credential, signedHeaders, signature)
 }
 
 // seedBucket is a helper that creates a bucket in the store for testing.
@@ -202,7 +312,7 @@ func TestCreateBucket_Success(t *testing.T) {
 	gw, _ := newTestGateway()
 
 	req := httptest.NewRequest(http.MethodPut, "/my-bucket", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	gw.ServeHTTP(w, req)
 
@@ -221,7 +331,7 @@ func TestCreateBucket_AlreadyExists(t *testing.T) {
 	bs.PutBucket(context.Background(), &BucketInfo{Name: "existing", CreationDate: 1000, Owner: testAccessKey})
 
 	req := httptest.NewRequest(http.MethodPut, "/existing", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	gw.ServeHTTP(w, req)
 
@@ -240,7 +350,7 @@ func TestDeleteBucket_Success(t *testing.T) {
 	bs.PutBucket(context.Background(), &BucketInfo{Name: "to-delete", CreationDate: 1000, Owner: testAccessKey})
 
 	req := httptest.NewRequest(http.MethodDelete, "/to-delete", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	gw.ServeHTTP(w, req)
 
@@ -253,7 +363,7 @@ func TestDeleteBucket_NotFound(t *testing.T) {
 	gw, _ := newTestGateway()
 
 	req := httptest.NewRequest(http.MethodDelete, "/nonexistent", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	gw.ServeHTTP(w, req)
 
@@ -273,7 +383,7 @@ func TestListBuckets(t *testing.T) {
 	bs.PutBucket(context.Background(), &BucketInfo{Name: "bravo", CreationDate: 1700000100, Owner: testAccessKey})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	gw.ServeHTTP(w, req)
 
@@ -301,7 +411,7 @@ func TestHeadBucket_Exists(t *testing.T) {
 	bs.PutBucket(context.Background(), &BucketInfo{Name: "exists", CreationDate: 1000, Owner: testAccessKey})
 
 	req := httptest.NewRequest(http.MethodHead, "/exists", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	gw.ServeHTTP(w, req)
 
@@ -314,7 +424,7 @@ func TestHeadBucket_NotFound(t *testing.T) {
 	gw, _ := newTestGateway()
 
 	req := httptest.NewRequest(http.MethodHead, "/nope", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	gw.ServeHTTP(w, req)
 

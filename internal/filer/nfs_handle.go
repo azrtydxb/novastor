@@ -15,8 +15,8 @@ const nfsHandleSize = 32
 // a generation counter, and random bytes for security.
 type handleManager struct {
 	mu         sync.RWMutex
-	byIno      map[uint64][]byte   // inode -> handle bytes
-	byHandle   map[string]uint64   // hex(handle) -> inode
+	byIno      map[uint64][]byte // inode -> handle bytes
+	byHandle   map[string]uint64 // hex(handle) -> inode
 	generation uint64
 }
 

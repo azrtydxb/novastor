@@ -11,17 +11,17 @@ import (
 // --- XML types for ListObjectsV2 ---
 
 type listBucketResult struct {
-	XMLName               xml.Name         `xml:"ListBucketResult"`
-	Name                  string           `xml:"Name"`
-	Prefix                string           `xml:"Prefix"`
-	Delimiter             string           `xml:"Delimiter,omitempty"`
-	MaxKeys               int              `xml:"MaxKeys"`
-	IsTruncated           bool             `xml:"IsTruncated"`
-	ContinuationToken     string           `xml:"ContinuationToken,omitempty"`
-	NextContinuationToken string           `xml:"NextContinuationToken,omitempty"`
-	KeyCount              int              `xml:"KeyCount"`
-	Contents              []listObject     `xml:"Contents,omitempty"`
-	CommonPrefixes        []commonPrefix   `xml:"CommonPrefixes,omitempty"`
+	XMLName               xml.Name       `xml:"ListBucketResult"`
+	Name                  string         `xml:"Name"`
+	Prefix                string         `xml:"Prefix"`
+	Delimiter             string         `xml:"Delimiter,omitempty"`
+	MaxKeys               int            `xml:"MaxKeys"`
+	IsTruncated           bool           `xml:"IsTruncated"`
+	ContinuationToken     string         `xml:"ContinuationToken,omitempty"`
+	NextContinuationToken string         `xml:"NextContinuationToken,omitempty"`
+	KeyCount              int            `xml:"KeyCount"`
+	Contents              []listObject   `xml:"Contents,omitempty"`
+	CommonPrefixes        []commonPrefix `xml:"CommonPrefixes,omitempty"`
 }
 
 type listObject struct {

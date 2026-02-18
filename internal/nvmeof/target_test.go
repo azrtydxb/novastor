@@ -19,9 +19,9 @@ type memoryDirEntry struct {
 }
 
 func (e memoryDirEntry) Name() string               { return e.name }
-func (e memoryDirEntry) IsDir() bool                 { return e.isDir }
-func (e memoryDirEntry) Type() fs.FileMode           { return 0 }
-func (e memoryDirEntry) Info() (fs.FileInfo, error)  { return nil, nil }
+func (e memoryDirEntry) IsDir() bool                { return e.isDir }
+func (e memoryDirEntry) Type() fs.FileMode          { return 0 }
+func (e memoryDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
 
 // call records a single ConfigFS operation for verification.
 type call struct {

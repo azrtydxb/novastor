@@ -19,6 +19,10 @@ spec:
         app.kubernetes.io/component: s3gw
     spec:
       serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: s3gw
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.s3gw.image.repository }}:{{ include "novastor.imageTag" . }}"
@@ -43,13 +47,13 @@ spec:
               protocol: TCP
           livenessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: s3
             initialDelaySeconds: 15
             periodSeconds: 20
           readinessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: s3
             initialDelaySeconds: 5
             periodSeconds: 10

@@ -19,6 +19,10 @@ spec:
         app.kubernetes.io/component: csi-controller
     spec:
       serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: csi-plugin
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.csi.controller.image.repository }}:{{ include "novastor.imageTag" . }}"
@@ -26,20 +30,20 @@ spec:
           args:
             - --endpoint=unix:///csi/csi.sock
             - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+          ports:
+            - name: healthz
+              containerPort: 9808
+              protocol: TCP
           livenessProbe:
-            exec:
-              command:
-                - test
-                - -S
-                - /csi/csi.sock
+            httpGet:
+              path: /healthz
+              port: healthz
             initialDelaySeconds: 15
             periodSeconds: 20
           readinessProbe:
-            exec:
-              command:
-                - test
-                - -S
-                - /csi/csi.sock
+            httpGet:
+              path: /healthz
+              port: healthz
             initialDelaySeconds: 5
             periodSeconds: 10
           volumeMounts:

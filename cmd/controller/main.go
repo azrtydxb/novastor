@@ -39,10 +39,10 @@ func init() {
 // recoveryRunnable wraps the recovery loop as a controller-runtime Runnable
 // so it participates in the manager's lifecycle and graceful shutdown.
 type recoveryRunnable struct {
-	metaClient   *metadata.GRPCClient
-	recovery     *operator.RecoveryManager
-	replicator   *operator.GRPCChunkReplicator
-	healthChecker *operator.GRPCHealthChecker
+	metaClient       *metadata.GRPCClient
+	recovery         *operator.RecoveryManager
+	replicator       *operator.GRPCChunkReplicator
+	healthChecker    *operator.GRPCHealthChecker
 	heartbeatTimeout time.Duration
 }
 
