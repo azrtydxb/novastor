@@ -2,13 +2,23 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/piwi3910/novastor/internal/metadata"
 	"github.com/spf13/cobra"
 )
+
+// jsonVolume represents a volume in JSON output format.
+type jsonVolume struct {
+	VolumeID  string   `json:"volumeId"`
+	Pool      string   `json:"pool"`
+	SizeBytes uint64   `json:"sizeBytes"`
+	ChunkIDs  []string `json:"chunkIds"`
+}
 
 var volumeCmd = &cobra.Command{
 	Use:     "volume",
@@ -33,12 +43,16 @@ var volumeListCmd = &cobra.Command{
 		}
 
 		if len(volumes) == 0 {
+			if output == "json" {
+				return json.NewEncoder(os.Stdout).Encode([]jsonVolume{})
+			}
 			fmt.Println("No volumes found.")
 			return nil
 		}
 
 		headers := []string{"VOLUME ID", "POOL", "SIZE (BYTES)", "CHUNKS"}
 		var rows [][]string
+		var jsonVols []jsonVolume
 		for _, v := range volumes {
 			rows = append(rows, []string{
 				v.VolumeID,
@@ -46,8 +60,14 @@ var volumeListCmd = &cobra.Command{
 				strconv.FormatUint(v.SizeBytes, 10),
 				strconv.Itoa(len(v.ChunkIDs)),
 			})
+			jsonVols = append(jsonVols, jsonVolume{
+				VolumeID:  v.VolumeID,
+				Pool:      v.Pool,
+				SizeBytes: v.SizeBytes,
+				ChunkIDs:  v.ChunkIDs,
+			})
 		}
-		printTable(headers, rows)
+		printTableOrJSON(headers, rows, jsonVols)
 		return nil
 	},
 }

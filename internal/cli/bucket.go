@@ -2,12 +2,21 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/piwi3910/novastor/internal/metadata"
 	"github.com/spf13/cobra"
 )
+
+// jsonBucket represents an S3 bucket in JSON output format.
+type jsonBucket struct {
+	Name    string `json:"name"`
+	Owner   string `json:"owner"`
+	Created string `json:"created"`
+}
 
 var bucketCmd = &cobra.Command{
 	Use:   "bucket",
@@ -30,13 +39,27 @@ var bucketListCmd = &cobra.Command{
 			return fmt.Errorf("listing buckets: %w", err)
 		}
 
+		if len(buckets) == 0 {
+			if output == "json" {
+				return json.NewEncoder(os.Stdout).Encode([]jsonBucket{})
+			}
+			fmt.Println("No buckets found.")
+			return nil
+		}
+
 		headers := []string{"NAME", "OWNER", "CREATED"}
 		var rows [][]string
+		var jsonBuckets []jsonBucket
 		for _, b := range buckets {
 			created := time.Unix(0, b.CreationDate).UTC().Format("2006-01-02T15:04:05Z")
 			rows = append(rows, []string{b.Name, b.Owner, created})
+			jsonBuckets = append(jsonBuckets, jsonBucket{
+				Name:    b.Name,
+				Owner:   b.Owner,
+				Created: created,
+			})
 		}
-		printTable(headers, rows)
+		printTableOrJSON(headers, rows, jsonBuckets)
 		return nil
 	},
 }

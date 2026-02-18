@@ -2,12 +2,25 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
 )
+
+// jsonNode represents a storage node in JSON output format.
+type jsonNode struct {
+	NodeID            string `json:"nodeId"`
+	Address           string `json:"address"`
+	Status            string `json:"status"`
+	DiskCount         int    `json:"diskCount"`
+	TotalCapacity     int64  `json:"totalCapacity"`
+	AvailableCapacity int64  `json:"availableCapacity"`
+	LastHeartbeat     string `json:"lastHeartbeat"`
+}
 
 var nodeCmd = &cobra.Command{
 	Use:   "node",
@@ -31,12 +44,16 @@ var nodeListCmd = &cobra.Command{
 		}
 
 		if len(nodes) == 0 {
+			if output == "json" {
+				return json.NewEncoder(os.Stdout).Encode([]jsonNode{})
+			}
 			fmt.Println("No storage nodes registered.")
 			return nil
 		}
 
 		headers := []string{"NODE ID", "ADDRESS", "STATUS", "DISKS", "TOTAL", "AVAILABLE", "LAST HEARTBEAT"}
 		var rows [][]string
+		var jsonNodes []jsonNode
 		for _, n := range nodes {
 			heartbeat := "never"
 			if n.LastHeartbeat > 0 {
@@ -51,8 +68,17 @@ var nodeListCmd = &cobra.Command{
 				formatBytes(n.AvailableCapacity),
 				heartbeat,
 			})
+			jsonNodes = append(jsonNodes, jsonNode{
+				NodeID:            n.NodeID,
+				Address:           n.Address,
+				Status:            n.Status,
+				DiskCount:         n.DiskCount,
+				TotalCapacity:     n.TotalCapacity,
+				AvailableCapacity: n.AvailableCapacity,
+				LastHeartbeat:     heartbeat,
+			})
 		}
-		printTable(headers, rows)
+		printTableOrJSON(headers, rows, jsonNodes)
 		return nil
 	},
 }

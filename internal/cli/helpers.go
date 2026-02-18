@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -25,6 +26,21 @@ func printTable(headers []string, rows [][]string) {
 		fmt.Fprintln(w, strings.Join(row, "\t"))
 	}
 	w.Flush()
+}
+
+// printTableOrJSON prints a table or JSON output based on the output flag.
+// For JSON, the data should be a slice of maps with keys matching the headers.
+func printTableOrJSON(headers []string, rows [][]string, jsonData any) {
+	if output == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(jsonData); err != nil {
+			fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	printTable(headers, rows)
 }
 
 // formatBytes converts a byte count into a human-readable string using

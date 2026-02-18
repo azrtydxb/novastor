@@ -2,10 +2,25 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 )
+
+// jsonStatus represents the cluster status in JSON output format.
+type jsonStatus struct {
+	MetadataEndpoint  string `json:"metadataEndpoint"`
+	Nodes             int    `json:"nodes"`
+	ReadyNodes        int    `json:"readyNodes"`
+	Volumes           int    `json:"volumes"`
+	Snapshots         int    `json:"snapshots"`
+	Buckets           int    `json:"buckets"`
+	TotalCapacity     int64  `json:"totalCapacity"`
+	AvailableCapacity int64  `json:"availableCapacity"`
+	Health            string `json:"health"`
+}
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
@@ -47,6 +62,23 @@ var statusCmd = &cobra.Command{
 			}
 			totalCap += n.TotalCapacity
 			availCap += n.AvailableCapacity
+		}
+
+		if output == "json" {
+			status := jsonStatus{
+				MetadataEndpoint:  metaAddr,
+				Nodes:             len(nodes),
+				ReadyNodes:        readyNodes,
+				Volumes:           len(volumes),
+				Snapshots:         len(snapshots),
+				Buckets:           len(buckets),
+				TotalCapacity:     totalCap,
+				AvailableCapacity: availCap,
+				Health:            "OK",
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(status)
 		}
 
 		fmt.Println("=== NovaStor Cluster Status ===")
