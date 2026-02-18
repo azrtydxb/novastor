@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	pb "github.com/piwi3910/novastor/api/proto/metadata"
+	"github.com/piwi3910/novastor/internal/metrics"
 	"google.golang.org/grpc"
 )
 
@@ -30,6 +31,8 @@ func (s *GRPCServer) Register(srv *grpc.Server) {
 
 // Execute dispatches a metadata operation to the underlying RaftStore.
 func (s *GRPCServer) Execute(ctx context.Context, req *pb.MetadataRequest) (*pb.MetadataResponse, error) {
+	metrics.MetadataOpsTotal.WithLabelValues(req.Operation).Inc()
+
 	switch req.Operation {
 	// ---- Volume operations ----
 	case "PutVolumeMeta":

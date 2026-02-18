@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/piwi3910/novastor/internal/metrics"
 )
 
 type LocalStore struct {
@@ -39,6 +41,8 @@ func (s *LocalStore) Put(_ context.Context, c *Chunk) error {
 	if err := os.WriteFile(path, buf, 0o644); err != nil {
 		return fmt.Errorf("writing chunk %s: %w", c.ID, err)
 	}
+	metrics.ChunkOpsTotal.WithLabelValues("write").Inc()
+	metrics.ChunkBytesTotal.WithLabelValues("write").Add(float64(len(c.Data)))
 	return nil
 }
 
@@ -60,6 +64,8 @@ func (s *LocalStore) Get(_ context.Context, id ChunkID) (*Chunk, error) {
 	if err := c.VerifyChecksum(); err != nil {
 		return nil, fmt.Errorf("chunk %s integrity check failed: %w", id, err)
 	}
+	metrics.ChunkOpsTotal.WithLabelValues("read").Inc()
+	metrics.ChunkBytesTotal.WithLabelValues("read").Add(float64(len(data)))
 	return c, nil
 }
 
@@ -69,6 +75,7 @@ func (s *LocalStore) Delete(_ context.Context, id ChunkID) error {
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("deleting chunk %s: %w", id, err)
 	}
+	metrics.ChunkOpsTotal.WithLabelValues("delete").Inc()
 	return nil
 }
 
