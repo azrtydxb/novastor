@@ -29,6 +29,13 @@ func NewGateway(buckets BucketStore, objects ObjectStore, chunks ChunkStore, mul
 
 // ServeHTTP dispatches incoming requests to the appropriate S3 handler.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Health check endpoint — bypasses authentication for Kubernetes probes.
+	if r.URL.Path == "/healthz" {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+		return
+	}
+
 	// Parse path-style bucket and key from the URL path.
 	bucket, key := parsePath(r.URL.Path)
 

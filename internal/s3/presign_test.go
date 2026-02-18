@@ -44,7 +44,7 @@ func TestPresignedURL_Access(t *testing.T) {
 	// First, put an object via the normal authenticated path.
 	body := []byte("presigned test content")
 	putReq := httptest.NewRequest(http.MethodPut, "/test-bucket/presigned-key", bytes.NewReader(body))
-	putReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(putReq, putReq.Method, putReq.URL.Path)
 	putW := httptest.NewRecorder()
 	gw.ServeHTTP(putW, putReq)
 
@@ -92,7 +92,7 @@ func TestPresignedURL_Expired(t *testing.T) {
 
 	// Put an object.
 	putReq := httptest.NewRequest(http.MethodPut, "/test-bucket/expiring", bytes.NewReader([]byte("data")))
-	putReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(putReq, putReq.Method, putReq.URL.Path)
 	putW := httptest.NewRecorder()
 	gw.ServeHTTP(putW, putReq)
 

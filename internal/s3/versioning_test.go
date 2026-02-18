@@ -14,7 +14,7 @@ func TestPutBucketVersioning_Enable(t *testing.T) {
 
 	body := `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`
 	req := httptest.NewRequest(http.MethodPut, "/ver-bucket?versioning", bytes.NewReader([]byte(body)))
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 
 	gw.handlePutBucketVersioning(w, req, "ver-bucket")
@@ -40,13 +40,13 @@ func TestGetBucketVersioning(t *testing.T) {
 	// Enable versioning first.
 	enableBody := `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`
 	enableReq := httptest.NewRequest(http.MethodPut, "/ver-bucket?versioning", bytes.NewReader([]byte(enableBody)))
-	enableReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(enableReq, enableReq.Method, enableReq.URL.Path)
 	enableW := httptest.NewRecorder()
 	gw.handlePutBucketVersioning(enableW, enableReq, "ver-bucket")
 
 	// Now get versioning status.
 	getReq := httptest.NewRequest(http.MethodGet, "/ver-bucket?versioning", nil)
-	getReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(getReq, getReq.Method, getReq.URL.Path)
 	getW := httptest.NewRecorder()
 	gw.handleGetBucketVersioning(getW, getReq, "ver-bucket")
 
@@ -72,7 +72,7 @@ func TestVersionedPutAndGet(t *testing.T) {
 	// Put two versions of the same object.
 	body1 := []byte("version 1 content")
 	req1 := httptest.NewRequest(http.MethodPut, "/ver-bucket/myobj", bytes.NewReader(body1))
-	req1.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req1, req1.Method, req1.URL.Path)
 	w1 := httptest.NewRecorder()
 	gw.handlePutObjectVersioned(w1, req1, "ver-bucket", "myobj", vs)
 
@@ -86,7 +86,7 @@ func TestVersionedPutAndGet(t *testing.T) {
 
 	body2 := []byte("version 2 content")
 	req2 := httptest.NewRequest(http.MethodPut, "/ver-bucket/myobj", bytes.NewReader(body2))
-	req2.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req2, req2.Method, req2.URL.Path)
 	w2 := httptest.NewRecorder()
 	gw.handlePutObjectVersioned(w2, req2, "ver-bucket", "myobj", vs)
 
@@ -103,7 +103,7 @@ func TestVersionedPutAndGet(t *testing.T) {
 
 	// Get the first version by versionId.
 	getReq := httptest.NewRequest(http.MethodGet, "/ver-bucket/myobj?versionId="+versionID1, nil)
-	getReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(getReq, getReq.Method, getReq.URL.Path)
 	getW := httptest.NewRecorder()
 	gw.handleGetObjectVersioned(getW, getReq, "ver-bucket", "myobj", versionID1, vs)
 

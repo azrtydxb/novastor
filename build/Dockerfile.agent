@@ -3,7 +3,7 @@
 # ============================================================
 # Build stage
 # ============================================================
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 LABEL stage=builder
 
@@ -25,8 +25,8 @@ ARG COMMIT=none
 ARG BUILD_DATE=unknown
 
 # Compile a fully static binary with version metadata injected via ldflags.
-# GOTOOLCHAIN=local prevents Go from attempting to download toolchain 1.25.
-RUN GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+ARG TARGETARCH=arm64
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build \
       -trimpath \
       -ldflags="-s -w \

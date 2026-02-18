@@ -19,13 +19,18 @@ spec:
         app.kubernetes.io/component: controller
     spec:
       serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: controller
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.controller.image.repository }}:{{ include "novastor.imageTag" . }}"
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           args:
-            - --metrics-addr=:8080
-            - --health-probe-addr=:8081
+            - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
             {{- if .Values.controller.leaderElect }}
             - --leader-elect
             {{- end }}

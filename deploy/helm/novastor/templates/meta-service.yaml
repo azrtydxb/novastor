@@ -10,9 +10,17 @@ spec:
   type: ClusterIP
   clusterIP: None
   ports:
-    - name: grpc
+    - name: raft
       port: 7000
+      targetPort: raft
+      protocol: TCP
+    - name: grpc
+      port: 7001
       targetPort: grpc
+      protocol: TCP
+    - name: metrics
+      port: 7002
+      targetPort: metrics
       protocol: TCP
   selector:
     {{- include "novastor.selectorLabels" . | nindent 4 }}
@@ -32,6 +40,10 @@ spec:
     - name: grpc
       port: 7000
       targetPort: grpc
+      protocol: TCP
+    - name: metrics
+      port: 7002
+      targetPort: metrics
       protocol: TCP
   selector:
     {{- include "novastor.selectorLabels" . | nindent 4 }}

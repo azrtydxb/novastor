@@ -14,7 +14,7 @@ func TestCreateMultipartUpload_Success(t *testing.T) {
 	seedBucket(t, bs, "test-bucket")
 
 	req := httptest.NewRequest(http.MethodPost, "/test-bucket/bigfile.bin?uploads", nil)
-	req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(req, req.Method, req.URL.Path)
 	w := httptest.NewRecorder()
 	g.ServeHTTP(w, req)
 
@@ -52,7 +52,7 @@ func TestUploadPart_Success(t *testing.T) {
 
 	// Create multipart upload.
 	createReq := httptest.NewRequest(http.MethodPost, "/test-bucket/parts.bin?uploads", nil)
-	createReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(createReq, createReq.Method, createReq.URL.Path)
 	createW := httptest.NewRecorder()
 	g.ServeHTTP(createW, createReq)
 
@@ -66,7 +66,7 @@ func TestUploadPart_Success(t *testing.T) {
 	// Upload part 1.
 	partData := []byte("part one data here")
 	partReq := httptest.NewRequest(http.MethodPut, "/test-bucket/parts.bin?partNumber=1&uploadId="+uploadID, bytes.NewReader(partData))
-	partReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(partReq, partReq.Method, partReq.URL.Path)
 	partW := httptest.NewRecorder()
 	g.ServeHTTP(partW, partReq)
 
@@ -88,7 +88,7 @@ func TestCompleteMultipartUpload_Success(t *testing.T) {
 
 	// Step 1: Create multipart upload.
 	createReq := httptest.NewRequest(http.MethodPost, "/test-bucket/assembled.bin?uploads", nil)
-	createReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(createReq, createReq.Method, createReq.URL.Path)
 	createW := httptest.NewRecorder()
 	g.ServeHTTP(createW, createReq)
 
@@ -102,7 +102,7 @@ func TestCompleteMultipartUpload_Success(t *testing.T) {
 	// Step 2: Upload part 1.
 	part1Data := []byte("aaaa-part-one-data")
 	part1Req := httptest.NewRequest(http.MethodPut, "/test-bucket/assembled.bin?partNumber=1&uploadId="+uploadID, bytes.NewReader(part1Data))
-	part1Req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(part1Req, part1Req.Method, part1Req.URL.Path)
 	part1W := httptest.NewRecorder()
 	g.ServeHTTP(part1W, part1Req)
 
@@ -113,7 +113,7 @@ func TestCompleteMultipartUpload_Success(t *testing.T) {
 	// Step 3: Upload part 2.
 	part2Data := []byte("bbbb-part-two-data")
 	part2Req := httptest.NewRequest(http.MethodPut, "/test-bucket/assembled.bin?partNumber=2&uploadId="+uploadID, bytes.NewReader(part2Data))
-	part2Req.Header.Set("Authorization", authHeader())
+	setAuthHeaders(part2Req, part2Req.Method, part2Req.URL.Path)
 	part2W := httptest.NewRecorder()
 	g.ServeHTTP(part2W, part2Req)
 
@@ -123,7 +123,7 @@ func TestCompleteMultipartUpload_Success(t *testing.T) {
 
 	// Step 4: Complete multipart upload.
 	completeReq := httptest.NewRequest(http.MethodPost, "/test-bucket/assembled.bin?uploadId="+uploadID, nil)
-	completeReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(completeReq, completeReq.Method, completeReq.URL.Path)
 	completeW := httptest.NewRecorder()
 	g.ServeHTTP(completeW, completeReq)
 
@@ -150,7 +150,7 @@ func TestCompleteMultipartUpload_Success(t *testing.T) {
 
 	// Verify the object exists and contains both parts' data.
 	getReq := httptest.NewRequest(http.MethodGet, "/test-bucket/assembled.bin", nil)
-	getReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(getReq, getReq.Method, getReq.URL.Path)
 	getW := httptest.NewRecorder()
 	g.ServeHTTP(getW, getReq)
 
@@ -174,7 +174,7 @@ func TestAbortMultipartUpload_Success(t *testing.T) {
 
 	// Create multipart upload.
 	createReq := httptest.NewRequest(http.MethodPost, "/test-bucket/aborted.bin?uploads", nil)
-	createReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(createReq, createReq.Method, createReq.URL.Path)
 	createW := httptest.NewRecorder()
 	g.ServeHTTP(createW, createReq)
 
@@ -187,7 +187,7 @@ func TestAbortMultipartUpload_Success(t *testing.T) {
 
 	// Abort the upload.
 	abortReq := httptest.NewRequest(http.MethodDelete, "/test-bucket/aborted.bin?uploadId="+uploadID, nil)
-	abortReq.Header.Set("Authorization", authHeader())
+	setAuthHeaders(abortReq, abortReq.Method, abortReq.URL.Path)
 	abortW := httptest.NewRecorder()
 	g.ServeHTTP(abortW, abortReq)
 

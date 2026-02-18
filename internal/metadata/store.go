@@ -48,6 +48,10 @@ type RaftConfig struct {
 	// JoinAddrs is a comma-separated list of existing Raft peer addresses to join.
 	// When empty, the node bootstraps as a single-node cluster.
 	JoinAddrs string
+	// BootstrapExpect is the number of nodes expected to form the initial cluster.
+	// When > 0 and no existing Raft state exists, the first node to start will
+	// bootstrap and others will join. When 0, uses legacy behavior.
+	BootstrapExpect int
 	// Backend selects the FSM storage backend. Valid values are "memory" and
 	// "badger". When empty, defaults to "badger" for persistent storage.
 	Backend string
@@ -71,7 +75,24 @@ func NewRaftStore(cfg RaftConfig) (*RaftStore, error) {
 		return nil, fmt.Errorf("resolving bind address: %w", err)
 	}
 
-	transport, err := raft.NewTCPTransport(addr.String(), addr, 3, 10*time.Second, os.Stderr)
+	// Raft requires an advertisable address; 0.0.0.0 is not valid.
+	// When bound to all interfaces, find a non-loopback IP from network interfaces.
+	advertise := addr
+	if addr.IP.IsUnspecified() {
+		if ifaces, ifErr := net.InterfaceAddrs(); ifErr == nil {
+			for _, a := range ifaces {
+				if ipNet, ok := a.(*net.IPNet); ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {
+					advertise = &net.TCPAddr{IP: ipNet.IP, Port: addr.Port}
+					break
+				}
+			}
+		}
+		if advertise.IP.IsUnspecified() {
+			return nil, fmt.Errorf("resolving advertise address: no non-loopback IPv4 address found")
+		}
+	}
+
+	transport, err := raft.NewTCPTransport(addr.String(), advertise, 3, 10*time.Second, os.Stderr)
 	if err != nil {
 		return nil, fmt.Errorf("creating transport: %w", err)
 	}
@@ -127,8 +148,51 @@ func NewRaftStore(cfg RaftConfig) (*RaftStore, error) {
 	}
 
 	// Join an existing cluster by calling AddVoter on each peer until one succeeds.
+	// Filter out our own address from the peer list to avoid self-join deadlock.
 	peers := splitAndTrim(cfg.JoinAddrs)
-	if err := store.joinCluster(cfg.NodeID, addr.String(), peers); err != nil {
+	var filteredPeers []string
+	ownAddr := advertise.String()
+	for _, p := range peers {
+		// Resolve the peer address to see if it's us.
+		resolved, resolveErr := net.ResolveTCPAddr("tcp", p)
+		if resolveErr != nil || resolved.String() != ownAddr {
+			filteredPeers = append(filteredPeers, p)
+		}
+	}
+
+	if len(filteredPeers) == 0 {
+		// All join addresses pointed at ourselves — bootstrap.
+		bootstrapCfg := raft.Configuration{
+			Servers: []raft.Server{
+				{
+					ID:      raft.ServerID(cfg.NodeID),
+					Address: transport.LocalAddr(),
+				},
+			},
+		}
+		r.BootstrapCluster(bootstrapCfg)
+		return store, nil
+	}
+
+	maxJoinAttempts := 30
+	if cfg.BootstrapExpect > 0 {
+		maxJoinAttempts = 5 // Reduced: will fall back to bootstrap.
+	}
+	if err := store.joinCluster(cfg.NodeID, ownAddr, filteredPeers, maxJoinAttempts); err != nil {
+		if cfg.BootstrapExpect > 0 {
+			bootstrapCfg := raft.Configuration{
+				Servers: []raft.Server{
+					{
+						ID:      raft.ServerID(cfg.NodeID),
+						Address: transport.LocalAddr(),
+					},
+				},
+			}
+			if future := r.BootstrapCluster(bootstrapCfg); future.Error() != nil {
+				return nil, fmt.Errorf("bootstrap after failed join: %w", future.Error())
+			}
+			return store, nil
+		}
 		return nil, fmt.Errorf("joining raft cluster: %w", err)
 	}
 
@@ -139,11 +203,8 @@ func NewRaftStore(cfg RaftConfig) (*RaftStore, error) {
 // by contacting each of the provided peer addresses in turn.  It retries with
 // a small back-off to tolerate a brief window where no leader is available
 // (e.g. immediately after all peers start simultaneously).
-func (s *RaftStore) joinCluster(nodeID, raftAddr string, peers []string) error {
-	const (
-		maxAttempts = 30
-		retryDelay  = 2 * time.Second
-	)
+func (s *RaftStore) joinCluster(nodeID, raftAddr string, peers []string, maxAttempts int) error {
+	const retryDelay = 2 * time.Second
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Check if we might already be a member of the cluster.

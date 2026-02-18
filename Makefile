@@ -115,16 +115,17 @@ build-cli: fmt vet ## Build novactl CLI tool.
 
 ##@ Docker
 
-.PHONY: docker-build
-docker-build: ## Build all docker images.
-	$(foreach comp,controller agent meta csi filer s3gw,docker build -t novastor-$(comp):latest -f Dockerfile.$(comp) .;)
-
+DOCKER ?= docker
 REGISTRY ?= ghcr.io/piwi3910
 IMAGE_TAG ?= latest
 
+.PHONY: docker-build
+docker-build: ## Build all docker images.
+	$(foreach comp,controller agent meta csi filer s3gw,$(DOCKER) build -t novastor-$(comp):latest -f build/Dockerfile.$(comp) .;)
+
 .PHONY: docker-push
 docker-push: ## Push all docker images to the registry.
-	$(foreach comp,controller agent meta csi filer s3gw,docker tag novastor-$(comp):latest $(REGISTRY)/novastor-$(comp):$(IMAGE_TAG) && docker push $(REGISTRY)/novastor-$(comp):$(IMAGE_TAG);)
+	$(foreach comp,controller agent meta csi filer s3gw,$(DOCKER) tag novastor-$(comp):latest $(REGISTRY)/novastor-$(comp):$(IMAGE_TAG) && $(DOCKER) push $(REGISTRY)/novastor-$(comp):$(IMAGE_TAG);)
 
 ##@ Deployment
 

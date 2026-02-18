@@ -32,6 +32,7 @@ func main() {
 	raftAddr := flag.String("raft-addr", ":7000", "Raft consensus transport listen address")
 	grpcAddr := flag.String("grpc-addr", ":7001", "gRPC client API listen address")
 	join := flag.String("join", "", "Comma-separated list of existing Raft peer addresses to join (e.g. peer1:7000,peer2:7000). When empty, bootstraps as a single-node cluster.")
+	bootstrapExpect := flag.Int("bootstrap-expect", 0, "Number of nodes expected for initial cluster. When > 0 and join fails, the node bootstraps and lets others join.")
 	metricsAddr := flag.String("metrics-addr", ":7002", "Prometheus metrics listen address")
 	tlsCA := flag.String("tls-ca", "", "Path to CA certificate for mTLS")
 	tlsCert := flag.String("tls-cert", "", "Path to server certificate for mTLS")
@@ -59,10 +60,11 @@ func main() {
 
 	// Create the Raft-backed metadata store.
 	store, err := metadata.NewRaftStore(metadata.RaftConfig{
-		NodeID:    *nodeID,
-		DataDir:   *dataDir,
-		RaftAddr:  *raftAddr,
-		JoinAddrs: *join,
+		NodeID:          *nodeID,
+		DataDir:         *dataDir,
+		RaftAddr:        *raftAddr,
+		JoinAddrs:       *join,
+		BootstrapExpect: *bootstrapExpect,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create Raft store: %v", err)

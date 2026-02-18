@@ -20,6 +20,10 @@ spec:
         app.kubernetes.io/component: meta
     spec:
       serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: meta
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.meta.image.repository }}:{{ include "novastor.imageTag" . }}"
@@ -30,7 +34,8 @@ spec:
             - --raft-addr=0.0.0.0:7000
             - --grpc-addr=0.0.0.0:7001
             - --metrics-addr=0.0.0.0:7002
-            - --join={{ include "novastor.fullname" . }}-meta-headless:7000
+            - --bootstrap-expect={{ .Values.meta.replicas }}
+            - --join={{ include "novastor.fullname" . }}-meta-0.{{ include "novastor.fullname" . }}-meta-headless.{{ .Release.Namespace }}.svc.cluster.local:7000
           env:
             - name: POD_NAME
               valueFrom:

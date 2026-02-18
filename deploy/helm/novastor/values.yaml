@@ -8,6 +8,7 @@ global:
     registry: ghcr.io/piwi3910
     tag: "0.1.0"
     pullPolicy: IfNotPresent
+  imagePullSecrets: []
 
 nameOverride: ""
 fullnameOverride: ""
@@ -31,6 +32,18 @@ controller:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  service:
+    # enabled -- Create a Service for the controller to expose metrics and health endpoints
+    enabled: true
+    # type -- Service type (ClusterIP, NodePort, LoadBalancer)
+    type: ClusterIP
+    # annotations -- Additional annotations for the service
+    annotations: {}
+    ports:
+      # metrics -- Port for Prometheus metrics endpoint
+      metrics: 8080
+      # health -- Port for health probe endpoint
+      health: 8081
 
 meta:
   replicas: 3

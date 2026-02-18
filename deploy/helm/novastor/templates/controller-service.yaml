@@ -1,0 +1,28 @@
+{{- if .Values.controller.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "novastor.fullname" . }}-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+  {{- with .Values.controller.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.controller.service.type }}
+  ports:
+    - name: metrics
+      port: {{ .Values.controller.service.ports.metrics }}
+      targetPort: metrics
+      protocol: TCP
+    - name: health
+      port: {{ .Values.controller.service.ports.health }}
+      targetPort: health
+      protocol: TCP
+  selector:
+    {{- include "novastor.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+{{- end }}

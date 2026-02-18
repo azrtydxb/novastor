@@ -18,6 +18,10 @@ spec:
         app.kubernetes.io/component: agent
     spec:
       serviceAccountName: {{ include "novastor.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       hostPID: true
       initContainers:
         - name: load-nvme-modules

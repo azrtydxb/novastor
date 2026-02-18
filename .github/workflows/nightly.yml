@@ -115,17 +115,17 @@ jobs:
       matrix:
         component:
           - name: controller
-            dockerfile: Dockerfile.controller
+            dockerfile: build/Dockerfile.controller
           - name: agent
-            dockerfile: Dockerfile.agent
+            dockerfile: build/Dockerfile.agent
           - name: meta
-            dockerfile: Dockerfile.meta
+            dockerfile: build/Dockerfile.meta
           - name: csi
-            dockerfile: Dockerfile.csi
+            dockerfile: build/Dockerfile.csi
           - name: filer
-            dockerfile: Dockerfile.filer
+            dockerfile: build/Dockerfile.filer
           - name: s3gw
-            dockerfile: Dockerfile.s3gw
+            dockerfile: build/Dockerfile.s3gw
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
