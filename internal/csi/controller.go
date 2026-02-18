@@ -3,6 +3,7 @@ package csi
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/piwi3910/novastor/internal/logging"
 	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/piwi3910/novastor/internal/metrics"
 )
 
 const (
@@ -77,6 +79,11 @@ func hasRWXCapability(caps []*csi.VolumeCapability) bool {
 
 // CreateVolume provisions a new volume by computing chunks and persisting metadata.
 func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+	start := time.Now()
+	defer func() {
+		metrics.VolumeProvisionDuration.Observe(time.Since(start).Seconds())
+	}()
+
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume name is required")
 	}
@@ -167,6 +174,11 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 // DeleteVolume removes a volume's metadata.
 func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
+	start := time.Now()
+	defer func() {
+		metrics.VolumeDeleteDuration.Observe(time.Since(start).Seconds())
+	}()
+
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")

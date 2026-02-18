@@ -75,6 +75,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Start Raft metrics monitoring (updates every 5 seconds).
+	store.StartMetricsMonitor(ctx, 5*time.Second)
+
 	// Build gRPC server options.
 	var serverOpts []grpc.ServerOption
 	if *tlsCA != "" && *tlsCert != "" && *tlsKey != "" {

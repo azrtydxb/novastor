@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/raft"
+
+	"github.com/piwi3910/novastor/internal/metrics"
 )
 
 const (
@@ -66,6 +69,11 @@ func NewFSM() *FSM {
 }
 
 func (f *FSM) Apply(log *raft.Log) interface{} {
+	start := time.Now()
+	defer func() {
+		metrics.RaftApplyLatency.Observe(time.Since(start).Seconds())
+	}()
+
 	var op fsmOp
 	if err := json.Unmarshal(log.Data, &op); err != nil {
 		return fmt.Errorf("unmarshaling fsm op: %w", err)
