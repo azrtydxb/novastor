@@ -117,6 +117,7 @@ func registerNode(ctx context.Context, client *metadata.GRPCClient, nodeID, list
 
 func main() {
 	listenAddr := flag.String("listen", ":9100", "gRPC listen address")
+	hostIP := flag.String("host-ip", "", "Host IP address advertised to NVMe-oF initiators (required for NVMe-oF targets)")
 	dataDir := flag.String("data-dir", "/var/lib/novastor/chunks", "Chunk storage directory")
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
 	metricsAddr := flag.String("metrics-addr", ":9101", "Prometheus metrics listen address")
@@ -254,6 +255,15 @@ func main() {
 	// Create and register the chunk server.
 	chunkServer := agent.NewChunkServer(store)
 	chunkServer.Register(srv)
+
+	// Create and register the NVMe target server when a host IP is provided.
+	if *hostIP != "" {
+		nvmeServer := agent.NewNVMeTargetServer(*hostIP)
+		nvmeServer.Register(srv)
+		logging.L.Info("NVMe-oF target service registered", zap.String("hostIP", *hostIP))
+	} else {
+		logging.L.Info("NVMe-oF target service disabled (--host-ip not set)")
+	}
 
 	// Start the scrubber.
 	scrubber := chunk.NewScrubber(store, logReporter{}, *scrubInterval)

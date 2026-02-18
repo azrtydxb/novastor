@@ -39,22 +39,27 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
 # ============================================================
 # Runtime stage
 # ============================================================
-FROM gcr.io/distroless/static-debian12
+# alpine is required for util-linux (losetup) to manage loop devices for
+# NVMe-oF backing files.
+FROM alpine:3.20
 
 LABEL org.opencontainers.image.title="novastor-agent" \
       org.opencontainers.image.description="NovaStor node chunk storage agent (DaemonSet)" \
       org.opencontainers.image.source="https://github.com/piwi3910/novastor" \
       org.opencontainers.image.licenses="Apache-2.0"
 
+# util-linux : losetup for attaching sparse files as loop devices
+# truncate (coreutils) is part of busybox in alpine
+RUN apk add --no-cache util-linux ca-certificates
+
 # Copy the compiled binary from the builder stage.
 COPY --from=builder /out/novastor-agent /usr/local/bin/novastor-agent
-
-# Copy CA certificates for outbound TLS (e.g. gRPC to meta service).
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # gRPC listener
 EXPOSE 9100
 # Prometheus metrics
 EXPOSE 9101
+# NVMe-oF/TCP target port
+EXPOSE 4420
 
 ENTRYPOINT ["/usr/local/bin/novastor-agent"]

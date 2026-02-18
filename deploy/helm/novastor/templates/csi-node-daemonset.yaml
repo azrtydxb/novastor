@@ -22,6 +22,15 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        - name: load-nvme-tcp
+          image: busybox:1.36
+          command: ["sh", "-c", "modprobe nvme-tcp"]
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: sys
+              mountPath: /sys
       containers:
         - name: csi-plugin
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.csi.node.image.repository }}:{{ include "novastor.imageTag" . }}"
@@ -61,6 +70,8 @@ spec:
               mountPropagation: Bidirectional
             - name: dev
               mountPath: /dev
+            - name: sys
+              mountPath: /sys
           resources:
             {{- toYaml .Values.csi.node.resources | nindent 12 }}
         - name: node-driver-registrar
@@ -92,3 +103,6 @@ spec:
         - name: dev
           hostPath:
             path: /dev
+        - name: sys
+          hostPath:
+            path: /sys

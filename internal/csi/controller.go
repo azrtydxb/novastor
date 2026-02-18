@@ -33,18 +33,30 @@ type PlacementEngine interface {
 	Place(count int) []string
 }
 
+// AgentTargetClient abstracts NVMe-oF target creation/deletion on agent nodes.
+// When nil, the controller skips NVMe-oF target management (backward compatible).
+type AgentTargetClient interface {
+	// CreateTarget creates an NVMe-oF target on the agent and returns connection params.
+	CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64) (subsystemNQN, targetAddress, targetPort string, err error)
+	// DeleteTarget tears down the NVMe-oF target on the agent.
+	DeleteTarget(ctx context.Context, agentAddr string, volumeID string) error
+}
+
 // ControllerServer implements the CSI Controller service.
 type ControllerServer struct {
 	csi.UnimplementedControllerServer
-	meta   MetadataStore
-	placer PlacementEngine
+	meta        MetadataStore
+	placer      PlacementEngine
+	agentTarget AgentTargetClient
 }
 
 // NewControllerServer creates a ControllerServer backed by the given stores.
-func NewControllerServer(meta MetadataStore, placer PlacementEngine) *ControllerServer {
+// agentTarget may be nil to disable NVMe-oF target management.
+func NewControllerServer(meta MetadataStore, placer PlacementEngine, agentTarget AgentTargetClient) *ControllerServer {
 	return &ControllerServer{
-		meta:   meta,
-		placer: placer,
+		meta:        meta,
+		placer:      placer,
+		agentTarget: agentTarget,
 	}
 }
 
@@ -97,10 +109,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		ChunkIDs:  chunkIDs,
 	}
 
-	if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
-		return nil, status.Errorf(codes.Internal, "storing volume metadata: %v", err)
-	}
-
 	// Build accessible topology from the first placed node.
 	topology := &csi.Topology{
 		Segments: map[string]string{
@@ -114,6 +122,30 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		volContext["nfsServer"] = nodeIDs[0]
 		volContext["nfsShare"] = fmt.Sprintf("/exports/%s", volumeID)
 		volContext["accessMode"] = "RWX"
+	} else if cs.agentTarget != nil {
+		// For RWO block volumes, create an NVMe-oF target on the first placed node.
+		// nodeIDs[0] is used as both the node identifier and the agent address.
+		nqn, targetAddr, targetPort, targetErr := cs.agentTarget.CreateTarget(ctx, nodeIDs[0], volumeID, int64(requiredBytes))
+		if targetErr != nil {
+			return nil, status.Errorf(codes.Internal, "creating NVMe-oF target for volume %s: %v", volumeID, targetErr)
+		}
+		volContext["targetAddress"] = targetAddr
+		volContext["targetPort"] = targetPort
+		volContext["subsystemNQN"] = nqn
+
+		// Persist target fields in volume metadata.
+		vm.TargetNodeID = nodeIDs[0]
+		vm.TargetAddress = targetAddr
+		vm.TargetPort = targetPort
+		vm.SubsystemNQN = nqn
+	}
+
+	if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
+		// Clean up target if metadata storage fails.
+		if cs.agentTarget != nil && vm.SubsystemNQN != "" {
+			_ = cs.agentTarget.DeleteTarget(ctx, nodeIDs[0], volumeID)
+		}
+		return nil, status.Errorf(codes.Internal, "storing volume metadata: %v", err)
 	}
 
 	return &csi.CreateVolumeResponse{
@@ -134,8 +166,16 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	}
 
 	// Verify the volume exists. If not found, succeed idempotently per CSI spec.
-	if _, err := cs.meta.GetVolumeMeta(ctx, volumeID); err != nil {
+	vm, err := cs.meta.GetVolumeMeta(ctx, volumeID)
+	if err != nil {
 		return &csi.DeleteVolumeResponse{}, nil
+	}
+
+	// Tear down NVMe-oF target before removing metadata.
+	if cs.agentTarget != nil && vm.TargetNodeID != "" {
+		if deleteErr := cs.agentTarget.DeleteTarget(ctx, vm.TargetNodeID, volumeID); deleteErr != nil {
+			return nil, status.Errorf(codes.Internal, "deleting NVMe-oF target for volume %s: %v", volumeID, deleteErr)
+		}
 	}
 
 	if err := cs.meta.DeleteVolumeMeta(ctx, volumeID); err != nil {
