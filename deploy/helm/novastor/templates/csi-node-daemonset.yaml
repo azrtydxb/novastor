@@ -31,6 +31,9 @@ spec:
           volumeMounts:
             - name: sys
               mountPath: /sys
+            - name: lib-modules
+              mountPath: /lib/modules
+              readOnly: true
       containers:
         - name: csi-plugin
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.csi.node.image.repository }}:{{ include "novastor.imageTag" . }}"
@@ -106,3 +109,7 @@ spec:
         - name: sys
           hostPath:
             path: /sys
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
