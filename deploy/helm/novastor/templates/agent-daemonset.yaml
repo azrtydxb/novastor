@@ -40,6 +40,7 @@ spec:
             - --listen=0.0.0.0:9100
             - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
             - --host-ip=$(HOST_IP)
+            - --pod-ip=$(POD_IP)
           securityContext:
             privileged: true
           ports:
@@ -64,6 +65,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           volumeMounts:
             - name: dev
               mountPath: /dev

@@ -118,6 +118,7 @@ func registerNode(ctx context.Context, client *metadata.GRPCClient, nodeID, list
 func main() {
 	listenAddr := flag.String("listen", ":9100", "gRPC listen address")
 	hostIP := flag.String("host-ip", "", "Host IP address advertised to NVMe-oF initiators (required for NVMe-oF targets)")
+	podIP := flag.String("pod-ip", "", "Pod IP address used for gRPC registration (pod-network routable)")
 	dataDir := flag.String("data-dir", "/var/lib/novastor/chunks", "Chunk storage directory")
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
 	metricsAddr := flag.String("metrics-addr", ":9101", "Prometheus metrics listen address")
@@ -278,14 +279,14 @@ func main() {
 		)
 	} else {
 		defer metaClient.Close()
-		// Use the routable host IP for registration so that other components
-		// (e.g. the CSI controller) can dial this agent from outside the pod.
-		// Fall back to listenAddr when host-ip is not set.
+		// Use the pod IP for gRPC registration so that other components
+		// (e.g. the CSI controller) can dial this agent via the pod network.
+		// Fall back to listenAddr when pod-ip is not set.
 		registrationAddr := *listenAddr
-		if *hostIP != "" {
+		if *podIP != "" {
 			_, port, splitErr := net.SplitHostPort(*listenAddr)
 			if splitErr == nil {
-				registrationAddr = net.JoinHostPort(*hostIP, port)
+				registrationAddr = net.JoinHostPort(*podIP, port)
 			}
 		}
 		go registerNode(ctx, metaClient, *nodeID, registrationAddr, *dataDir, store, *heartbeatInterval)
