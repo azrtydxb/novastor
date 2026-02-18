@@ -5,11 +5,17 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/piwi3910/novastor/internal/agent"
 	"github.com/piwi3910/novastor/internal/s3"
@@ -72,7 +78,17 @@ func TestObjectStorage_BucketAndObject(t *testing.T) {
 	client := srv.Client()
 	baseURL := srv.URL
 
-	// Helper to create authenticated requests.
+	// Parse baseURL to get host for signature
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatalf("Failed to parse base URL: %v", err)
+	}
+	host := parsedURL.Host
+
+	// amzDate is the current timestamp in UTC for SigV4 signing
+	amzDate := time.Now().UTC().Format("20060102T150405Z")
+
+	// Helper to create authenticated requests with proper SigV4 signature.
 	doReq := func(method, path string, body []byte) (*http.Response, []byte) {
 		t.Helper()
 		var bodyReader io.Reader
@@ -83,8 +99,15 @@ func TestObjectStorage_BucketAndObject(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to create request: %v", err)
 		}
-		// Use SigV4-style Authorization header (simplified: just needs access key match).
-		req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+testAccessKey+"/20260217/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=fakesig")
+
+		// Set X-Amz-Date header required for SigV4
+		req.Header.Set("X-Amz-Date", amzDate)
+		req.Header.Set("Host", host)
+
+		// Generate proper SigV4 Authorization header
+		authHeader := generateSigV4Header(method, path, host, amzDate)
+		req.Header.Set("Authorization", authHeader)
+
 		if body != nil {
 			req.Header.Set("Content-Type", "application/octet-stream")
 		}
@@ -242,4 +265,61 @@ func TestObjectStorage_AuthDenied(t *testing.T) {
 		t.Errorf("Expected 403 Forbidden for unauthenticated request, got %d", resp.StatusCode)
 	}
 	t.Log("Authentication denial verified")
+}
+
+// SigV4 signature generation helpers for E2E tests
+
+func sha256Hex(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+func hmacSHA256(key, data []byte) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write(data)
+	return h.Sum(nil)
+}
+
+func hmacSHA256Hex(key, data []byte) string {
+	return hex.EncodeToString(hmacSHA256(key, data))
+}
+
+func deriveSigningKey(secretKey, dateStamp, region, service string) []byte {
+	kDate := hmacSHA256([]byte("AWS4"+secretKey), []byte(dateStamp))
+	kRegion := hmacSHA256(kDate, []byte(region))
+	kService := hmacSHA256(kRegion, []byte(service))
+	kSigning := hmacSHA256(kService, []byte("aws4_request"))
+	return kSigning
+}
+
+// generateSigV4Header generates a valid AWS SigV4 Authorization header for testing.
+// This matches the signature verification logic in internal/s3/auth.go.
+func generateSigV4Header(method, path, host, amzDate string) string {
+	dateStamp := amzDate[:8]
+	credential := fmt.Sprintf("%s/%s/us-east-1/s3/aws4_request", testAccessKey, dateStamp)
+	signedHeaders := "host"
+
+	// Build canonical request - must match buildCanonicalRequest in auth.go
+	// Format: method\npath\nquery\nheaders\nsignedHeaders\npayloadHash
+	canonicalRequest := method + "\n" +
+		path + "\n" +
+		"" + "\n" + // query string (empty)
+		"host:" + host + "\n" + // canonical headers
+		"\n" + // blank line after headers
+		signedHeaders + "\n" +
+		"UNSIGNED-PAYLOAD"
+
+	// Build string to sign
+	canonicalRequestHash := sha256Hex([]byte(canonicalRequest))
+	stringToSign := "AWS4-HMAC-SHA256\n" +
+		amzDate + "\n" +
+		dateStamp+"/us-east-1/s3/aws4_request\n" +
+		canonicalRequestHash
+
+	// Derive signing key and compute signature
+	signingKey := deriveSigningKey(testSecretKey, dateStamp, "us-east-1", "s3")
+	signature := hmacSHA256Hex(signingKey, []byte(stringToSign))
+
+	return fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s, SignedHeaders=%s, Signature=%s",
+		credential, signedHeaders, signature)
 }
