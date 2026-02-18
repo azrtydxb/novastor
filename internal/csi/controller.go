@@ -31,6 +31,10 @@ const (
 
 	// Default protection settings.
 	defaultReplicas = 1
+
+	// TopologyDomain is the topology key used for segment topology.
+	// It enables WaitForFirstConsumer binding mode for data locality.
+	TopologyDomain = "novastor.io/node"
 )
 
 // MetadataStore is the subset of the metadata service used by the controller.
@@ -186,7 +190,87 @@ func (cfg protectionConfig) requiredNodes() int {
 	return 1
 }
 
+// extractTopologyRequirement extracts the topology requirement from the request.
+// It returns the list of topology segments that the volume must be accessible from,
+// or nil if no topology requirement is specified (e.g., immediate binding mode).
+func extractTopologyRequirement(req *csi.CreateVolumeRequest) []*csi.Topology {
+	if req.GetAccessibilityRequirements() == nil {
+		return nil
+	}
+	return req.GetAccessibilityRequirements().GetPreferred()
+}
+
+// filterNodesByTopology filters the given node IDs to those that match at least
+// one of the required topology segments. If no topology requirement is given,
+// all nodes are returned.
+//
+// For NovaStor, we match based on the TopologyDomain key (novastor.io/node).
+// This enables the WaitForFirstConsumer binding mode: the scheduler provides
+// the topology of the consumer node, and we place volume data on that node
+// for data locality.
+func filterNodesByTopology(nodeIDs []string, required []*csi.Topology) []string {
+	if len(required) == 0 {
+		// No topology requirement: all nodes are eligible.
+		return nodeIDs
+	}
+
+	// Build a set of required node IDs from the topology segments.
+	requiredNodeIDs := make(map[string]struct{})
+	for _, topo := range required {
+		if nodeID, ok := topo.Segments[TopologyDomain]; ok {
+			requiredNodeIDs[nodeID] = struct{}{}
+		}
+	}
+
+	// Filter nodes that match at least one of the required segments.
+	var filtered []string
+	for _, nodeID := range nodeIDs {
+		if _, ok := requiredNodeIDs[nodeID]; ok {
+			filtered = append(filtered, nodeID)
+		}
+	}
+
+	// If no nodes match the topology requirement, we still return all nodes.
+	// This allows the volume to be provisioned even when topology constraints
+	// cannot be satisfied (fallback behavior).
+	if len(filtered) == 0 {
+		logging.L.Warn("no nodes match topology requirement, using all nodes",
+			zap.Int("requiredSegments", len(required)),
+			zap.Int("availableNodes", len(nodeIDs)))
+		return nodeIDs
+	}
+
+	return filtered
+}
+
+// buildVolumeTopology constructs the topology information for a volume based on
+// the nodes where its chunks are placed. This is returned in CreateVolumeResponse
+// as AccessibleTopology, which informs the scheduler where the volume is reachable.
+func buildVolumeTopology(nodeIDs []string) []*csi.Topology {
+	if len(nodeIDs) == 0 {
+		return nil
+	}
+
+	// Deduplicate node IDs while preserving order.
+	seen := make(map[string]struct{})
+	topologies := make([]*csi.Topology, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		if _, ok := seen[nodeID]; !ok {
+			seen[nodeID] = struct{}{}
+			topologies = append(topologies, &csi.Topology{
+				Segments: map[string]string{
+					TopologyDomain: nodeID,
+				},
+			})
+		}
+	}
+
+	return topologies
+}
+
 // CreateVolume provisions a new volume by computing chunks and persisting metadata.
+// It respects topology requirements from the accessibility requirements for
+// topology-aware provisioning (WaitForFirstConsumer binding mode).
 func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	start := time.Now()
 	defer func() {
@@ -216,14 +300,35 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// For erasure coding: each chunk needs dataShards + parityShards nodes.
 	nodesPerChunk := protCfg.requiredNodes()
 
+	// Extract topology requirement for topology-aware provisioning.
+	topologyReq := extractTopologyRequirement(req)
+
 	// Place chunks across storage nodes.
 	// We need chunkCount * nodesPerChunk placement slots.
 	totalSlots := chunkCount * nodesPerChunk
-	nodeIDs := cs.placer.Place(totalSlots)
-	if len(nodeIDs) < totalSlots {
+	allNodeIDs := cs.placer.Place(totalSlots)
+	if len(allNodeIDs) < totalSlots {
 		return nil, status.Errorf(codes.ResourceExhausted,
 			"not enough storage nodes: need %d for %d chunks with protection factor %d, got %d",
-			totalSlots, chunkCount, nodesPerChunk, len(nodeIDs))
+			totalSlots, chunkCount, nodesPerChunk, len(allNodeIDs))
+	}
+
+	// Filter nodes based on topology requirement (if any).
+	// This enables WaitForFirstConsumer: pods are scheduled on nodes with data locality.
+	// When topology is specified, we try to use only nodes matching the topology.
+	nodeIDs := filterNodesByTopology(allNodeIDs, topologyReq)
+
+	// If topology filtering reduced our available nodes below what we need for protection,
+	// we still proceed with the filtered nodes (best-effort). The placement will use
+	// fewer nodes than requested for protection, which is acceptable for topology-aware
+	// scenarios where data locality is prioritized over full protection.
+	if len(topologyReq) > 0 && len(nodeIDs) > 0 {
+		logging.L.Info("CreateVolume: topology-aware placement",
+			zap.String("volumeName", req.GetName()),
+			zap.Int("requiredSegments", len(topologyReq)),
+			zap.Int("requestedNodes", len(allNodeIDs)),
+			zap.Int("selectedNodes", len(nodeIDs)),
+			zap.Strings("nodeIDs", nodeIDs))
 	}
 
 	volumeID := uuid.New().String()
@@ -303,11 +408,16 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.Internal, "storing volume metadata: %v", err)
 	}
 
+	// Build accessible topology from the nodes where chunks are placed.
+	// This informs the Kubernetes scheduler where the volume is reachable.
+	accessibleTopology := buildVolumeTopology(nodeIDs)
+
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
-			VolumeId:      volumeID,
-			CapacityBytes: int64(requiredBytes),
-			VolumeContext: volContext,
+			VolumeId:           volumeID,
+			CapacityBytes:      int64(requiredBytes),
+			VolumeContext:      volContext,
+			AccessibleTopology: accessibleTopology,
 		},
 	}, nil
 }
