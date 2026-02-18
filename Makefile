@@ -110,8 +110,8 @@ build-s3gw: fmt vet ## Build S3 gateway binary.
 	go build -o bin/novastor-s3gw ./cmd/s3gw/
 
 .PHONY: build-cli
-build-cli: fmt vet ## Build novactl CLI tool.
-	go build -o bin/novactl ./cmd/cli/
+build-cli: fmt vet ## Build novastorctl CLI tool.
+	go build -o bin/novastorctl ./cmd/cli/
 
 ##@ Docker
 

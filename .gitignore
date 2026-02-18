@@ -6,7 +6,7 @@ bin/
 /s3gw
 /agent
 /meta
-/novactl
+/novastorctl
 *.exe
 *.exe~
 *.dll
