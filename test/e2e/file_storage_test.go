@@ -20,9 +20,9 @@ const (
 	e2eRPCVersion uint32 = 2
 
 	// ONC/RPC accept stat.
-	e2eMsgAccepted    uint32 = 0
-	e2eAcceptSuccess  uint32 = 0
-	e2eAuthNone       uint32 = 0
+	e2eMsgAccepted   uint32 = 0
+	e2eAcceptSuccess uint32 = 0
+	e2eAuthNone      uint32 = 0
 
 	// MOUNT v3 program.
 	e2eMountProg    uint32 = 100005
@@ -37,15 +37,15 @@ const (
 	e2eNFSVersion uint32 = 3
 
 	// NFS v3 procedures.
-	e2eNFSProcGetattr  uint32 = 1
-	e2eNFSProcLookup   uint32 = 3
-	e2eNFSProcRead     uint32 = 6
-	e2eNFSProcWrite    uint32 = 7
-	e2eNFSProcCreate   uint32 = 8
-	e2eNFSProcMkdir    uint32 = 9
-	e2eNFSProcRemove   uint32 = 12
-	e2eNFSProcRmdir    uint32 = 13
-	e2eNFSProcReadDir  uint32 = 16
+	e2eNFSProcGetattr uint32 = 1
+	e2eNFSProcLookup  uint32 = 3
+	e2eNFSProcRead    uint32 = 6
+	e2eNFSProcWrite   uint32 = 7
+	e2eNFSProcCreate  uint32 = 8
+	e2eNFSProcMkdir   uint32 = 9
+	e2eNFSProcRemove  uint32 = 12
+	e2eNFSProcRmdir   uint32 = 13
+	e2eNFSProcReadDir uint32 = 16
 
 	// NFS v3 status codes.
 	e2eNFS3OK uint32 = 0
@@ -594,10 +594,10 @@ func (c *e2eNFSClient) readdir(t *testing.T, dirFH []byte) []string {
 		if !follows {
 			break
 		}
-		_ = r.readUint64()        // fileid
-		name := r.readString()    // filename
+		_ = r.readUint64()     // fileid
+		name := r.readString() // filename
 		names = append(names, name)
-		_ = r.readUint64()        // cookie
+		_ = r.readUint64() // cookie
 	}
 	return names
 }

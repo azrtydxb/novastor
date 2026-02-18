@@ -148,8 +148,8 @@ func TestS3_ListBucket(t *testing.T) {
 
 	// Put multiple objects.
 	objects := map[string][]byte{
-		"file1.txt": []byte("content 1"),
-		"file2.txt": []byte("content 2"),
+		"file1.txt":     []byte("content 1"),
+		"file2.txt":     []byte("content 2"),
 		"dir/file3.txt": []byte("content 3"),
 	}
 	for key, data := range objects {
