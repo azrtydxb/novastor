@@ -277,13 +277,26 @@ func TestCopyObject_MissingCopySourceHeader(t *testing.T) {
 	g, bs := newTestGateway()
 	seedBucket(t, bs, "test-bucket")
 
+	// A PUT without X-Amz-Copy-Source is treated as a regular PutObject.
+	// This creates an empty object.
 	copyReq := httptest.NewRequest(http.MethodPut, "/test-bucket/dst-key", nil)
 	setAuthHeaders(copyReq, copyReq.Method, copyReq.URL.Path)
 	copyW := httptest.NewRecorder()
 	g.ServeHTTP(copyW, copyReq)
 
-	if copyW.Result().StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", copyW.Result().StatusCode)
+	// Should succeed as regular PutObject (empty object created)
+	if copyW.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", copyW.Result().StatusCode)
+	}
+
+	// Verify the empty object exists
+	getReq := httptest.NewRequest(http.MethodGet, "/test-bucket/dst-key", nil)
+	setAuthHeaders(getReq, getReq.Method, getReq.URL.Path)
+	getW := httptest.NewRecorder()
+	g.ServeHTTP(getW, getReq)
+
+	if getW.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getW.Result().StatusCode)
 	}
 }
 
@@ -502,9 +515,9 @@ func TestPutBucketLifecycle_Success(t *testing.T) {
 
 func TestGetBucketLifecycle_NotFound(t *testing.T) {
 	g, bs := newTestGateway()
-	seedBucket(t, bs, "test-bucket")
+	seedBucket(t, bs, "no-lifecycle-bucket")
 
-	getReq := httptest.NewRequest(http.MethodGet, "/test-bucket?lifecycle", nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/no-lifecycle-bucket?lifecycle", nil)
 	setAuthHeaders(getReq, getReq.Method, getReq.URL.Path)
 	getW := httptest.NewRecorder()
 	g.ServeHTTP(getW, getReq)
@@ -663,9 +676,9 @@ func TestPutBucketEncryption_InvalidAlgorithm(t *testing.T) {
 
 func TestGetBucketEncryption_NotFound(t *testing.T) {
 	g, bs := newTestGateway()
-	seedBucket(t, bs, "test-bucket")
+	seedBucket(t, bs, "no-encryption-bucket")
 
-	getReq := httptest.NewRequest(http.MethodGet, "/test-bucket?encryption", nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/no-encryption-bucket?encryption", nil)
 	setAuthHeaders(getReq, getReq.Method, getReq.URL.Path)
 	getW := httptest.NewRecorder()
 	g.ServeHTTP(getW, getReq)

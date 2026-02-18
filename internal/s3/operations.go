@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,18 +14,18 @@ import (
 // --- XML types for ListParts ---
 
 type listPartsResult struct {
-	XMLName              xml.Name   `xml:"ListPartsResult"`
-	Bucket               string     `xml:"Bucket"`
-	Key                  string     `xml:"Key"`
-	UploadID             string     `xml:"UploadId"`
-	Initiator            initiator  `xml:"Initiator"`
-	Owner                owner      `xml:"Owner"`
-	StorageClass         string     `xml:"StorageClass"`
-	PartNumberMarker     int        `xml:"PartNumberMarker"`
-	NextPartNumberMarker int        `xml:"NextPartNumberMarker,omitempty"`
-	MaxParts             int        `xml:"MaxParts"`
-	IsTruncated          bool       `xml:"IsTruncated"`
-	Parts                []listPart `xml:"Part,omitempty"`
+	XMLName               xml.Name   `xml:"ListPartsResult"`
+	Bucket                string     `xml:"Bucket"`
+	Key                   string     `xml:"Key"`
+	UploadID              string     `xml:"UploadId"`
+	Initiator             initiator  `xml:"Initiator"`
+	Owner                 owner      `xml:"Owner"`
+	StorageClass          string     `xml:"StorageClass"`
+	PartNumberMarker      int        `xml:"PartNumberMarker"`
+	NextPartNumberMarker  int        `xml:"NextPartNumberMarker,omitempty"`
+	MaxParts              int        `xml:"MaxParts"`
+	IsTruncated           bool       `xml:"IsTruncated"`
+	Parts                 []listPart `xml:"Part,omitempty"`
 }
 
 type initiator struct {
@@ -167,13 +168,9 @@ func (g *Gateway) handleCopyObject(w http.ResponseWriter, r *http.Request, dstBu
 	srcKey := srcPath[slashIdx+1:]
 
 	// Remove query string (versionId) if present.
-	if idx := len(srcKey) - 1; idx >= 0 {
-		for i := idx; i >= 0; i-- {
-			if srcKey[i] == '?' {
-				srcKey = srcKey[:i]
-				break
-			}
-		}
+	queryIdx := strings.Index(srcKey, "?")
+	if queryIdx >= 0 {
+		srcKey = srcKey[:queryIdx]
 	}
 
 	// Verify source bucket exists.
@@ -375,10 +372,10 @@ type lifecycleConfiguration struct {
 }
 
 type lifecycleRule struct {
-	ID          string                `xml:"ID"`
-	Status      string                `xml:"Status"`
-	Filter      lifecycleFilter       `xml:"Filter,omitempty"`
-	Expiration  *lifecycleExpiration  `xml:"Expiration,omitempty"`
+	ID         string              `xml:"ID"`
+	Status     string              `xml:"Status"`
+	Filter     lifecycleFilter     `xml:"Filter,omitempty"`
+	Expiration *lifecycleExpiration `xml:"Expiration,omitempty"`
 	Transitions []lifecycleTransition `xml:"Transition,omitempty"`
 }
 
@@ -489,8 +486,8 @@ func (g *Gateway) handleDeleteBucketLifecycle(w http.ResponseWriter, r *http.Req
 // --- XML types for Bucket Encryption ---
 
 type serverSideEncryptionConfiguration struct {
-	XMLName xml.Name       `xml:"ServerSideEncryptionConfiguration"`
-	Rule    encryptionRule `xml:"Rule"`
+	XMLName xml.Name          `xml:"ServerSideEncryptionConfiguration"`
+	Rule    encryptionRule    `xml:"Rule"`
 }
 
 type encryptionRule struct {
@@ -583,18 +580,18 @@ func (g *Gateway) handleDeleteBucketEncryption(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// --- XML types for Bucket Versioning (extended) ---
+// --- XML types for ListObjectVersions ---
 
 type listObjectVersionsResult struct {
-	XMLName         xml.Name        `xml:"ListVersionsResult"`
-	Name            string          `xml:"Name"`
-	Prefix          string          `xml:"Prefix,omitempty"`
-	KeyMarker       string          `xml:"KeyMarker,omitempty"`
-	VersionIdMarker string          `xml:"VersionIdMarker,omitempty"`
-	MaxKeys         int             `xml:"MaxKeys"`
-	IsTruncated     bool            `xml:"IsTruncated"`
-	Versions        []objectVersion `xml:"Version,omitempty"`
-	CommonPrefixes  []commonPrefix  `xml:"CommonPrefixes,omitempty"`
+	XMLName          xml.Name            `xml:"ListVersionsResult"`
+	Name             string              `xml:"Name"`
+	Prefix           string              `xml:"Prefix,omitempty"`
+	KeyMarker        string              `xml:"KeyMarker,omitempty"`
+	VersionIdMarker  string              `xml:"VersionIdMarker,omitempty"`
+	MaxKeys          int                 `xml:"MaxKeys"`
+	IsTruncated      bool                `xml:"IsTruncated"`
+	Versions         []objectVersion     `xml:"Version,omitempty"`
+	CommonPrefixes   []commonPrefix      `xml:"CommonPrefixes,omitempty"`
 }
 
 type objectVersion struct {
