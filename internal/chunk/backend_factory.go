@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -70,5 +71,41 @@ func init() {
 	// Register the in-memory backend.
 	RegisterBackend("memory", func(config map[string]string) (Store, error) {
 		return NewMemoryStore(), nil
+	})
+
+	// Register the block device backend (BlueStore-style).
+	RegisterBackend("block", func(config map[string]string) (Store, error) {
+		devicesStr := config["devices"]
+		if devicesStr == "" {
+			return nil, fmt.Errorf("block backend requires 'devices' config (comma-separated device paths)")
+		}
+
+		metadataDir := config["metadata_dir"]
+		if metadataDir == "" {
+			metadataDir = config["metadataDir"]
+		}
+
+		autoSync := config["auto_sync"] == "true" || config["autoSync"] == "true"
+
+		var devices []string
+		for _, d := range strings.Split(devicesStr, ",") {
+			d = strings.TrimSpace(d)
+			if d != "" {
+				devices = append(devices, d)
+			}
+		}
+
+		if len(devices) == 0 {
+			return nil, fmt.Errorf("no valid devices specified")
+		}
+
+		blockConfig := BlockStoreConfig{
+			Devices:     devices,
+			MetadataDir: metadataDir,
+			AutoSync:    autoSync,
+			Logger:      zap.NewNop(),
+		}
+
+		return NewBlockStore(blockConfig)
 	})
 }
