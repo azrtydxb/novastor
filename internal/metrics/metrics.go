@@ -77,6 +77,64 @@ var (
 		Help:      "Unix timestamp of the last successful GC run",
 	})
 
+	// DedupRatio is the ratio of logical bytes to physical bytes after deduplication.
+	// A value of 2.0 means 2x space savings (50% reduction).
+	DedupRatio = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "agent",
+		Name:      "dedup_ratio",
+		Help:      "Deduplication ratio (logical bytes / physical bytes)",
+	})
+
+	// DedupChunksSaved counts chunks that were not written due to deduplication.
+	DedupChunksSaved = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "agent",
+		Name:      "dedup_chunks_saved_total",
+		Help:      "Total chunks not written due to deduplication",
+	})
+
+	// DedupBytesSaved counts bytes saved through deduplication.
+	DedupBytesSaved = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "agent",
+		Name:      "dedup_bytes_saved_total",
+		Help:      "Total bytes saved through deduplication",
+	})
+
+	// DedupReferences is the current total reference count across all chunks.
+	DedupReferences = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "agent",
+		Name:      "dedup_references",
+		Help:      "Current total chunk reference count",
+	})
+
+	// DedupRefOpsTotal counts reference counter operations by type.
+	DedupRefOpsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "agent",
+		Name:      "dedup_ref_ops_total",
+		Help:      "Total reference counter operations",
+	}, []string{"operation"})
+
+	// DedupLogicalBytes is the total logical bytes stored (before deduplication).
+	DedupLogicalBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "agent",
+		Name:      "dedup_logical_bytes",
+		Help:      "Total logical bytes stored (before deduplication)",
+	})
+
+	// DedupPhysicalBytes is the total physical bytes stored (after deduplication).
+	DedupPhysicalBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "agent",
+		Name:      "dedup_physical_bytes",
+		Help:      "Total physical bytes stored (after deduplication)",
+>>>>>>> bc567d7 ([Feature] Implement chunk-level deduplication)
+	})
+
 	// --------------- Metadata / Raft metrics ---------------
 
 	// RaftState reports the current Raft state (0=follower, 1=candidate, 2=leader).
@@ -464,6 +522,13 @@ func Register() {
 	prometheus.MustRegister(ScrubErrors)
 	prometheus.MustRegister(GCOrphanChunksDeleted)
 	prometheus.MustRegister(GCLastRunTimestamp)
+	prometheus.MustRegister(DedupRatio)
+	prometheus.MustRegister(DedupChunksSaved)
+	prometheus.MustRegister(DedupBytesSaved)
+	prometheus.MustRegister(DedupReferences)
+	prometheus.MustRegister(DedupRefOpsTotal)
+	prometheus.MustRegister(DedupLogicalBytes)
+	prometheus.MustRegister(DedupPhysicalBytes)
 
 	// Metadata / Raft metrics
 	prometheus.MustRegister(RaftState)
