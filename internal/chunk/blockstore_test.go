@@ -250,21 +250,23 @@ func TestBitmapConcurrent(t *testing.T) {
 // TestBlockStoreConformance tests the block store against the conformance suite.
 // This uses a temporary file instead of a real block device.
 func TestBlockStoreConformance(t *testing.T) {
+	// Conformance test runs many sub-tests on the same store, requiring more space.
+	// Skip in short mode as it would need a much larger device.
 	if testing.Short() {
-		t.Skip("skipping block store test in short mode")
+		t.Skip("skipping conformance test in short mode (requires larger device)")
 	}
 
 	// Create a temporary file to simulate a block device.
 	tmpDir := t.TempDir()
 	devicePath := filepath.Join(tmpDir, "device.img")
 
-	// Create a 100MB file.
+	// Create a device file.
 	const deviceSize = 100 * 1024 * 1024
 	f, err := os.Create(devicePath)
 	if err != nil {
 		t.Fatalf("creating device file: %v", err)
 	}
-	if err := f.Truncate(deviceSize); err != nil {
+	if err := f.Truncate(int64(deviceSize)); err != nil {
 		f.Close()
 		t.Fatalf("truncating device file: %v", err)
 	}
@@ -290,19 +292,19 @@ func TestBlockStoreConformance(t *testing.T) {
 
 // TestBlockStoreBasic tests basic block store operations.
 func TestBlockStoreBasic(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping block store test in short mode")
+	// Adaptive sizing: use smaller device in short mode
+	deviceSize := 20 * 1024 * 1024 // 20MB for short mode
+	if !testing.Short() {
+		deviceSize = 100 * 1024 * 1024 // 100MB for full mode
 	}
 
 	tmpDir := t.TempDir()
 	devicePath := filepath.Join(tmpDir, "device.img")
-
-	const deviceSize = 100 * 1024 * 1024
 	f, err := os.Create(devicePath)
 	if err != nil {
 		t.Fatalf("creating device file: %v", err)
 	}
-	if err := f.Truncate(deviceSize); err != nil {
+	if err := f.Truncate(int64(deviceSize)); err != nil {
 		f.Close()
 		t.Fatalf("truncating device file: %v", err)
 	}
@@ -402,7 +404,7 @@ func TestBlockStoreMultiDevice(t *testing.T) {
 		if err != nil {
 			t.Fatalf("creating device file %d: %v", i, err)
 		}
-		if err := f.Truncate(deviceSize); err != nil {
+		if err := f.Truncate(int64(deviceSize)); err != nil {
 			f.Close()
 			t.Fatalf("truncating device file %d: %v", i, err)
 		}
@@ -477,7 +479,7 @@ func TestBlockStoreRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating device file: %v", err)
 	}
-	if err := f.Truncate(deviceSize); err != nil {
+	if err := f.Truncate(int64(deviceSize)); err != nil {
 		f.Close()
 		t.Fatalf("truncating device file: %v", err)
 	}
@@ -558,7 +560,7 @@ func TestBlockStoreOutOfSpace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating device file: %v", err)
 	}
-	if err := f.Truncate(deviceSize); err != nil {
+	if err := f.Truncate(int64(deviceSize)); err != nil {
 		f.Close()
 		t.Fatalf("truncating device file: %v", err)
 	}
@@ -604,19 +606,19 @@ func TestBlockStoreOutOfSpace(t *testing.T) {
 
 // TestCreateBlockStoreBackend tests creating a block store via the factory.
 func TestCreateBlockStoreBackend(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping factory test in short mode")
+	// Adaptive sizing: use smaller device in short mode
+	deviceSize := 20 * 1024 * 1024 // 20MB for short mode
+	if !testing.Short() {
+		deviceSize = 100 * 1024 * 1024 // 100MB for full mode
 	}
 
 	tmpDir := t.TempDir()
 	devicePath := filepath.Join(tmpDir, "device.img")
-
-	const deviceSize = 100 * 1024 * 1024
 	f, err := os.Create(devicePath)
 	if err != nil {
 		t.Fatalf("creating device file: %v", err)
 	}
-	if err := f.Truncate(deviceSize); err != nil {
+	if err := f.Truncate(int64(deviceSize)); err != nil {
 		f.Close()
 		t.Fatalf("truncating device file: %v", err)
 	}
@@ -664,19 +666,19 @@ func TestCreateBlockStoreBackend(t *testing.T) {
 
 // TestBlockStoreDeduplication tests automatic deduplication.
 func TestBlockStoreDeduplication(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping dedup test in short mode")
+	// Adaptive sizing: use smaller device in short mode
+	deviceSize := 20 * 1024 * 1024 // 20MB for short mode
+	if !testing.Short() {
+		deviceSize = 100 * 1024 * 1024 // 100MB for full mode
 	}
 
 	tmpDir := t.TempDir()
 	devicePath := filepath.Join(tmpDir, "device.img")
-
-	const deviceSize = 100 * 1024 * 1024
 	f, err := os.Create(devicePath)
 	if err != nil {
 		t.Fatalf("creating device file: %v", err)
 	}
-	if err := f.Truncate(deviceSize); err != nil {
+	if err := f.Truncate(int64(deviceSize)); err != nil {
 		f.Close()
 		t.Fatalf("truncating device file: %v", err)
 	}
