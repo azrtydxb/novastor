@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"go.uber.org/zap"
 )
 
 // BackendFactory creates a Store instance from a configuration.
