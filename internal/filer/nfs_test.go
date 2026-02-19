@@ -81,11 +81,11 @@ func (s *stubNFSHandler) Truncate(_ context.Context, _ uint64, _ int64) error {
 	return nil
 }
 
-<<<<<<< HEAD
 func (s *stubNFSHandler) Link(_ context.Context, targetIno uint64, _ uint64, _ string) (*InodeMeta, error) {
 	now := time.Now().UnixNano()
 	return &InodeMeta{Ino: targetIno, Type: TypeFile, Mode: 0644, LinkCount: 2, ATime: now, MTime: now, CTime: now}, nil
-=======
+}
+
 func (s *stubNFSHandler) Mknod(_ context.Context, _ uint64, _ string, mode uint32, devType InodeType, major, minor uint32) (*InodeMeta, error) {
 	now := time.Now().UnixNano()
 	return &InodeMeta{
@@ -99,7 +99,6 @@ func (s *stubNFSHandler) Mknod(_ context.Context, _ uint64, _ string, mode uint3
 		MTime:       now,
 		CTime:       now,
 	}, nil
->>>>>>> c2b66ed ([Feature] Implement MKNOD procedure for special device files in NFS v3)
 }
 
 // waitForAddr polls until the server has a non-nil address or the timeout expires.
@@ -1817,8 +1816,8 @@ type truncationTestHandler struct {
 func newTruncationTestHandler() *truncationTestHandler {
 	now := time.Now().UnixNano()
 	return &truncationTestHandler{
-		files: make(map[uint64][]byte),
-		nextIno: 2,
+		files:    make(map[uint64][]byte),
+		nextIno:  2,
 		rootMeta: &InodeMeta{Ino: 1, Type: TypeDir, Mode: 0755, LinkCount: 2, ATime: now, MTime: now, CTime: now},
 	}
 }
@@ -1887,6 +1886,21 @@ func (h *truncationTestHandler) Rmdir(_ context.Context, _ uint64, _ string) err
 
 func (h *truncationTestHandler) ReadDir(_ context.Context, _ uint64) ([]*DirEntry, error) {
 	return []*DirEntry{}, nil
+}
+
+func (h *truncationTestHandler) Link(_ context.Context, targetIno uint64, _ uint64, _ string) (*InodeMeta, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.files[targetIno]
+	if !ok {
+		return nil, fmt.Errorf("no such file")
+	}
+	now := time.Now().UnixNano()
+	return &InodeMeta{Ino: targetIno, Type: TypeFile, Mode: 0644, LinkCount: 2, ATime: now, MTime: now, CTime: now}, nil
+}
+
+func (h *truncationTestHandler) Mknod(_ context.Context, _ uint64, _ string, _ uint32, _ InodeType, _, _ uint32) (*InodeMeta, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 
 func (h *truncationTestHandler) Read(_ context.Context, ino uint64, offset, length int64) ([]byte, error) {
@@ -1986,13 +2000,13 @@ func TestNFSServer_SetattrTruncateToZero(t *testing.T) {
 	pw := newXDRWriter()
 	pw.writeOpaque(fileHandle)
 	// sattr3
-	pw.writeBool(false)  // set_mode
-	pw.writeBool(false)  // set_uid
-	pw.writeBool(false)  // set_gid
-	pw.writeBool(true)   // set_size = true
-	pw.writeUint64(0)    // new size = 0
-	pw.writeUint32(0)    // set_atime = DONT_CHANGE
-	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	pw.writeBool(false) // set_mode
+	pw.writeBool(false) // set_uid
+	pw.writeBool(false) // set_gid
+	pw.writeBool(true)  // set_size = true
+	pw.writeUint64(0)   // new size = 0
+	pw.writeUint32(0)   // set_atime = DONT_CHANGE
+	pw.writeUint32(0)   // set_mtime = DONT_CHANGE
 	// sattrguard3 - check flag (false = no check)
 	pw.writeBool(false)
 
@@ -2059,13 +2073,13 @@ func TestNFSServer_SetattrTruncateSmaller(t *testing.T) {
 	pw := newXDRWriter()
 	pw.writeOpaque(fileHandle)
 	// sattr3
-	pw.writeBool(false)  // set_mode
-	pw.writeBool(false)  // set_uid
-	pw.writeBool(false)  // set_gid
-	pw.writeBool(true)   // set_size = true
-	pw.writeUint64(5)    // new size = 5
-	pw.writeUint32(0)    // set_atime = DONT_CHANGE
-	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	pw.writeBool(false) // set_mode
+	pw.writeBool(false) // set_uid
+	pw.writeBool(false) // set_gid
+	pw.writeBool(true)  // set_size = true
+	pw.writeUint64(5)   // new size = 5
+	pw.writeUint32(0)   // set_atime = DONT_CHANGE
+	pw.writeUint32(0)   // set_mtime = DONT_CHANGE
 	// sattrguard3
 	pw.writeBool(false)
 
@@ -2136,13 +2150,13 @@ func TestNFSServer_SetattrTruncateLarger(t *testing.T) {
 	pw := newXDRWriter()
 	pw.writeOpaque(fileHandle)
 	// sattr3
-	pw.writeBool(false)  // set_mode
-	pw.writeBool(false)  // set_uid
-	pw.writeBool(false)  // set_gid
-	pw.writeBool(true)   // set_size = true
-	pw.writeUint64(10)   // new size = 10
-	pw.writeUint32(0)    // set_atime = DONT_CHANGE
-	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	pw.writeBool(false) // set_mode
+	pw.writeBool(false) // set_uid
+	pw.writeBool(false) // set_gid
+	pw.writeBool(true)  // set_size = true
+	pw.writeUint64(10)  // new size = 10
+	pw.writeUint32(0)   // set_atime = DONT_CHANGE
+	pw.writeUint32(0)   // set_mtime = DONT_CHANGE
 	// sattrguard3
 	pw.writeBool(false)
 
@@ -2290,13 +2304,13 @@ func TestNFSServer_SetattrTruncateDirectory(t *testing.T) {
 	pw := newXDRWriter()
 	pw.writeOpaque(rootHandle)
 	// sattr3
-	pw.writeBool(false)  // set_mode
-	pw.writeBool(false)  // set_uid
-	pw.writeBool(false)  // set_gid
-	pw.writeBool(true)   // set_size = true
-	pw.writeUint64(0)    // new size = 0
-	pw.writeUint32(0)    // set_atime = DONT_CHANGE
-	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	pw.writeBool(false) // set_mode
+	pw.writeBool(false) // set_uid
+	pw.writeBool(false) // set_gid
+	pw.writeBool(true)  // set_size = true
+	pw.writeUint64(0)   // new size = 0
+	pw.writeUint32(0)   // set_atime = DONT_CHANGE
+	pw.writeUint32(0)   // set_mtime = DONT_CHANGE
 	// sattrguard3
 	pw.writeBool(false)
 

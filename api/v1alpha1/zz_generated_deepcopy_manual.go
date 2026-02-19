@@ -1,3 +1,4 @@
+// nolint:revive // Auto-generated deepcopy code
 package v1alpha1
 
 import (

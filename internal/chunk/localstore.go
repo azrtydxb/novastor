@@ -122,7 +122,12 @@ func (s *LocalStore) List(_ context.Context) ([]ChunkID, error) {
 func (s *LocalStore) diskUsedBytes() uint64 {
 	var total uint64
 	_ = filepath.Walk(s.dir, func(_ string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		// nolint:nilerr // Skip files we can't stat - return nil to continue walking
+		if err != nil {
+			// Skip files we can't stat
+			return nil
+		}
+		if info.IsDir() {
 			return nil
 		}
 		total += uint64(info.Size())
@@ -209,8 +214,7 @@ func (s *LocalStore) HealthCheck(ctx context.Context) error {
 
 	// Try to create a temporary file to verify write permissions.
 	// Use a unique name to avoid collisions.
-	probePath := filepath.Join(s.dir, ".healthcheck")
-	probePath = filepath.Join(s.dir, ".healthcheck_probe")
+	probePath := filepath.Join(s.dir, ".healthcheck_probe")
 	file, err := os.Create(probePath)
 	if err != nil {
 		return fmt.Errorf("write permission check failed: %w", err)

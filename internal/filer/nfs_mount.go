@@ -75,8 +75,8 @@ func (m *mountHandler) handleNull() ([]byte, error) {
 // handleMnt implements MOUNTPROC3_MNT - mounts the export and returns a root file handle.
 func (m *mountHandler) handleMnt(payload []byte) ([]byte, error) {
 	r := newXDRReader(payload)
-	dirPath, err := r.readString()
-	if err != nil {
+	dirPath, readErr := r.readString()
+	if readErr != nil {
 		return m.mountError(mntErrInval), nil
 	}
 

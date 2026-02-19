@@ -181,8 +181,9 @@ func (ds *DedupStore) Stats(ctx context.Context) (*DedupStats, error) {
 		// Fallback: recalculate from reference counter
 		_ = ds.refCounter.ForEach(func(id ChunkID, count uint32) error {
 			chunk, gerr := ds.backend.Get(ctx, id)
+			// nolint:nilerr // Skip chunks that can't be read - continue iteration
 			if gerr != nil {
-				// Skip chunks that can't be read
+				// Skip chunks that can't be read - continue iteration
 				return nil
 			}
 			logicalBytes += int64(len(chunk.Data)) * int64(count)
