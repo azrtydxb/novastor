@@ -191,37 +191,37 @@ func main() {
 	}
 	// Disk stats are only available for local backend.
 	collector.DiskStatsFn = func() []metrics.DiskStats {
-	// Use CapacityStore interface if available.
-	if cs, ok := store.(chunk.CapacityStore); ok {
-		stats, err := cs.Stats(context.Background())
-		if err != nil {
-			logging.L.Warn("metrics: getting store stats failed", zap.Error(err))
-			return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
+		// Use CapacityStore interface if available.
+		if cs, ok := store.(chunk.CapacityStore); ok {
+			stats, err := cs.Stats(context.Background())
+			if err != nil {
+				logging.L.Warn("metrics: getting store stats failed", zap.Error(err))
+				return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
+			}
+			total := stats.TotalBytes
+			if total < 0 {
+				total = 0
+			}
+			used := stats.UsedBytes
+			if used < 0 {
+				used = 0
+			}
+			free := stats.AvailableBytes
+			if free < 0 {
+				free = 0
+			}
+			return []metrics.DiskStats{
+				{
+					Device: *dataDir,
+					Total:  uint64(total),
+					Used:   uint64(used),
+					Free:   uint64(free),
+				},
+			}
 		}
-		total := stats.TotalBytes
-		if total < 0 {
-			total = 0
-		}
-		used := stats.UsedBytes
-		if used < 0 {
-			used = 0
-		}
-		free := stats.AvailableBytes
-		if free < 0 {
-			free = 0
-		}
-		return []metrics.DiskStats{
-			{
-				Device: *dataDir,
-				Total:  uint64(total),
-				Used:   uint64(used),
-				Free:   uint64(free),
-			},
-		}
-	}
-	// If CapacityStore is not implemented, return zeros.
-	logging.L.Warn("metrics: store does not support capacity stats")
-	return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
+		// If CapacityStore is not implemented, return zeros.
+		logging.L.Warn("metrics: store does not support capacity stats")
+		return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
 	}
 
 	// Main context for the agent lifetime.

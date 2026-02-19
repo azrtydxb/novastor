@@ -665,7 +665,6 @@ func Register() {
 	prometheus.MustRegister(NFSOpDuration)
 	prometheus.MustRegister(ActiveLocks)
 
-
 	// Webhook metrics
 	prometheus.MustRegister(WebhookAdmissionReviewsTotal)
 	prometheus.MustRegister(WebhookAdmissionReviewDuration)

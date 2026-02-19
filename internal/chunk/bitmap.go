@@ -42,8 +42,8 @@ type Bitmap struct {
 
 // BitmapHeader represents the on-disk metadata header.
 type BitmapHeader struct {
-	Magic     uint32
-	Version   uint32
+	Magic       uint32
+	Version     uint32
 	TotalBlocks uint64
 	UsedBlocks  uint64
 }
@@ -146,8 +146,8 @@ func (b *Bitmap) Sync() error {
 	defer f.Close()
 
 	header := BitmapHeader{
-		Magic:      bitmapMagic,
-		Version:    bitmapVersion,
+		Magic:       bitmapMagic,
+		Version:     bitmapVersion,
 		TotalBlocks: b.totalBlocks,
 		UsedBlocks:  b.usedBlocks,
 	}
@@ -289,8 +289,8 @@ func (b *Bitmap) syncUnsafe() error {
 	defer f.Close()
 
 	header := BitmapHeader{
-		Magic:      bitmapMagic,
-		Version:    bitmapVersion,
+		Magic:       bitmapMagic,
+		Version:     bitmapVersion,
 		TotalBlocks: b.totalBlocks,
 		UsedBlocks:  b.usedBlocks,
 	}
