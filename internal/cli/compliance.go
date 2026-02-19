@@ -15,9 +15,12 @@ import (
 type ComplianceStatus string
 
 const (
-	ComplianceOK       ComplianceStatus = "OK"
+	// ComplianceOK indicates the volume is fully compliant with its protection policy.
+	ComplianceOK ComplianceStatus = "OK"
+	// ComplianceDegraded indicates the volume has some failed chunks but data is still recoverable.
 	ComplianceDegraded ComplianceStatus = "DEGRADED"
-	ComplianceFailed   ComplianceStatus = "FAILED"
+	// ComplianceFailed indicates the volume has lost too much data to recover.
+	ComplianceFailed ComplianceStatus = "FAILED"
 )
 
 // jsonVolumeCompliance represents a volume's compliance status in JSON output format.

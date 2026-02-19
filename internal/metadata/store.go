@@ -17,8 +17,7 @@ import (
 	"github.com/piwi3910/novastor/internal/metrics"
 )
 
-// Type aliases for backward compatibility and code clarity.
-// These types are fully defined in protection.go.
+// VolumeProtectionMode is an alias for ProtectionMode for backward compatibility.
 type VolumeProtectionMode = ProtectionMode
 
 // DataProtectionConfig is an alias for ProtectionProfile for code clarity.
@@ -55,11 +54,13 @@ type VolumeMeta struct {
 	ComplianceInfo *ComplianceInfo `json:"complianceInfo,omitempty"`
 }
 
+// PlacementMap records which nodes store replicas of a chunk.
 type PlacementMap struct {
 	ChunkID string   `json:"chunkID"`
 	Nodes   []string `json:"nodes"`
 }
 
+// RaftStore provides a Raft-consistent distributed metadata store.
 type RaftStore struct {
 	raft *raft.Raft
 	fsm  MetadataFSM
@@ -265,10 +266,12 @@ func (s *RaftStore) joinCluster(nodeID, raftAddr string, peers []string, maxAtte
 	return fmt.Errorf("failed to join cluster after %d attempts via peers %v", maxAttempts, peers)
 }
 
+// IsLeader returns true if this node is the Raft leader.
 func (s *RaftStore) IsLeader() bool {
 	return s.raft.State() == raft.Leader
 }
 
+// Close shuts down the Raft instance and closes the FSM.
 func (s *RaftStore) Close() error {
 	raftErr := s.raft.Shutdown().Error()
 	fsmErr := s.fsm.Close()
@@ -295,6 +298,7 @@ func (s *RaftStore) apply(op *fsmOp) error {
 	return nil
 }
 
+// PutVolumeMeta stores volume metadata in the Raft store.
 func (s *RaftStore) PutVolumeMeta(_ context.Context, meta *VolumeMeta) error {
 	data, err := json.Marshal(meta)
 	if err != nil {
@@ -303,6 +307,7 @@ func (s *RaftStore) PutVolumeMeta(_ context.Context, meta *VolumeMeta) error {
 	return s.apply(&fsmOp{Op: opPut, Bucket: bucketVolumes, Key: meta.VolumeID, Value: data})
 }
 
+// GetVolumeMeta retrieves volume metadata by ID.
 func (s *RaftStore) GetVolumeMeta(_ context.Context, volumeID string) (*VolumeMeta, error) {
 	data, err := s.fsm.Get(bucketVolumes, volumeID)
 	if err != nil {
@@ -315,10 +320,12 @@ func (s *RaftStore) GetVolumeMeta(_ context.Context, volumeID string) (*VolumeMe
 	return &meta, nil
 }
 
+// DeleteVolumeMeta removes volume metadata from the store.
 func (s *RaftStore) DeleteVolumeMeta(_ context.Context, volumeID string) error {
 	return s.apply(&fsmOp{Op: opDelete, Bucket: bucketVolumes, Key: volumeID})
 }
 
+// ListVolumesMeta returns all volume metadata entries.
 func (s *RaftStore) ListVolumesMeta(_ context.Context) ([]*VolumeMeta, error) {
 	all, err := s.fsm.GetAll(bucketVolumes)
 	if err != nil {
@@ -335,6 +342,7 @@ func (s *RaftStore) ListVolumesMeta(_ context.Context) ([]*VolumeMeta, error) {
 	return result, nil
 }
 
+// PutPlacementMap stores a chunk's placement map.
 func (s *RaftStore) PutPlacementMap(_ context.Context, pm *PlacementMap) error {
 	data, err := json.Marshal(pm)
 	if err != nil {
@@ -343,6 +351,7 @@ func (s *RaftStore) PutPlacementMap(_ context.Context, pm *PlacementMap) error {
 	return s.apply(&fsmOp{Op: opPut, Bucket: bucketPlacements, Key: pm.ChunkID, Value: data})
 }
 
+// GetPlacementMap retrieves a chunk's placement map.
 func (s *RaftStore) GetPlacementMap(_ context.Context, chunkID string) (*PlacementMap, error) {
 	data, err := s.fsm.Get(bucketPlacements, chunkID)
 	if err != nil {

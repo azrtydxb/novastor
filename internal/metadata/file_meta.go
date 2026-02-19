@@ -16,8 +16,11 @@ const (
 type InodeType string
 
 const (
-	InodeTypeFile    InodeType = "file"
-	InodeTypeDir     InodeType = "dir"
+	// InodeTypeFile represents a regular file.
+	InodeTypeFile InodeType = "file"
+	// InodeTypeDir represents a directory.
+	InodeTypeDir InodeType = "dir"
+	// InodeTypeSymlink represents a symbolic link.
 	InodeTypeSymlink InodeType = "symlink"
 )
 

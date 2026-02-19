@@ -33,22 +33,27 @@ type ConfigFS interface {
 // RealConfigFS implements ConfigFS using the real operating system calls.
 type RealConfigFS struct{}
 
+// MkdirAll creates a directory including all necessary parents.
 func (RealConfigFS) MkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
+// WriteFile writes data to a file with the given permissions.
 func (RealConfigFS) WriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(path, data, perm)
 }
 
+// Remove removes the named file or directory.
 func (RealConfigFS) Remove(path string) error {
 	return os.Remove(path)
 }
 
+// Symlink creates a symbolic link from oldname to newname.
 func (RealConfigFS) Symlink(oldname, newname string) error {
 	return os.Symlink(oldname, newname)
 }
 
+// ReadDir reads the directory and returns a list of directory entries.
 func (RealConfigFS) ReadDir(path string) ([]fs.DirEntry, error) {
 	return os.ReadDir(path)
 }
