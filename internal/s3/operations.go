@@ -1,3 +1,6 @@
+// Package s3 provides the S3-compatible gateway implementation for NovaStor.
+// This package implements S3 protocol handlers for bucket and object operations,
+// including multipart upload support.
 package s3
 
 import (
@@ -46,7 +49,7 @@ type listPart struct {
 }
 
 // handleListParts handles GET /<bucket>/<key>?uploadId=ID.
-func (g *Gateway) handleListParts(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (g *Gateway) handleListParts(w http.ResponseWriter, r *http.Request, bucket, _ string) {
 	ctx := r.Context()
 
 	uploadID := r.URL.Query().Get("uploadId")
@@ -587,7 +590,7 @@ type listObjectVersionsResult struct {
 	Name            string          `xml:"Name"`
 	Prefix          string          `xml:"Prefix,omitempty"`
 	KeyMarker       string          `xml:"KeyMarker,omitempty"`
-	VersionIdMarker string          `xml:"VersionIdMarker,omitempty"`
+	VersionIDMarker string          `xml:"VersionIdMarker,omitempty"`
 	MaxKeys         int             `xml:"MaxKeys"`
 	IsTruncated     bool            `xml:"IsTruncated"`
 	Versions        []objectVersion `xml:"Version,omitempty"`
@@ -629,7 +632,7 @@ func (g *Gateway) handleListObjectVersions(w http.ResponseWriter, r *http.Reques
 	// Parse query parameters.
 	prefix := r.URL.Query().Get("prefix")
 	keyMarker := r.URL.Query().Get("key-marker")
-	versionIdMarker := r.URL.Query().Get("version-id-marker")
+	versionIDMarker := r.URL.Query().Get("version-id-marker")
 
 	maxKeys := 1000
 	if mk := r.URL.Query().Get("max-keys"); mk != "" {
@@ -675,7 +678,7 @@ func (g *Gateway) handleListObjectVersions(w http.ResponseWriter, r *http.Reques
 		Name:            bucket,
 		Prefix:          prefix,
 		KeyMarker:       keyMarker,
-		VersionIdMarker: versionIdMarker,
+		VersionIDMarker: versionIDMarker,
 		MaxKeys:         maxKeys,
 		IsTruncated:     isTruncated,
 		Versions:        versions,

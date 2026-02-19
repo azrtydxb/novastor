@@ -1,3 +1,6 @@
+// Package datamover provides data movement functionality for NovaStor.
+// This package handles reconstruction of erasure-coded chunks and
+// data rebalancing between storage nodes.
 package datamover
 
 import (

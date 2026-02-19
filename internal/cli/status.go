@@ -25,7 +25,7 @@ type jsonStatus struct {
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show cluster status",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return fmt.Errorf("connecting to metadata service: %w", err)

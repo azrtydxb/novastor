@@ -82,7 +82,7 @@ func (r *CertRotator) GetCertificate() *tls.Certificate {
 // to always serve the most recently loaded certificate.
 func (r *CertRotator) TLSConfig() *tls.Config {
 	return &tls.Config{
-		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			cert := r.GetCertificate()
 			if cert == nil {
 				return nil, errNoCertificateLoaded

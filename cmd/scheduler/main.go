@@ -1,3 +1,6 @@
+// Package main provides the NovaStor scheduler plugin binary.
+// The scheduler plugin implements Kubernetes scheduling extension
+// for data-locality aware pod placement decisions.
 package main
 
 import (

@@ -1,3 +1,6 @@
+// Package csi provides the CSI driver implementation for NovaStor.
+// This package implements the CSI Controller service for volume provisioning,
+// including CreateVolume, DeleteVolume, and volume capabilities validation.
 package csi
 
 import (
@@ -742,7 +745,7 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 // for that segment only. Otherwise, returns total cluster capacity.
 // The capacity is calculated from live nodes' available storage,
 // divided by the replica factor for replicated volumes.
-func (cs *ControllerServer) GetCapacity(ctx context.Context, req *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
+func (cs *ControllerServer) GetCapacity(ctx context.Context, _ *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
 	start := time.Now()
 	defer func() {
 		metrics.CapacityQueryDuration.Observe(time.Since(start).Seconds())

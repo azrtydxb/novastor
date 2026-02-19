@@ -23,7 +23,8 @@ func setupGRPCTest(t *testing.T) (*GRPCClient, func()) {
 	NewGRPCServer(store).Register(srv)
 
 	// Listen on a random port.
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		storeCleanup()
 		t.Fatalf("listen: %v", err)

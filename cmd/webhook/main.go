@@ -1,3 +1,6 @@
+// Package main provides the NovaStor admission webhook binary.
+// The webhook injects scheduler configuration into pods that use
+// NovaStor storage for data-locality aware scheduling.
 package main
 
 import (
@@ -163,10 +166,10 @@ func startMetricsServer(addr string) {
 func startHealthProbeServer(addr string) {
 	logger := logging.L.Named("health")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 

@@ -20,7 +20,7 @@ func buildCLI(t *testing.T) string {
 	// Find the repository root by looking for go.mod
 	repoRoot := "../.."
 	binaryPath := t.TempDir() + "/novastorctl"
-	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/cli/")
+	cmd := exec.CommandContext(context.Background(), "go", "build", "-o", binaryPath, "./cmd/cli/")
 	cmd.Dir = repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to build CLI: %v\n%s", err, out)
@@ -33,7 +33,7 @@ func runCLI(t *testing.T, binary string, metaAddr string, args ...string) (strin
 	t.Helper()
 
 	allArgs := append([]string{"--meta-addr", metaAddr}, args...)
-	cmd := exec.Command(binary, allArgs...)
+	cmd := exec.CommandContext(context.Background(), binary, allArgs...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

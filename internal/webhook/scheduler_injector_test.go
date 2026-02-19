@@ -24,7 +24,7 @@ func newFakeClient(namespace string, pvcs []runtime.Object, storageClasses []run
 		}
 	}
 	objects := append(pvcs, storageClasses...)
-	return fake.NewSimpleClientset(objects...)
+	return fake.NewClientset(objects...)
 }
 
 func TestUsesNovaStorPVCs(t *testing.T) {

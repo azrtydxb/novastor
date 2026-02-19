@@ -163,7 +163,7 @@ var _ = (fs.NodeSymlinker)((*fuseRootNode)(nil))
 var _ = (fs.NodeCreater)((*fuseRootNode)(nil))
 
 // Getattr returns attributes for the root directory.
-func (n *fuseRootNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (n *fuseRootNode) Getattr(_ context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Ino = RootIno
 	out.Size = 0
@@ -277,7 +277,7 @@ func (n *fuseRootNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 }
 
 // Create creates a new file in the root.
-func (n *fuseRootNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+func (n *fuseRootNode) Create(ctx context.Context, name string, _ uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	meta, err := n.fs.Create(ctx, RootIno, name, mode&0777)
 	if err != nil {
 		return nil, nil, 0, syscall.EIO
@@ -313,7 +313,7 @@ func (n *fuseRootNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 }
 
 // Rename renames a file or directory in the root.
-func (n *fuseRootNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+func (n *fuseRootNode) Rename(ctx context.Context, name string, _ fs.InodeEmbedder, newName string, _ uint32) syscall.Errno {
 	// For simplicity, only support rename within root.
 	if err := n.fs.Rename(ctx, RootIno, name, RootIno, newName); err != nil {
 		return syscall.EIO
@@ -343,7 +343,6 @@ func (n *fuseRootNode) Symlink(ctx context.Context, target, name string, out *fu
 type fuseDirNode struct {
 	fs  *FileSystem
 	ino uint64
-	mu  sync.Mutex
 	fs.Inode
 }
 
@@ -360,7 +359,7 @@ var _ = (fs.NodeSymlinker)((*fuseDirNode)(nil))
 var _ = (fs.NodeCreater)((*fuseDirNode)(nil))
 
 // Getattr returns file attributes.
-func (n *fuseDirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (n *fuseDirNode) Getattr(ctx context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	meta, err := n.fs.Stat(ctx, n.ino)
 	if err != nil {
 		return syscall.EIO
@@ -371,7 +370,7 @@ func (n *fuseDirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.At
 }
 
 // Setattr sets file attributes.
-func (n *fuseDirNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+func (n *fuseDirNode) Setattr(ctx context.Context, _ fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	meta, err := n.fs.Stat(ctx, n.ino)
 	if err != nil {
 		return syscall.EIO
@@ -523,7 +522,7 @@ func (n *fuseDirNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 }
 
 // Rename renames a file or directory.
-func (n *fuseDirNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+func (n *fuseDirNode) Rename(ctx context.Context, name string, _ fs.InodeEmbedder, newName string, _ uint32) syscall.Errno {
 	// For simplicity, only support rename within the same parent.
 	if err := n.fs.Rename(ctx, n.ino, name, n.ino, newName); err != nil {
 		return syscall.EIO
@@ -550,7 +549,7 @@ func (n *fuseDirNode) Symlink(ctx context.Context, target, name string, out *fus
 }
 
 // Create creates a new file.
-func (n *fuseDirNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+func (n *fuseDirNode) Create(ctx context.Context, name string, _ uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	meta, err := n.fs.Create(ctx, n.ino, name, mode&0777)
 	if err != nil {
 		return nil, nil, 0, syscall.EIO
@@ -571,9 +570,9 @@ func (n *fuseDirNode) Create(ctx context.Context, name string, flags uint32, mod
 
 // fuseFileNode represents a regular file in the FUSE filesystem.
 type fuseFileNode struct {
+	mu  sync.Mutex
 	fs  *FileSystem
 	ino uint64
-	mu  sync.Mutex
 	fs.Inode
 }
 
@@ -586,7 +585,7 @@ var _ = (fs.NodeWriter)((*fuseFileNode)(nil))
 var _ = (fs.NodeFsyncer)((*fuseFileNode)(nil))
 
 // Getattr returns file attributes.
-func (n *fuseFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (n *fuseFileNode) Getattr(ctx context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	meta, err := n.fs.Stat(ctx, n.ino)
 	if err != nil {
 		return syscall.EIO
@@ -597,7 +596,7 @@ func (n *fuseFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 }
 
 // Setattr sets file attributes.
-func (n *fuseFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+func (n *fuseFileNode) Setattr(ctx context.Context, _ fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	meta, err := n.fs.Stat(ctx, n.ino)
 	if err != nil {
 		return syscall.EIO
@@ -663,13 +662,13 @@ func (n *fuseFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.Se
 }
 
 // Open opens a file.
-func (n *fuseFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+func (n *fuseFileNode) Open(_ context.Context, _ uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	handle := &fuseFileHandle{}
 	return handle, 0, 0
 }
 
 // Read reads data from a file.
-func (n *fuseFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (n *fuseFileNode) Read(ctx context.Context, _ fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	data, err := n.fs.Read(ctx, n.ino, off, int64(len(dest)))
 	if err != nil {
 		return nil, syscall.EIO
@@ -678,7 +677,7 @@ func (n *fuseFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, o
 }
 
 // Write writes data to a file.
-func (n *fuseFileNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+func (n *fuseFileNode) Write(ctx context.Context, _ fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -690,20 +689,18 @@ func (n *fuseFileNode) Write(ctx context.Context, f fs.FileHandle, data []byte, 
 }
 
 // Fsync ensures file data is written to stable storage.
-func (n *fuseFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
+func (n *fuseFileNode) Fsync(_ context.Context, _ fs.FileHandle, _ uint32) syscall.Errno {
 	return 0
 }
 
 // fuseFileHandle represents an open file handle.
-type fuseFileHandle struct {
-	mu sync.Mutex
-}
+type fuseFileHandle struct{}
 
 var _ = (fs.FileHandle)((*fuseFileHandle)(nil))
 var _ = (fs.FileReleaser)((*fuseFileHandle)(nil))
 
 // Release closes the file handle.
-func (h *fuseFileHandle) Release(ctx context.Context) syscall.Errno {
+func (h *fuseFileHandle) Release(_ context.Context) syscall.Errno {
 	return 0
 }
 
@@ -720,7 +717,7 @@ var _ = (fs.NodeGetattrer)((*fuseSymlinkNode)(nil))
 var _ = (fs.NodeReadlinker)((*fuseSymlinkNode)(nil))
 
 // Getattr returns file attributes.
-func (n *fuseSymlinkNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (n *fuseSymlinkNode) Getattr(ctx context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	meta, err := n.fs.Stat(ctx, n.ino)
 	if err != nil {
 		return syscall.EIO
@@ -731,7 +728,7 @@ func (n *fuseSymlinkNode) Getattr(ctx context.Context, f fs.FileHandle, out *fus
 }
 
 // Readlink reads the target of a symbolic link.
-func (n *fuseSymlinkNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
+func (n *fuseSymlinkNode) Readlink(_ context.Context) ([]byte, syscall.Errno) {
 	return []byte(n.target), 0
 }
 

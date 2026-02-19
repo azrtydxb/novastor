@@ -62,12 +62,12 @@ func (m *mockSnapshotStore) ListVolumesMeta(_ context.Context) ([]*metadata.Volu
 	return result, nil
 }
 
-func (m *mockSnapshotStore) PutPlacementMap(_ context.Context, pm *metadata.PlacementMap) error {
+func (m *mockSnapshotStore) PutPlacementMap(_ context.Context, _ *metadata.PlacementMap) error {
 	// No-op for tests.
 	return nil
 }
 
-func (m *mockSnapshotStore) DeletePlacementMap(_ context.Context, chunkID string) error {
+func (m *mockSnapshotStore) DeletePlacementMap(_ context.Context, _ string) error {
 	// No-op for tests.
 	return nil
 }

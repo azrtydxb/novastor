@@ -120,8 +120,9 @@ func (c *ErasureCodingChecker) CheckChunkWithIntegrity(ctx context.Context, chun
 	if shardReader != nil {
 		corrupted, verifyErr := shardReader.VerifyErasureChunk(ctx, chunkID, result.AvailableNodes, dataShards)
 		if verifyErr != nil {
-			// Log the error but don't fail the compliance check entirely
-			return result, nil
+			// Log the error but don't fail the compliance check entirely.
+			// Return the error so caller knows verification failed.
+			return result, fmt.Errorf("verifying erasure chunk: %w", verifyErr)
 		}
 		if corrupted {
 			result.Status = StatusCorrupted

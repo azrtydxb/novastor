@@ -1,3 +1,5 @@
+// Package csi provides tests for the CSI driver implementation.
+// This file tests topology-aware volume provisioning.
 package csi
 
 import (
@@ -44,7 +46,7 @@ func (p *topologyPlacer) Place(count int) []string {
 	return result
 }
 
-func (p *topologyPlacer) PlaceKey(key string, count int) []string {
+func (p *topologyPlacer) PlaceKey(_ string, count int) []string {
 	// For testing, we use the same behavior as Place.
 	// Deterministic per key is not required for topology tests.
 	return p.Place(count)
@@ -442,7 +444,7 @@ func TestCreateVolume_TopologyNoMatchFallback(t *testing.T) {
 
 	// Volume should be accessible from the available nodes.
 	topologies := vol.GetAccessibleTopology()
-	if topologies == nil || len(topologies) == 0 {
+	if len(topologies) == 0 {
 		t.Error("expected accessible topology from fallback nodes")
 	}
 }
@@ -489,7 +491,7 @@ func TestCreateVolume_TopologyWithRWX(t *testing.T) {
 
 	// Verify topology is respected.
 	topologies := vol.GetAccessibleTopology()
-	if topologies == nil || len(topologies) == 0 {
+	if len(topologies) == 0 {
 		t.Fatal("expected accessible topology for RWX volume")
 	}
 

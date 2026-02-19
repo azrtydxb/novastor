@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -162,7 +163,11 @@ func (m *mockLockStore) cleanupExpiredLocks() (int, error) {
 func (m *mockLockStore) getLocksForInode(ino uint64) ([]*LockLease, error) {
 	indexData, err := m.fsm.Get(bucketLocks, lockIndexKey(ino))
 	if err != nil {
-		return nil, nil
+		// No locks for this inode yet - not found is acceptable.
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	var index lockIndex
 	if err := json.Unmarshal(indexData, &index); err != nil {
@@ -200,7 +205,11 @@ func (m *mockLockStore) addLockToIndex(ino uint64, leaseID string) error {
 func (m *mockLockStore) removeLockFromIndex(ino uint64, leaseID string) error {
 	indexData, err := m.fsm.Get(bucketLocks, lockIndexKey(ino))
 	if err != nil {
-		return nil
+		// Index doesn't exist - not found is acceptable.
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil
+		}
+		return err
 	}
 	var index lockIndex
 	_ = json.Unmarshal(indexData, &index)

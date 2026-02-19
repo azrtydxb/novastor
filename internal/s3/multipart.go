@@ -63,7 +63,7 @@ func (g *Gateway) handleCreateMultipartUpload(w http.ResponseWriter, r *http.Req
 }
 
 // handleUploadPart handles PUT /<bucket>/<key>?partNumber=N&uploadId=ID.
-func (g *Gateway) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (g *Gateway) handleUploadPart(w http.ResponseWriter, r *http.Request, _ string, _ string) {
 	ctx := r.Context()
 
 	uploadID := r.URL.Query().Get("uploadId")
@@ -204,7 +204,7 @@ func (g *Gateway) handleCompleteMultipartUpload(w http.ResponseWriter, r *http.R
 }
 
 // handleAbortMultipartUpload handles DELETE /<bucket>/<key>?uploadId=ID.
-func (g *Gateway) handleAbortMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (g *Gateway) handleAbortMultipartUpload(w http.ResponseWriter, r *http.Request, _, _ string) {
 	ctx := r.Context()
 
 	uploadID := r.URL.Query().Get("uploadId")

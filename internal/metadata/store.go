@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -295,7 +296,10 @@ func (s *RaftStore) apply(op *fsmOp) error {
 }
 
 func (s *RaftStore) PutVolumeMeta(_ context.Context, meta *VolumeMeta) error {
-	data, _ := json.Marshal(meta)
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshaling volume meta: %w", err)
+	}
 	return s.apply(&fsmOp{Op: opPut, Bucket: bucketVolumes, Key: meta.VolumeID, Value: data})
 }
 
@@ -332,7 +336,10 @@ func (s *RaftStore) ListVolumesMeta(_ context.Context) ([]*VolumeMeta, error) {
 }
 
 func (s *RaftStore) PutPlacementMap(_ context.Context, pm *PlacementMap) error {
-	data, _ := json.Marshal(pm)
+	data, err := json.Marshal(pm)
+	if err != nil {
+		return fmt.Errorf("marshaling placement map: %w", err)
+	}
 	return s.apply(&fsmOp{Op: opPut, Bucket: bucketPlacements, Key: pm.ChunkID, Value: data})
 }
 
@@ -437,7 +444,7 @@ func (s *RaftStore) AcquireLock(ctx context.Context, args *AcquireLockArgs) (*Ac
 }
 
 // RenewLock extends the expiration time of an existing lock lease.
-func (s *RaftStore) RenewLock(ctx context.Context, args *RenewLockArgs) (*LockLease, error) {
+func (s *RaftStore) RenewLock(_ context.Context, args *RenewLockArgs) (*LockLease, error) {
 	leaseData, err := s.fsm.Get(bucketLocks, lockKey(args.LeaseID))
 	if err != nil {
 		return nil, fmt.Errorf("lease not found: %w", err)
@@ -526,7 +533,7 @@ func (s *RaftStore) TestLock(ctx context.Context, args *TestLockArgs) (*LockLeas
 }
 
 // GetLock retrieves a lock lease by ID.
-func (s *RaftStore) GetLock(ctx context.Context, leaseID string) (*LockLease, error) {
+func (s *RaftStore) GetLock(_ context.Context, leaseID string) (*LockLease, error) {
 	leaseData, err := s.fsm.Get(bucketLocks, lockKey(leaseID))
 	if err != nil {
 		return nil, fmt.Errorf("lease not found: %w", err)
@@ -595,12 +602,16 @@ func (s *RaftStore) CleanupExpiredLocks(ctx context.Context) (int, error) {
 }
 
 // getLocksForInode retrieves all locks for a given inode.
-func (s *RaftStore) getLocksForInode(ctx context.Context, ino uint64) ([]*LockLease, error) {
+// Returns nil, nil if no locks exist for this inode (not found is OK).
+func (s *RaftStore) getLocksForInode(_ context.Context, ino uint64) ([]*LockLease, error) {
 	// Get the index for this inode.
 	indexData, err := s.fsm.Get(bucketLocks, lockIndexKey(ino))
 	if err != nil {
-		// No locks for this inode yet.
-		return nil, nil
+		// No locks for this inode yet - not found is acceptable.
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting lock index: %w", err)
 	}
 
 	var index lockIndex
@@ -626,7 +637,7 @@ func (s *RaftStore) getLocksForInode(ctx context.Context, ino uint64) ([]*LockLe
 }
 
 // addLockToIndex adds a lease ID to the inode's lock index.
-func (s *RaftStore) addLockToIndex(ctx context.Context, ino uint64, leaseID string) error {
+func (s *RaftStore) addLockToIndex(_ context.Context, ino uint64, leaseID string) error {
 	indexData, err := s.fsm.Get(bucketLocks, lockIndexKey(ino))
 	if err != nil {
 		// No index yet, create a new one.
@@ -662,11 +673,14 @@ func (s *RaftStore) addLockToIndex(ctx context.Context, ino uint64, leaseID stri
 }
 
 // removeLockFromIndex removes a lease ID from the inode's lock index.
-func (s *RaftStore) removeLockFromIndex(ctx context.Context, ino uint64, leaseID string) error {
+func (s *RaftStore) removeLockFromIndex(_ context.Context, ino uint64, leaseID string) error {
 	indexData, err := s.fsm.Get(bucketLocks, lockIndexKey(ino))
 	if err != nil {
-		// Index doesn't exist, nothing to do.
-		return nil
+		// Index doesn't exist, nothing to do - not found is acceptable.
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil
+		}
+		return fmt.Errorf("getting lock index: %w", err)
 	}
 
 	var index lockIndex

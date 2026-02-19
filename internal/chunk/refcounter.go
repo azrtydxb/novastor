@@ -1,3 +1,6 @@
+// Package chunk provides the core chunk storage engine for NovaStor.
+// This file implements reference counting for chunks to track usage
+// across volumes and prevent premature deletion.
 package chunk
 
 import (

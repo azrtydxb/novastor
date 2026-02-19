@@ -321,7 +321,7 @@ func TestKeyedEncryptedStore_MultipleRotations(t *testing.T) {
 	}
 }
 
-func TestKeyedEncryptedStore_ImplementsCapacityStore(t *testing.T) {
+func TestKeyedEncryptedStore_ImplementsCapacityStore(_ *testing.T) {
 	var _ CapacityStore = &KeyedEncryptedStore{}
 }
 
@@ -346,7 +346,7 @@ func TestKeyedEncryptedStore_Stats(t *testing.T) {
 	}
 }
 
-func TestKeyedEncryptedStore_ImplementsChunkMetaStore(t *testing.T) {
+func TestKeyedEncryptedStore_ImplementsChunkMetaStore(_ *testing.T) {
 	var _ ChunkMetaStore = &KeyedEncryptedStore{}
 }
 
@@ -376,7 +376,7 @@ func TestKeyedEncryptedStore_GetMeta(t *testing.T) {
 	}
 }
 
-func TestKeyedEncryptedStore_ImplementsHealthCheckStore(t *testing.T) {
+func TestKeyedEncryptedStore_ImplementsHealthCheckStore(_ *testing.T) {
 	var _ HealthCheckStore = &KeyedEncryptedStore{}
 }
 

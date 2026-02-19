@@ -1,3 +1,6 @@
+// Package agent provides storage node agent functionality for NovaStor.
+// This package includes the chunk block device management that assembles
+// block devices from distributed chunks for NVMe-oF exports.
 package agent
 
 import (

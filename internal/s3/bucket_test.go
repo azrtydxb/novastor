@@ -190,10 +190,6 @@ func newTestGateway() (*Gateway, *memBucketStore) {
 
 const testAmzDate = "20250101T000000Z"
 
-func authHeader() string {
-	return authHeaderForRequest("GET", "/", "host", "localhost", testAmzDate)
-}
-
 // setAuthHeaders sets all required authentication headers on the request
 // This should be used instead of manually setting Authorization header
 func setAuthHeaders(req *http.Request, method, path string) {
@@ -239,47 +235,6 @@ func authHeaderForRequestWithQuery(method, path, queryString, signedHeaders, hos
 		queryString + "\n" +
 		"host:" + host + "\n" +
 		"\n" +
-		signedHeaders + "\n" +
-		"UNSIGNED-PAYLOAD"
-
-	// Build string to sign
-	canonicalRequestHash := sha256Hex([]byte(canonicalRequest))
-	stringToSign := "AWS4-HMAC-SHA256\n" +
-		amzDate + "\n" +
-		dateStamp + "/us-east-1/s3/aws4_request\n" +
-		canonicalRequestHash
-
-	// Derive signing key
-	signingKey := deriveSigningKey(testSecretKey, dateStamp, "us-east-1", "s3")
-
-	// Compute signature
-	signature := hmacSHA256Hex(signingKey, []byte(stringToSign))
-
-	return fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s, SignedHeaders=%s, Signature=%s",
-		credential, signedHeaders, signature)
-}
-
-// authHeaderForRequest generates a valid SigV4 Authorization header for testing
-// The canonical request format must match buildCanonicalRequest in auth.go:
-//
-//	Method + "\n" +
-//	Path + "\n" +
-//	QueryString + "\n" +
-//	CanonicalHeaders + "\n" +
-//	SignedHeaders + "\n" +
-//	PayloadHash
-func authHeaderForRequest(method, path, signedHeaders, host, amzDate string) string {
-	dateStamp := amzDate[:8]
-	credential := fmt.Sprintf("%s/%s/us-east-1/s3/aws4_request", testAccessKey, dateStamp)
-
-	// Build canonical request - must match buildCanonicalRequest format exactly
-	// Format: method\npath\nquery\nheaders\nsignedHeaders\npayloadHash
-	// Note: buildCanonicalRequest adds each component with \n, including empty query string
-	canonicalRequest := method + "\n" +
-		path + "\n" +
-		"" + "\n" + // query string (empty, but still has \n)
-		"host:" + host + "\n" + // canonical headers
-		"\n" + // blank line after headers
 		signedHeaders + "\n" +
 		"UNSIGNED-PAYLOAD"
 

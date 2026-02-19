@@ -1,3 +1,6 @@
+// Package scheduler provides data-locality aware scheduling for NovaStor.
+// This package implements the configuration for the Kubernetes scheduler
+// plugin that prefers nodes with locally available data.
 package scheduler
 
 import (

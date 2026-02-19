@@ -1,3 +1,5 @@
+// Package main provides the HTTP server for the NovaStor scheduler plugin.
+// The server exposes health check and scoring endpoints for Kubernetes integration.
 package main
 
 import (
@@ -46,7 +48,7 @@ func (s *Server) Run() error {
 }
 
 // handleHealth handles health check requests.
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }

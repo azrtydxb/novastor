@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -192,8 +193,10 @@ func (s *RaftStore) ListPendingHealTasks(_ context.Context) ([]*HealTask, error)
 		// Reset expired in-progress tasks to pending
 		if task.Status == "in-progress" && task.IsExpired(now) {
 			task.Status = "pending"
-			updatedData, _ := json.Marshal(task)
-			_ = s.apply(&fsmOp{Op: opPut, Bucket: bucketHealTasks, Key: task.ID, Value: updatedData})
+			updatedData, err := json.Marshal(task)
+			if err == nil {
+				_ = s.apply(&fsmOp{Op: opPut, Bucket: bucketHealTasks, Key: task.ID, Value: updatedData})
+			}
 		}
 		if task.Status == "pending" || task.Status == "in-progress" {
 			result = append(result, &task)
@@ -258,10 +261,15 @@ func (s *RaftStore) HeartbeatChunkLock(_ context.Context, lockID, ownerTaskID st
 }
 
 // ReleaseChunkLock removes a lock held by the given task.
+// Returns nil if the lock doesn't exist (already released is OK).
 func (s *RaftStore) ReleaseChunkLock(_ context.Context, lockID, ownerTaskID string) error {
 	data, err := s.fsm.Get(bucketChunkHealLocks, lockID)
 	if err != nil {
-		return nil // Already released
+		// Already released or never existed - not found is acceptable.
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil
+		}
+		return fmt.Errorf("getting chunk lock: %w", err)
 	}
 	var lock ChunkHealLock
 	if err := json.Unmarshal(data, &lock); err != nil {

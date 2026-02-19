@@ -146,7 +146,7 @@ func (f *BadgerFSM) Get(bucket, key string) ([]byte, error) {
 	})
 	if err != nil {
 		if err == badger.ErrKeyNotFound {
-			return nil, fmt.Errorf("key %s not found in bucket %s", key, bucket)
+			return nil, fmt.Errorf("%w: key %s not found in bucket %s", ErrKeyNotFound, key, bucket)
 		}
 		return nil, fmt.Errorf("badger get: %w", err)
 	}

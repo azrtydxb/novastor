@@ -1,3 +1,6 @@
+// Package main provides the NovaStor filer binary.
+// The filer exposes NovaStor storage as both an NFS server and a FUSE filesystem,
+// providing file-based access to the underlying chunk storage.
 package main
 
 import (
@@ -103,7 +106,7 @@ func main() {
 	// Start metrics server.
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -161,7 +164,7 @@ func runNFSServer(ctx context.Context, fs *filer.FileSystem, listenAddr string, 
 	nfsSrv := filer.NewNFSServer(fs, locker)
 
 	go func() {
-		if err := nfsSrv.Serve(listenAddr); err != nil {
+		if err := nfsSrv.Serve(ctx, listenAddr); err != nil {
 			log.Printf("NFS server failed: %v", err)
 		}
 	}()
@@ -175,7 +178,7 @@ func runNFSServer(ctx context.Context, fs *filer.FileSystem, listenAddr string, 
 }
 
 // runFUSEServer starts and manages the FUSE server.
-func runFUSEServer(ctx context.Context, fs *filer.FileSystem, config *filer.FUSEConfig, stop chan os.Signal) {
+func runFUSEServer(_ context.Context, fs *filer.FileSystem, config *filer.FUSEConfig, stop chan os.Signal) {
 	fuseSrv := filer.NewFUSEServer(fs, config)
 
 	// Run FUSE server in a goroutine.

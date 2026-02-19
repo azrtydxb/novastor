@@ -1,3 +1,6 @@
+// Package webhook provides Kubernetes admission webhooks for NovaStor.
+// This file implements the scheduler injection webhook that modifies
+// pod specifications to use the NovaStor scheduler plugin.
 package webhook
 
 import (

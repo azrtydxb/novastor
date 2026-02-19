@@ -7,20 +7,20 @@ import (
 	"github.com/piwi3910/novastor/internal/metadata"
 )
 
-// S3QuotaChecker implements QuotaChecker using the metadata quota service.
+// quotaChecker implements storage quota checking using the metadata quota service.
 // It translates S3 bucket quota requests to the generic quota scope format.
-type S3QuotaChecker struct {
+type quotaChecker struct {
 	store *metadata.QuotaStore
 }
 
-// NewS3QuotaChecker creates a new S3QuotaChecker backed by the given QuotaStore.
-func NewS3QuotaChecker(store *metadata.QuotaStore) *S3QuotaChecker {
-	return &S3QuotaChecker{store: store}
+// NewQuotaChecker creates a new QuotaChecker backed by the given QuotaStore.
+func NewQuotaChecker(store *metadata.QuotaStore) QuotaChecker {
+	return &quotaChecker{store: store}
 }
 
 // CheckStorageQuota checks if a storage allocation would exceed the quota.
 // The scope is expected to be in the format "bucket:<bucket-name>".
-func (q *S3QuotaChecker) CheckStorageQuota(ctx context.Context, scope string, requestedBytes int64) error {
+func (q *quotaChecker) CheckStorageQuota(ctx context.Context, scope string, requestedBytes int64) error {
 	// S3 bucket scopes are formatted as "bucket:<name>".
 	quotaScope := metadata.QuotaScope{
 		Kind: "Bucket",
@@ -30,7 +30,7 @@ func (q *S3QuotaChecker) CheckStorageQuota(ctx context.Context, scope string, re
 }
 
 // ReserveStorage reserves storage capacity for a scope.
-func (q *S3QuotaChecker) ReserveStorage(ctx context.Context, scope string, bytes int64) error {
+func (q *quotaChecker) ReserveStorage(ctx context.Context, scope string, bytes int64) error {
 	quotaScope := metadata.QuotaScope{
 		Kind: "Bucket",
 		Name: scope,
@@ -39,7 +39,7 @@ func (q *S3QuotaChecker) ReserveStorage(ctx context.Context, scope string, bytes
 }
 
 // ReleaseStorage releases storage capacity for a scope.
-func (q *S3QuotaChecker) ReleaseStorage(ctx context.Context, scope string, bytes int64) error {
+func (q *quotaChecker) ReleaseStorage(ctx context.Context, scope string, bytes int64) error {
 	quotaScope := metadata.QuotaScope{
 		Kind: "Bucket",
 		Name: scope,
@@ -49,7 +49,7 @@ func (q *S3QuotaChecker) ReleaseStorage(ctx context.Context, scope string, bytes
 
 // GetBucketUsage returns the current usage for a bucket.
 // It sums up the sizes of all objects in the bucket.
-func (q *S3QuotaChecker) GetBucketUsage(ctx context.Context, bucket string) (int64, error) {
+func (q *quotaChecker) GetBucketUsage(ctx context.Context, bucket string) (int64, error) {
 	// For S3 buckets, we use the metadata.QuotaStore to get usage.
 	quotaScope := metadata.QuotaScope{
 		Kind: "Bucket",

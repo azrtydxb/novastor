@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/piwi3910/novastor/internal/metrics"
+	"go.uber.org/zap"
 )
 
 const chunkSize = 4 * 1024 * 1024 // 4 MB
@@ -109,6 +110,11 @@ func (g *Gateway) handlePutObject(w http.ResponseWriter, r *http.Request, bucket
 			// Log but don't fail - the object was created successfully.
 			// This may cause quota tracking to be slightly off, but prevents
 			// leaving the object in an inconsistent state.
+			zap.L().Warn("failed to reserve storage quota for object",
+				zap.String("bucket", bucket),
+				zap.String("key", key),
+				zap.Int64("size", objectSize),
+				zap.Error(err))
 		}
 	}
 
@@ -201,6 +207,11 @@ func (g *Gateway) handleDeleteObject(w http.ResponseWriter, r *http.Request, buc
 	if g.quota != nil && objectSize > 0 {
 		if err := g.quota.ReleaseStorage(ctx, "bucket:"+bucket, objectSize); err != nil {
 			// Log but don't fail - the object was deleted successfully.
+			zap.L().Warn("failed to release storage quota for deleted object",
+				zap.String("bucket", bucket),
+				zap.String("key", key),
+				zap.Int64("size", objectSize),
+				zap.Error(err))
 		}
 	}
 

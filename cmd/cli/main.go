@@ -1,3 +1,6 @@
+// Package main provides the novastorctl CLI tool.
+// This command-line interface allows operators to manage NovaStor storage pools,
+// volumes, snapshots, and other cluster resources.
 package main
 
 import (

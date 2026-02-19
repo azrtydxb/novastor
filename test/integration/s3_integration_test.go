@@ -4,6 +4,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/xml"
 	"fmt"
@@ -42,7 +43,8 @@ func setupS3Gateway(t *testing.T) *httptest.Server {
 		t.Fatalf("NewLocalStore failed: %v", err)
 	}
 
-	chunkLis, err := net.Listen("tcp", "127.0.0.1:0")
+	chunkLc := net.ListenConfig{}
+	chunkLis, err := chunkLc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to listen for chunk server: %v", err)
 	}

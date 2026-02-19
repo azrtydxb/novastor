@@ -1,3 +1,7 @@
+// Package chunk provides the core chunk storage engine for NovaStor.
+// Chunks are 4MB immutable blocks that can be replicated, erasure-coded,
+// encrypted, and deduplicated. This package handles the core interfaces
+// and backend registration for chunk storage.
 package chunk
 
 import (
@@ -71,7 +75,7 @@ func init() {
 	})
 
 	// Register the in-memory backend.
-	RegisterBackend("memory", func(config map[string]string) (Store, error) {
+	RegisterBackend("memory", func(_ map[string]string) (Store, error) {
 		return NewMemoryStore(), nil
 	})
 

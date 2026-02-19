@@ -1,3 +1,6 @@
+// Package main provides the NovaStor controller binary.
+// The controller manages Kubernetes custom resources for storage pools,
+// block volumes, shared filesystems, and object stores.
 package main
 
 import (

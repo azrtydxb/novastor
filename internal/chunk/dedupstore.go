@@ -211,7 +211,7 @@ func (ds *DedupStore) Stats(ctx context.Context) (*DedupStats, error) {
 // reference counter and backend chunks. Use this if counters get out of sync.
 func (ds *DedupStore) recalculateLogicalBytes() {
 	var total int64
-	_ = ds.refCounter.ForEach(func(id ChunkID, count uint32) error {
+	_ = ds.refCounter.ForEach(func(_ ChunkID, count uint32) error {
 		// We can't easily get chunk size without context here
 		// This is a limitation - in production, we'd cache sizes
 		total += int64(count) * ChunkSize // Approximate
@@ -268,7 +268,7 @@ func (ds *DedupStore) Compact(ctx context.Context) error {
 
 	// Remove references for non-existent chunks
 	var toRemove []ChunkID
-	_ = ds.refCounter.ForEach(func(id ChunkID, count uint32) error {
+	_ = ds.refCounter.ForEach(func(id ChunkID, _ uint32) error {
 		if !existing[id] {
 			toRemove = append(toRemove, id)
 		}
@@ -292,7 +292,7 @@ func (ds *DedupStore) RebuildFromBackend(ctx context.Context, referencedChunks [
 
 	// Clear existing reference counts - collect IDs first to avoid deadlock
 	var toClear []ChunkID
-	_ = ds.refCounter.ForEach(func(id ChunkID, count uint32) error {
+	_ = ds.refCounter.ForEach(func(id ChunkID, _ uint32) error {
 		toClear = append(toClear, id)
 		return nil
 	})
@@ -355,7 +355,7 @@ func (ds *DedupStore) RebuildFromBackend(ctx context.Context, referencedChunks [
 func (ds *DedupStore) Verify(ctx context.Context) ([]ChunkID, error) {
 	var missing []ChunkID
 
-	err := ds.refCounter.ForEach(func(id ChunkID, count uint32) error {
+	err := ds.refCounter.ForEach(func(id ChunkID, _ uint32) error {
 		exists, err := ds.backend.Has(ctx, id)
 		if err != nil {
 			return fmt.Errorf("checking chunk %s: %w", id, err)

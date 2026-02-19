@@ -4,79 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-// setupLVMEnvironment prepares a minimal LVM environment for testing.
-// This requires root privileges and is skipped in normal CI.
-// Most tests use command mocking instead.
-func setupLVMEnvironment(t *testing.T) (vgName, thinPool string, cleanup func()) {
-	t.Helper()
-
-	// Check if running as root.
-	if os.Geteuid() != 0 {
-		t.Skip("LVM tests require root privileges")
-	}
-
-	// Check if LVM tools are available.
-	if _, err := exec.LookPath("lvcreate"); err != nil {
-		t.Skip("LVM tools not available")
-	}
-
-	// Create a loopback device for testing.
-	tmpDir := t.TempDir()
-	loopFile := filepath.Join(tmpDir, "loop.img")
-
-	// Create a 1GB file.
-	if err := exec.Command("dd", "if=/dev/zero", "of="+loopFile, "bs=1M", "count=1024").Run(); err != nil {
-		t.Fatalf("creating loop file: %v", err)
-	}
-
-	// Setup loop device.
-	losetupOut, err := exec.Command("losetup", "-f", "--show", loopFile).CombinedOutput()
-	if err != nil {
-		t.Fatalf("setting up loop device: %v, output: %s", err, string(losetupOut))
-	}
-	loopDev := strings.TrimSpace(string(losetupOut))
-
-	// Create physical volume.
-	if out, err := exec.Command("pvcreate", loopDev).CombinedOutput(); err != nil {
-		exec.Command("losetup", "-d", loopDev).Run()
-		t.Fatalf("creating PV: %v, output: %s", err, string(out))
-	}
-
-	// Create volume group.
-	vgName = "novastor-test-" + t.Name()
-	vgName = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			return r
-		}
-		return '-'
-	}, strings.ToLower(vgName))
-
-	if out, err := exec.Command("vgcreate", vgName, loopDev).CombinedOutput(); err != nil {
-		exec.Command("losetup", "-d", loopDev).Run()
-		t.Fatalf("creating VG: %v, output: %s", err, string(out))
-	}
-
-	// Create thin pool.
-	thinPool = "test-thin-pool"
-	if out, err := exec.Command("lvcreate", "-L", "512M",
-		"-T", vgName+"/"+thinPool).CombinedOutput(); err != nil {
-		t.Fatalf("creating thin pool: %v, output: %s", err, string(out))
-	}
-
-	cleanup = func() {
-		_ = exec.Command("vgremove", "-f", vgName).Run()
-		_ = exec.Command("pvremove", "-f", loopDev).Run()
-		_ = exec.Command("losetup", "-d", loopDev).Run()
-	}
-
-	return vgName, thinPool, cleanup
-}
 
 // mockLVMStore is a test implementation that uses a temp directory
 // instead of real LVM commands.
@@ -200,7 +131,7 @@ func (s *mockLVMStore) Snapshot(_ context.Context, sourceID, snapshotID ChunkID)
 	return os.WriteFile(snapPath, data, 0o600)
 }
 
-func (s *mockLVMStore) Resize(_ context.Context, id ChunkID, newSizeBytes int64) error {
+func (s *mockLVMStore) Resize(_ context.Context, _ ChunkID, _ int64) error {
 	// In the mock, resize is a no-op since we just use files.
 	return nil
 }

@@ -127,7 +127,7 @@ func TestLocalStore_ChecksumVerifiedOnGet(t *testing.T) {
 	}
 }
 
-func TestLocalStore_ImplementsCapacityStore(t *testing.T) {
+func TestLocalStore_ImplementsCapacityStore(_ *testing.T) {
 	var _ CapacityStore = &LocalStore{}
 }
 
@@ -177,7 +177,7 @@ func TestLocalStore_Stats(t *testing.T) {
 	}
 }
 
-func TestLocalStore_ImplementsChunkMetaStore(t *testing.T) {
+func TestLocalStore_ImplementsChunkMetaStore(_ *testing.T) {
 	var _ ChunkMetaStore = &LocalStore{}
 }
 
@@ -217,7 +217,7 @@ func TestLocalStore_GetMetaNotFound(t *testing.T) {
 	}
 }
 
-func TestLocalStore_ImplementsHealthCheckStore(t *testing.T) {
+func TestLocalStore_ImplementsHealthCheckStore(_ *testing.T) {
 	var _ HealthCheckStore = &LocalStore{}
 }
 

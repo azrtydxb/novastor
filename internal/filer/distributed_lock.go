@@ -39,9 +39,8 @@ type DistributedLockManager struct {
 
 // localLease represents a lease held by this filer instance.
 type localLease struct {
-	lease     *metadata.LockLease
-	renewAt   time.Time
-	stopRenew chan struct{}
+	lease   *metadata.LockLease
+	renewAt time.Time
 }
 
 // NewDistributedLockManager creates a new distributed lock manager.

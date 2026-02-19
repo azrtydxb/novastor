@@ -1,3 +1,6 @@
+// Package filer provides file system functionality for NovaStor.
+// This file implements the core filesystem abstractions including
+// inode types and filesystem operations.
 package filer
 
 import (

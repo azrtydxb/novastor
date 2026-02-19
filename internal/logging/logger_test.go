@@ -29,7 +29,7 @@ func TestInitProduction(t *testing.T) {
 	S.Infow("sugared logger test", "key", "value")
 }
 
-func TestSync(t *testing.T) {
+func TestSync(_ *testing.T) {
 	Init(false)
 	// Sync should not panic.
 	Sync()

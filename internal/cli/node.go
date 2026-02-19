@@ -30,7 +30,7 @@ var nodeCmd = &cobra.Command{
 var nodeListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List registered storage nodes",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err
@@ -87,7 +87,7 @@ var nodeGetCmd = &cobra.Command{
 	Use:   "get [node-id]",
 	Short: "Get storage node details",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err

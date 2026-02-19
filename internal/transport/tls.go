@@ -1,3 +1,6 @@
+// Package transport provides TLS and certificate management for NovaStor.
+// This package handles mTLS configuration, certificate rotation, and
+// secure transport layer setup for gRPC communication.
 package transport
 
 import (
@@ -61,7 +64,7 @@ func NewServerTLSWithRotation(cfg TLSConfig, rotator *CertRotator) (grpc.ServerO
 	}
 
 	tlsConfig := &tls.Config{
-		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			cert := rotator.GetCertificate()
 			if cert == nil {
 				return nil, fmt.Errorf("no certificate loaded by rotator")
@@ -91,7 +94,7 @@ func NewClientTLSWithRotation(cfg TLSConfig, rotator *CertRotator) (grpc.DialOpt
 	}
 
 	tlsConfig := &tls.Config{
-		GetClientCertificate: func(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		GetClientCertificate: func(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			cert := rotator.GetCertificate()
 			if cert == nil {
 				return nil, fmt.Errorf("no certificate loaded by rotator")

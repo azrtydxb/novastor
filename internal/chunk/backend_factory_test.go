@@ -10,7 +10,7 @@ func TestRegisterBackend(t *testing.T) {
 	testName := "test-backend-" + string(NewChunkID([]byte("test")))
 
 	// Define a simple factory.
-	factory := func(config map[string]string) (Store, error) {
+	factory := func(_ map[string]string) (Store, error) {
 		return NewMemoryStore(), nil
 	}
 

@@ -1,3 +1,6 @@
+// Package disk provides disk discovery and filtering for NovaStor.
+// This package handles detection and classification of storage devices
+// available on each node.
 package disk
 
 import (

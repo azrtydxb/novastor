@@ -27,14 +27,14 @@ func newMockMetadataStore() *mockMetadataStore {
 	}
 }
 
-func (m *mockMetadataStore) PutHealTask(ctx context.Context, task *metadata.HealTask) error {
+func (m *mockMetadataStore) PutHealTask(_ context.Context, task *metadata.HealTask) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.healTasks[task.ID] = task
 	return nil
 }
 
-func (m *mockMetadataStore) GetHealTask(ctx context.Context, taskID string) (*metadata.HealTask, error) {
+func (m *mockMetadataStore) GetHealTask(_ context.Context, taskID string) (*metadata.HealTask, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	task, ok := m.healTasks[taskID]
@@ -44,7 +44,7 @@ func (m *mockMetadataStore) GetHealTask(ctx context.Context, taskID string) (*me
 	return task, nil
 }
 
-func (m *mockMetadataStore) ListPendingHealTasks(ctx context.Context) ([]*metadata.HealTask, error) {
+func (m *mockMetadataStore) ListPendingHealTasks(_ context.Context) ([]*metadata.HealTask, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var result []*metadata.HealTask
@@ -60,7 +60,7 @@ func (m *mockMetadataStore) ListPendingHealTasks(ctx context.Context) ([]*metada
 	return result, nil
 }
 
-func (m *mockMetadataStore) ListHealTasksByVolume(ctx context.Context, volumeID string) ([]*metadata.HealTask, error) {
+func (m *mockMetadataStore) ListHealTasksByVolume(_ context.Context, volumeID string) ([]*metadata.HealTask, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var result []*metadata.HealTask
@@ -72,14 +72,14 @@ func (m *mockMetadataStore) ListHealTasksByVolume(ctx context.Context, volumeID 
 	return result, nil
 }
 
-func (m *mockMetadataStore) DeleteHealTask(ctx context.Context, taskID string) error {
+func (m *mockMetadataStore) DeleteHealTask(_ context.Context, taskID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.healTasks, taskID)
 	return nil
 }
 
-func (m *mockMetadataStore) PutShardPlacement(ctx context.Context, sp *metadata.ShardPlacement) error {
+func (m *mockMetadataStore) PutShardPlacement(_ context.Context, sp *metadata.ShardPlacement) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := fmt.Sprintf("%s:%d", sp.ChunkID, sp.ShardIndex)
@@ -87,7 +87,7 @@ func (m *mockMetadataStore) PutShardPlacement(ctx context.Context, sp *metadata.
 	return nil
 }
 
-func (m *mockMetadataStore) GetShardPlacements(ctx context.Context, chunkID string) ([]*metadata.ShardPlacement, error) {
+func (m *mockMetadataStore) GetShardPlacements(_ context.Context, chunkID string) ([]*metadata.ShardPlacement, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var result []*metadata.ShardPlacement
@@ -99,7 +99,7 @@ func (m *mockMetadataStore) GetShardPlacements(ctx context.Context, chunkID stri
 	return result, nil
 }
 
-func (m *mockMetadataStore) DeleteShardPlacement(ctx context.Context, chunkID string, shardIndex int) error {
+func (m *mockMetadataStore) DeleteShardPlacement(_ context.Context, chunkID string, shardIndex int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := fmt.Sprintf("%s:%d", chunkID, shardIndex)
@@ -107,7 +107,7 @@ func (m *mockMetadataStore) DeleteShardPlacement(ctx context.Context, chunkID st
 	return nil
 }
 
-func (m *mockMetadataStore) AcquireChunkLock(ctx context.Context, lockID, ownerTaskID string) error {
+func (m *mockMetadataStore) AcquireChunkLock(_ context.Context, lockID, ownerTaskID string) error {
 	if m.acquireLockDelay > 0 {
 		time.Sleep(m.acquireLockDelay)
 	}
@@ -126,7 +126,7 @@ func (m *mockMetadataStore) AcquireChunkLock(ctx context.Context, lockID, ownerT
 	return nil
 }
 
-func (m *mockMetadataStore) HeartbeatChunkLock(ctx context.Context, lockID, ownerTaskID string) error {
+func (m *mockMetadataStore) HeartbeatChunkLock(_ context.Context, lockID, ownerTaskID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	lock, ok := m.locks[lockID]
@@ -140,7 +140,7 @@ func (m *mockMetadataStore) HeartbeatChunkLock(ctx context.Context, lockID, owne
 	return nil
 }
 
-func (m *mockMetadataStore) ReleaseChunkLock(ctx context.Context, lockID, ownerTaskID string) error {
+func (m *mockMetadataStore) ReleaseChunkLock(_ context.Context, lockID, ownerTaskID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	lock, ok := m.locks[lockID]
@@ -344,7 +344,7 @@ func TestWorker_ProcessTask(t *testing.T) {
 				SizeBytes:   4 * 1024 * 1024,
 				Status:      "pending",
 			},
-			replicateFn: func(ctx context.Context, chunkID string, sourceNode, destNode string) error {
+			replicateFn: func(_ context.Context, _ string, _, _ string) error {
 				return nil
 			},
 			wantStatus: "completed",
@@ -365,7 +365,7 @@ func TestWorker_ProcessTask(t *testing.T) {
 				Status:      "pending",
 				RetryCount:  0,
 			},
-			replicateFn: func(ctx context.Context, chunkID string, sourceNode, destNode string) error {
+			replicateFn: func(_ context.Context, _ string, _, _ string) error {
 				return fmt.Errorf("connection refused")
 			},
 			wantStatus: "pending", // Should be pending for retry

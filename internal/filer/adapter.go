@@ -1,3 +1,6 @@
+// Package filer provides file system functionality for NovaStor.
+// This package implements adapters between the filer interfaces and
+// the underlying metadata/chunk storage services.
 package filer
 
 import (

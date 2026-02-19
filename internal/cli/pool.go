@@ -28,7 +28,7 @@ var poolCmd = &cobra.Command{
 var poolListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List storage pools (node capacity overview)",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err
@@ -94,7 +94,7 @@ var poolGetCmd = &cobra.Command{
 	Use:   "get [node-id]",
 	Short: "Get storage details for a specific node",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-
-	"github.com/hashicorp/raft"
 )
 
 func TestFSM_InodeMeta_CreateGet(t *testing.T) {
@@ -198,18 +196,6 @@ func TestFSM_DirEntry_ListDirectory(t *testing.T) {
 	}
 	if matched12[0].Name != "c.txt" {
 		t.Errorf("expected c.txt, got %s", matched12[0].Name)
-	}
-}
-
-// applyToFSMRaw is a helper for applying raw log data to the FSM in tests
-// that need to construct raft.Log manually.
-func applyToFSMRaw(t *testing.T, f MetadataFSM, data []byte) {
-	t.Helper()
-	resp := f.Apply(&raft.Log{Data: data})
-	if resp != nil {
-		if e, ok := resp.(error); ok {
-			t.Fatalf("FSM Apply returned error: %v", e)
-		}
 	}
 }
 

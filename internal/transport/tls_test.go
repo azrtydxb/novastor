@@ -152,16 +152,15 @@ func TestMTLS_RoundTrip(t *testing.T) {
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(srv, healthSrv)
 
-	lis, err := net.Listen("tcp", "localhost:0")
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(context.Background(), "tcp", "localhost:0")
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
 	defer lis.Close()
 
 	go func() {
-		if serveErr := srv.Serve(lis); serveErr != nil {
-			// Server stopped; expected on cleanup.
-		}
+		_ = srv.Serve(lis) // Server stopped; expected on cleanup.
 	}()
 	defer srv.Stop()
 
@@ -230,16 +229,15 @@ func TestMTLS_RejectsConnectionWithoutClientCert(t *testing.T) {
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(srv, healthSrv)
 
-	lis, err := net.Listen("tcp", "localhost:0")
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(context.Background(), "tcp", "localhost:0")
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
 	defer lis.Close()
 
 	go func() {
-		if serveErr := srv.Serve(lis); serveErr != nil {
-			// Server stopped; expected on cleanup.
-		}
+		_ = srv.Serve(lis) // Server stopped; expected on cleanup.
 	}()
 	defer srv.Stop()
 
@@ -284,13 +282,13 @@ func (noAuthInfo) AuthType() string {
 	return "no-auth"
 }
 
-func (c grpcNoClientCert) ClientHandshake(ctx context.Context, authority string, rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
+func (c grpcNoClientCert) ClientHandshake(ctx context.Context, _ string, rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
 	// Perform TLS handshake but without sending a client certificate.
 	tlsConn := tls.Client(rawConn, &tls.Config{
 		InsecureSkipVerify: true, // Skip CA verification for test purposes
 		MinVersion:         tls.VersionTLS12,
 	})
-	if err := tlsConn.Handshake(); err != nil {
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return nil, nil, err
 	}
 	// Return empty AuthInfo since we're not providing client certs
@@ -309,6 +307,6 @@ func (c grpcNoClientCert) Clone() credentials.TransportCredentials {
 	return grpcNoClientCert{}
 }
 
-func (c grpcNoClientCert) OverrideServerName(s string) error {
+func (c grpcNoClientCert) OverrideServerName(_ string) error {
 	return nil
 }

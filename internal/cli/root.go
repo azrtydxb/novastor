@@ -1,3 +1,6 @@
+// Package cli provides the novastorctl command-line interface for NovaStor.
+// This package implements commands for managing storage pools, volumes,
+// snapshots, buckets, and cluster resources.
 package cli
 
 import "github.com/spf13/cobra"

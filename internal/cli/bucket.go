@@ -26,7 +26,7 @@ var bucketCmd = &cobra.Command{
 var bucketListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List S3 buckets",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err
@@ -68,7 +68,7 @@ var bucketCreateCmd = &cobra.Command{
 	Use:   "create [name]",
 	Short: "Create an S3 bucket",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err
@@ -95,7 +95,7 @@ var bucketDeleteCmd = &cobra.Command{
 	Use:   "delete [name]",
 	Short: "Delete an S3 bucket",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err

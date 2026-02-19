@@ -1,3 +1,6 @@
+// Package nvmeof provides NVMe-oF target management for NovaStor.
+// This package handles the creation and management of NVMe-over-Fabrics
+// targets for exporting block volumes.
 package nvmeof
 
 import (

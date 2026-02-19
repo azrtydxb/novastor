@@ -188,7 +188,7 @@ func (s *LocalStore) GetMeta(_ context.Context, id ChunkID) (*ChunkMeta, error) 
 
 	// The file size includes the 4-byte checksum header.
 	// The actual data size is file size - 4.
-	dataSize := int64(info.Size()) - 4
+	dataSize := info.Size() - 4
 	if dataSize < 0 {
 		dataSize = 0
 	}
@@ -202,7 +202,7 @@ func (s *LocalStore) GetMeta(_ context.Context, id ChunkID) (*ChunkMeta, error) 
 
 // HealthCheck verifies that the storage directory is accessible and writable.
 // It performs a minimal filesystem operation to confirm health.
-func (s *LocalStore) HealthCheck(ctx context.Context) error {
+func (s *LocalStore) HealthCheck(_ context.Context) error {
 	// Check if directory exists and is readable.
 	info, err := os.Stat(s.dir)
 	if err != nil {

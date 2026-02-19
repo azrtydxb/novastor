@@ -20,9 +20,6 @@ const (
 	// BlockBackendVersion is the current metadata format version.
 	BlockBackendVersion = 1
 
-	// metadataOffset is where the metadata starts on the device (first 4KB).
-	metadataOffset = 0
-
 	// dataOffset is where chunk data starts (second 4KB, after metadata).
 	dataOffset = BlockSize
 )
@@ -59,8 +56,8 @@ type BlockStoreMetadata struct {
 	Reserved    [12]byte
 }
 
-// ChunkIndexEntry maps a chunk ID to its location.
-type ChunkIndexEntry struct {
+// IndexEntry maps a chunk ID to its location.
+type IndexEntry struct {
 	DeviceIndex uint16
 	BlockOffset uint64
 	BlockCount  uint16 // Always BlocksPerChunk for now
@@ -76,7 +73,7 @@ type BlockStore struct {
 	mu       sync.RWMutex
 	config   BlockStoreConfig
 	devices  []*BlockStoreDevice
-	index    map[ChunkID]ChunkIndexEntry
+	index    map[ChunkID]IndexEntry
 	indexMu  sync.RWMutex
 	metadata string
 	closed   bool
@@ -104,7 +101,7 @@ func NewBlockStore(config BlockStoreConfig) (*BlockStore, error) {
 	bs := &BlockStore{
 		config:   config,
 		devices:  make([]*BlockStoreDevice, 0, len(config.Devices)),
-		index:    make(map[ChunkID]ChunkIndexEntry),
+		index:    make(map[ChunkID]IndexEntry),
 		metadata: filepath.Join(config.MetadataDir, "chunk_index.bin"),
 	}
 
@@ -226,7 +223,7 @@ func (bs *BlockStore) loadIndex() error {
 		return fmt.Errorf("unsupported index version: %d", header.Version)
 	}
 
-	bs.index = make(map[ChunkID]ChunkIndexEntry)
+	bs.index = make(map[ChunkID]IndexEntry)
 
 	// Read chunk ID strings and entries.
 	for i := uint32(0); i < header.Count; i++ {
@@ -240,7 +237,7 @@ func (bs *BlockStore) loadIndex() error {
 			return err
 		}
 
-		var entry ChunkIndexEntry
+		var entry IndexEntry
 		if err := binary.Read(f, binary.LittleEndian, &entry); err != nil {
 			return err
 		}
@@ -413,7 +410,7 @@ func (bs *BlockStore) readChunkHeader(devIdx int, blockOffset uint64) error {
 	}
 
 	// Update index.
-	entry := ChunkIndexEntry{
+	entry := IndexEntry{
 		DeviceIndex: uint16(devIdx),
 		BlockOffset: blockOffset,
 		BlockCount:  BlocksPerChunk,
@@ -509,7 +506,7 @@ func (bs *BlockStore) Put(_ context.Context, c *Chunk) error {
 	}
 
 	// Update index.
-	entry := ChunkIndexEntry{
+	entry := IndexEntry{
 		DeviceIndex: uint16(targetDevIdx),
 		BlockOffset: blockOffset,
 		BlockCount:  BlocksPerChunk,
