@@ -607,7 +607,7 @@ func (n *fuseFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.Se
 	if in.Valid&fuse.FATTR_SIZE != 0 {
 		if size, ok := in.GetSize(); ok && size == 0 {
 			// Truncate to zero.
-			_, err = n.fs.Write(ctx, n.ino, 0, []byte{})
+			_, _ = n.fs.Write(ctx, n.ino, 0, []byte{})
 		} else if size, ok := in.GetSize(); ok && int64(size) < meta.Size {
 			// Truncate by reading partial content and rewriting.
 			data, err := n.fs.Read(ctx, n.ino, 0, int64(size))

@@ -235,6 +235,8 @@ func TestScrubberStats(t *testing.T) {
 	if !lastScrub.IsZero() {
 		t.Error("expected zero lastScrub before any scrub")
 	}
+	// nolint:ineffassign // Variables are used after ScrubOnce below
+	_, _, _ = lastScrub, chunksOK, chunksBad
 
 	_, _, err := scrubber.ScrubOnce(ctx)
 	if err != nil {

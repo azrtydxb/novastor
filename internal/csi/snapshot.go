@@ -97,12 +97,15 @@ func (sc *SnapshotController) DeleteSnapshot(ctx context.Context, req *csi.Delet
 	}
 
 	// If the snapshot does not exist, succeed idempotently per CSI spec.
-	if _, err := sc.store.GetSnapshotMeta(ctx, snapshotID); err != nil {
+	_, getErr := sc.store.GetSnapshotMeta(ctx, snapshotID)
+	if getErr != nil {
+		// Snapshot doesn't exist - succeed idempotently (no error returned)
+		// nolint:nilerr // Idempotent delete per CSI spec
 		return &csi.DeleteSnapshotResponse{}, nil
 	}
 
-	if err := sc.store.DeleteSnapshotMeta(ctx, snapshotID); err != nil {
-		return nil, status.Errorf(codes.Internal, "deleting snapshot metadata: %v", err)
+	if deleteErr := sc.store.DeleteSnapshotMeta(ctx, snapshotID); deleteErr != nil {
+		return nil, status.Errorf(codes.Internal, "deleting snapshot metadata: %v", deleteErr)
 	}
 
 	return &csi.DeleteSnapshotResponse{}, nil

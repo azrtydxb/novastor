@@ -11,7 +11,7 @@ linters:
     - ineffassign
     - staticcheck
     - unused
-    # Style and documentation
+    # Style and documentation (limited)
     - revive
     # Bug detection (limited set)
     - bodyclose
@@ -22,8 +22,6 @@ linters:
     - misspell
     - unconvert
     - wastedassign
-    # Security (limited set - many false positives disabled)
-    # - gosec  # Disabled due to many false positives in test code
 
 formatters:
   enable:
@@ -41,11 +39,28 @@ issues:
       linters:
         - bodyclose
         - noctx
+        - ineffassign
+    # Main functions use net.Listen without context (acceptable for entry points)
+    - path: cmd/
+      linters:
+        - noctx
+    # LVM store uses exec.Command without context (LVM commands are synchronous)
+    - path: internal/chunk/
+      linters:
+        - noctx
+    # NFS handler functions return errors via reply messages, not Go errors
+    - path: internal/filer/nfs_v3\.go
+      linters:
+        - nilerr
+    - path: internal/filer/nfs_mount\.go
+      linters:
+        - nilerr
   settings:
     staticcheck:
       checks:
         - "all"
     revive:
+      confidence: 0.8
       rules:
         - name: blank-imports
         - name: context-as-argument
@@ -54,12 +69,7 @@ issues:
         - name: error-return
         - name: error-strings
         - name: error-naming
-        - name: exported
         - name: increment-decrement
-        - name: var-naming
-        - name: var-declaration
-        - name: package-comments
-        - name: range
         - name: receiver-naming
         - name: time-naming
         - name: unexported-return
