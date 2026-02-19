@@ -57,6 +57,8 @@ spec:
           args:
             - --endpoint=unix:///csi/csi.sock
             - --node-id=$(NODE_NAME)
+            - --node-zone=$(NODE_ZONE)
+            - --node-region=$(NODE_REGION)
             - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
             {{- if include "novastor.tls.enabled" . }}
             - --tls-ca={{ include "novastor.tls.caPath" . }}
@@ -69,6 +71,14 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: NODE_ZONE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['topology.kubernetes.io/zone']
+            - name: NODE_REGION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['topology.kubernetes.io/region']
           securityContext:
             privileged: true
           ports:

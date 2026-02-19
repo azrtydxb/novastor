@@ -54,7 +54,7 @@ func (p *topologyPlacer) PlaceKey(key string, count int) []string {
 func setupTopologyController(nodes []string) (*ControllerServer, *mockMetadataStore) {
 	store := newMockMetadataStore()
 	placer := &topologyPlacer{nodes: nodes, returnAllAsCandidates: true}
-	return NewControllerServer(store, placer, nil), store
+	return NewControllerServer(store, placer, nil, nil), store
 }
 
 // TestExtractTopologyRequirement tests extracting topology requirements from requests.
@@ -541,7 +541,7 @@ func TestCreateVolume_TopologyDeduplication(t *testing.T) {
 func TestCreateVolume_TopologyNoNodesAvailable(t *testing.T) {
 	store := newMockMetadataStore()
 	placer := &topologyPlacer{nodes: []string{}} // No nodes
-	cs := NewControllerServer(store, placer, nil)
+	cs := NewControllerServer(store, placer, nil, nil)
 
 	req := &csi.CreateVolumeRequest{
 		Name: "no-nodes-vol",

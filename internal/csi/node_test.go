@@ -581,3 +581,130 @@ func TestNodeExpandVolume_MissingVolumeID(t *testing.T) {
 		t.Errorf("expected InvalidArgument, got %v", err)
 	}
 }
+
+func TestNodeGetInfo_WithTopology(t *testing.T) {
+	const testNodeID = "node-test-001"
+	const testZone = "us-west-1a"
+	const testRegion = "us-west-1"
+
+	ns := NewNodeServiceWithTopology(testNodeID, testZone, testRegion, &mockChunkClient{}, &mockMounter{})
+
+	resp, err := ns.NodeGetInfo(context.Background(), &csi.NodeGetInfoRequest{})
+	if err != nil {
+		t.Fatalf("NodeGetInfo returned unexpected error: %v", err)
+	}
+
+	if resp.GetNodeId() != testNodeID {
+		t.Errorf("expected node ID %q, got %q", testNodeID, resp.GetNodeId())
+	}
+
+	topo := resp.GetAccessibleTopology()
+	if topo == nil {
+		t.Fatal("expected accessible topology, got nil")
+	}
+
+	segments := topo.GetSegments()
+
+	// Check novastor.io/node segment
+	val, ok := segments["novastor.io/node"]
+	if !ok {
+		t.Fatal("expected topology key 'novastor.io/node' not found")
+	}
+	if val != testNodeID {
+		t.Errorf("expected topology value %q for 'novastor.io/node', got %q", testNodeID, val)
+	}
+
+	// Check topology.kubernetes.io/zone segment
+	val, ok = segments["topology.kubernetes.io/zone"]
+	if !ok {
+		t.Fatal("expected topology key 'topology.kubernetes.io/zone' not found")
+	}
+	if val != testZone {
+		t.Errorf("expected topology value %q for 'topology.kubernetes.io/zone', got %q", testZone, val)
+	}
+
+	// Check topology.kubernetes.io/region segment
+	val, ok = segments["topology.kubernetes.io/region"]
+	if !ok {
+		t.Fatal("expected topology key 'topology.kubernetes.io/region' not found")
+	}
+	if val != testRegion {
+		t.Errorf("expected topology value %q for 'topology.kubernetes.io/region', got %q", testRegion, val)
+	}
+}
+
+func TestNodeGetInfo_WithInitiatorAndTopology(t *testing.T) {
+	const testNodeID = "node-test-002"
+	const testZone = "eu-central-1b"
+	const testRegion = "eu-central-1"
+
+	ns := NewNodeServiceWithInitiatorAndTopology(testNodeID, testZone, testRegion, &mockChunkClient{}, &mockMounter{}, &StubInitiator{})
+
+	resp, err := ns.NodeGetInfo(context.Background(), &csi.NodeGetInfoRequest{})
+	if err != nil {
+		t.Fatalf("NodeGetInfo returned unexpected error: %v", err)
+	}
+
+	topo := resp.GetAccessibleTopology()
+	if topo == nil {
+		t.Fatal("expected accessible topology, got nil")
+	}
+
+	segments := topo.GetSegments()
+
+	// Verify all segments are present
+	expectedSegments := map[string]string{
+		"novastor.io/node":              testNodeID,
+		"topology.kubernetes.io/zone":   testZone,
+		"topology.kubernetes.io/region": testRegion,
+	}
+
+	for key, expectedValue := range expectedSegments {
+		actualValue, ok := segments[key]
+		if !ok {
+			t.Errorf("expected topology key %q not found", key)
+			continue
+		}
+		if actualValue != expectedValue {
+			t.Errorf("expected topology value %q for key %q, got %q", expectedValue, key, actualValue)
+		}
+	}
+}
+
+func TestNodeGetInfo_WithoutTopology(t *testing.T) {
+	const testNodeID = "node-test-003"
+	ns := NewNodeService(testNodeID, &mockChunkClient{}, &mockMounter{})
+
+	resp, err := ns.NodeGetInfo(context.Background(), &csi.NodeGetInfoRequest{})
+	if err != nil {
+		t.Fatalf("NodeGetInfo returned unexpected error: %v", err)
+	}
+
+	topo := resp.GetAccessibleTopology()
+	if topo == nil {
+		t.Fatal("expected accessible topology, got nil")
+	}
+
+	segments := topo.GetSegments()
+
+	// Should only have novastor.io/node
+	if len(segments) != 1 {
+		t.Errorf("expected 1 topology segment without zone/region, got %d", len(segments))
+	}
+
+	val, ok := segments["novastor.io/node"]
+	if !ok {
+		t.Fatal("expected topology key 'novastor.io/node' not found")
+	}
+	if val != testNodeID {
+		t.Errorf("expected topology value %q, got %q", testNodeID, val)
+	}
+
+	// These should not be present when not specified
+	if _, ok := segments["topology.kubernetes.io/zone"]; ok {
+		t.Error("expected 'topology.kubernetes.io/zone' to be absent when not specified")
+	}
+	if _, ok := segments["topology.kubernetes.io/region"]; ok {
+		t.Error("expected 'topology.kubernetes.io/region' to be absent when not specified")
+	}
+}

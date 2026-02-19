@@ -160,6 +160,8 @@ var (
 func main() {
 	endpoint := flag.String("endpoint", "unix:///var/lib/kubelet/plugins/novastor.csi.novastor.io/csi.sock", "CSI endpoint")
 	nodeID := flag.String("node-id", "", "Node ID for this CSI node")
+	nodeZone := flag.String("node-zone", "", "Node zone for topology (e.g., us-west-1a)")
+	nodeRegion := flag.String("node-region", "", "Node region for topology (e.g., us-west-1)")
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
 	agentAddrs := flag.String("agent-addrs", "", "Comma-separated list of agent addresses (nodeID=addr,...)")
 	failureDomain := flag.String("failure-domain", "node", "CRUSH failure domain for placement: node, rack, or zone")
@@ -393,7 +395,15 @@ func main() {
 	if *nodeID != "" {
 		mounter := &novcsi.RealMounter{}
 		initiator := &novcsi.LinuxInitiator{}
-		node := novcsi.NewNodeServiceWithInitiator(*nodeID, nodeChunkClient, mounter, initiator)
+
+		// Use topology-aware constructor if zone/region provided.
+		var node *novcsi.NodeService
+		if *nodeZone != "" || *nodeRegion != "" {
+			node = novcsi.NewNodeServiceWithInitiatorAndTopology(*nodeID, *nodeZone, *nodeRegion, nodeChunkClient, mounter, initiator)
+			log.Printf("Node service initialized with topology: zone=%s, region=%s", *nodeZone, *nodeRegion)
+		} else {
+			node = novcsi.NewNodeServiceWithInitiator(*nodeID, nodeChunkClient, mounter, initiator)
+		}
 		csi.RegisterNodeServer(srv, node)
 	}
 
