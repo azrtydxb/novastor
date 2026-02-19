@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -167,13 +168,9 @@ func (g *Gateway) handleCopyObject(w http.ResponseWriter, r *http.Request, dstBu
 	srcKey := srcPath[slashIdx+1:]
 
 	// Remove query string (versionId) if present.
-	if idx := len(srcKey) - 1; idx >= 0 {
-		for i := idx; i >= 0; i-- {
-			if srcKey[i] == '?' {
-				srcKey = srcKey[:i]
-				break
-			}
-		}
+	queryIdx := strings.Index(srcKey, "?")
+	if queryIdx >= 0 {
+		srcKey = srcKey[:queryIdx]
 	}
 
 	// Verify source bucket exists.
@@ -583,7 +580,7 @@ func (g *Gateway) handleDeleteBucketEncryption(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// --- XML types for Bucket Versioning (extended) ---
+// --- XML types for ListObjectVersions ---
 
 type listObjectVersionsResult struct {
 	XMLName         xml.Name        `xml:"ListVersionsResult"`
