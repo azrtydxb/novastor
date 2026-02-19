@@ -48,18 +48,22 @@ type DeviceFormatter interface {
 // mkfs.ext4, mount, and umount via exec.
 type RealDeviceFormatter struct{}
 
+// IsFormatted checks if the device has a filesystem.
 func (RealDeviceFormatter) IsFormatted(ctx context.Context, devicePath string) (bool, error) {
 	return isFormatted(ctx, devicePath)
 }
 
+// Format creates a filesystem on the device.
 func (RealDeviceFormatter) Format(ctx context.Context, devicePath, fsType string) error {
 	return formatDevice(ctx, devicePath, fsType)
 }
 
+// Mount mounts the device to the target path.
 func (RealDeviceFormatter) Mount(ctx context.Context, devicePath, targetPath, fsType string) error {
 	return mountDevice(ctx, devicePath, targetPath, fsType)
 }
 
+// Unmount unmounts the filesystem at the target path.
 func (RealDeviceFormatter) Unmount(ctx context.Context, targetPath string) error {
 	return unmountPath(ctx, targetPath)
 }
@@ -69,6 +73,8 @@ type NodeService struct {
 	csi.UnimplementedNodeServer
 
 	nodeID      string
+	zone        string
+	region      string
 	chunkClient ChunkClient
 	mounter     Mounter
 	initiator   NVMeInitiator
@@ -86,10 +92,35 @@ func NewNodeService(nodeID string, chunkClient ChunkClient, mounter Mounter) *No
 	}
 }
 
+// NewNodeServiceWithTopology creates a new NodeService with topology information.
+func NewNodeServiceWithTopology(nodeID, zone, region string, chunkClient ChunkClient, mounter Mounter) *NodeService {
+	return &NodeService{
+		nodeID:      nodeID,
+		zone:        zone,
+		region:      region,
+		chunkClient: chunkClient,
+		mounter:     mounter,
+		formatter:   RealDeviceFormatter{},
+	}
+}
+
 // NewNodeServiceWithInitiator creates a new NodeService with an NVMe-oF initiator.
 func NewNodeServiceWithInitiator(nodeID string, chunkClient ChunkClient, mounter Mounter, initiator NVMeInitiator) *NodeService {
 	return &NodeService{
 		nodeID:      nodeID,
+		chunkClient: chunkClient,
+		mounter:     mounter,
+		initiator:   initiator,
+		formatter:   RealDeviceFormatter{},
+	}
+}
+
+// NewNodeServiceWithInitiatorAndTopology creates a new NodeService with NVMe-oF initiator and topology.
+func NewNodeServiceWithInitiatorAndTopology(nodeID, zone, region string, chunkClient ChunkClient, mounter Mounter, initiator NVMeInitiator) *NodeService {
+	return &NodeService{
+		nodeID:      nodeID,
+		zone:        zone,
+		region:      region,
 		chunkClient: chunkClient,
 		mounter:     mounter,
 		initiator:   initiator,
@@ -306,12 +337,21 @@ func (ns *NodeService) NodeGetCapabilities(ctx context.Context, req *csi.NodeGet
 // NodeGetInfo returns information about the node, including its ID and
 // accessible topology.
 func (ns *NodeService) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
+	segments := map[string]string{
+		"novastor.io/node": ns.nodeID,
+	}
+	// Add standard Kubernetes topology labels if available.
+	if ns.zone != "" {
+		segments["topology.kubernetes.io/zone"] = ns.zone
+	}
+	if ns.region != "" {
+		segments["topology.kubernetes.io/region"] = ns.region
+	}
+
 	return &csi.NodeGetInfoResponse{
 		NodeId: ns.nodeID,
 		AccessibleTopology: &csi.Topology{
-			Segments: map[string]string{
-				"novastor.io/node": ns.nodeID,
-			},
+			Segments: segments,
 		},
 	}, nil
 }
