@@ -57,7 +57,15 @@ type NodeMetaStore interface {
 }
 
 // PlacementEngine selects storage nodes for new chunks.
+// PlacementEngine selects storage nodes for new chunks.
+// The PlaceKey method allows deterministic placement based on a key (e.g. volume ID)
+// which enables CRUSH-style failure domain awareness.
 type PlacementEngine interface {
+	// PlaceKey returns a deterministic set of node IDs for the given key.
+	// Implementations that do not support key-based placement may fall back to Place.
+	PlaceKey(key string, count int) []string
+
+	// Place returns node IDs using a non-deterministic or round-robin strategy.
 	Place(count int) []string
 }
 
@@ -341,10 +349,11 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// Extract topology requirement for topology-aware provisioning.
 	topologyReq := extractTopologyRequirement(req)
 
-	// Place chunks across storage nodes.
-	// We need chunkCount * nodesPerChunk placement slots.
+	// Place chunks across storage nodes using volume name as the key for
+	// deterministic, failure-domain-aware placement (CRUSH).
+	// We need chunkCount * nodesPerChunk placement slots for protection.
 	totalSlots := chunkCount * nodesPerChunk
-	allNodeIDs := cs.placer.Place(totalSlots)
+	allNodeIDs := cs.placer.PlaceKey(req.GetName(), totalSlots)
 	if len(allNodeIDs) < totalSlots {
 		return nil, status.Errorf(codes.ResourceExhausted,
 			"not enough storage nodes: need %d for %d chunks with protection factor %d, got %d",

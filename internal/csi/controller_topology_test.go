@@ -44,6 +44,12 @@ func (p *topologyPlacer) Place(count int) []string {
 	return result
 }
 
+func (p *topologyPlacer) PlaceKey(key string, count int) []string {
+	// For testing, we use the same behavior as Place.
+	// Deterministic per key is not required for topology tests.
+	return p.Place(count)
+}
+
 // setupTopologyController creates a controller with a topology-aware placement engine.
 func setupTopologyController(nodes []string) (*ControllerServer, *mockMetadataStore) {
 	store := newMockMetadataStore()
