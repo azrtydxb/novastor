@@ -471,3 +471,99 @@ func (c *GRPCClient) ListNodeMetas(ctx context.Context) ([]*NodeMeta, error) {
 	}
 	return metas, nil
 }
+
+// ---- Lock lease operations ----
+
+// AcquireLock attempts to acquire a distributed file lock lease.
+func (c *GRPCClient) AcquireLock(ctx context.Context, args *AcquireLockArgs) (*AcquireLockResult, error) {
+	data, err := c.exec(ctx, "AcquireLock", args)
+	if err != nil {
+		return nil, err
+	}
+	var result AcquireLockResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("unmarshaling AcquireLockResult: %w", err)
+	}
+	return &result, nil
+}
+
+// RenewLock extends the expiration time of an existing lock lease.
+func (c *GRPCClient) RenewLock(ctx context.Context, args *RenewLockArgs) (*LockLease, error) {
+	data, err := c.exec(ctx, "RenewLock", args)
+	if err != nil {
+		return nil, err
+	}
+	var lease LockLease
+	if err := json.Unmarshal(data, &lease); err != nil {
+		return nil, fmt.Errorf("unmarshaling LockLease: %w", err)
+	}
+	return &lease, nil
+}
+
+// ReleaseLock releases a lock lease.
+func (c *GRPCClient) ReleaseLock(ctx context.Context, args *ReleaseLockArgs) error {
+	_, err := c.exec(ctx, "ReleaseLock", args)
+	return err
+}
+
+// TestLock checks if a lock could be acquired without actually acquiring it.
+func (c *GRPCClient) TestLock(ctx context.Context, args *TestLockArgs) (*LockLease, error) {
+	data, err := c.exec(ctx, "TestLock", args)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	var lease LockLease
+	if err := json.Unmarshal(data, &lease); err != nil {
+		return nil, fmt.Errorf("unmarshaling LockLease: %w", err)
+	}
+	return &lease, nil
+}
+
+// GetLock retrieves a lock lease by ID.
+func (c *GRPCClient) GetLock(ctx context.Context, leaseID string) (*LockLease, error) {
+	data, err := c.exec(ctx, "GetLock", struct {
+		LeaseID string `json:"leaseID"`
+	}{LeaseID: leaseID})
+	if err != nil {
+		return nil, err
+	}
+	var lease LockLease
+	if err := json.Unmarshal(data, &lease); err != nil {
+		return nil, fmt.Errorf("unmarshaling LockLease: %w", err)
+	}
+	return &lease, nil
+}
+
+// ListLocks returns all active lock leases, optionally filtered by volume ID.
+func (c *GRPCClient) ListLocks(ctx context.Context, volumeID string) ([]*LockLease, error) {
+	data, err := c.exec(ctx, "ListLocks", struct {
+		VolumeID string `json:"volumeID,omitempty"`
+	}{VolumeID: volumeID})
+	if err != nil {
+		return nil, err
+	}
+	var locks []*LockLease
+	if err := json.Unmarshal(data, &locks); err != nil {
+		return nil, fmt.Errorf("unmarshaling []*LockLease: %w", err)
+	}
+	return locks, nil
+}
+
+// CleanupExpiredLocks removes expired lock leases.
+func (c *GRPCClient) CleanupExpiredLocks(ctx context.Context) (int, error) {
+	data, err := c.exec(ctx, "CleanupExpiredLocks", nil)
+	if err != nil {
+		return 0, err
+	}
+	var result struct {
+		Cleaned int `json:"cleaned"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return 0, fmt.Errorf("unmarshaling cleanup result: %w", err)
+	}
+	return result.Cleaned, nil
+}
+

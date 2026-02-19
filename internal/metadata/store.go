@@ -364,6 +364,338 @@ func (s *RaftStore) DeletePlacementMap(_ context.Context, chunkID string) error 
 	return s.apply(&fsmOp{Op: opDelete, Bucket: bucketPlacements, Key: chunkID})
 }
 
+// ---- Lock lease operations ----
+
+// AcquireLock attempts to acquire a file lock lease. If successful, returns the lease ID.
+// If a conflicting lock exists, returns an error with the conflicting owner.
+func (s *RaftStore) AcquireLock(ctx context.Context, args *AcquireLockArgs) (*AcquireLockResult, error) {
+	// First check for conflicts by reading existing locks for this inode.
+	locks, err := s.getLocksForInode(ctx, args.Ino)
+	if err != nil {
+		return nil, fmt.Errorf("checking existing locks: %w", err)
+	}
+
+	// Filter out expired locks and check for conflicts.
+	candidateLock := &LockLease{
+		Owner:     args.Owner,
+		VolumeID:  args.VolumeID,
+		Ino:       args.Ino,
+		Start:     args.Start,
+		End:       args.End,
+		Type:      args.Type,
+		ExpiresAt: time.Now().Add(args.TTL).UnixNano(),
+		FilerID:   args.FilerID,
+	}
+
+	for _, existing := range locks {
+		if existing.IsExpired() {
+			// Clean up expired lock asynchronously.
+			go s.ReleaseLock(context.Background(), &ReleaseLockArgs{
+				LeaseID: existing.LeaseID,
+				Owner:   existing.Owner,
+			})
+			continue
+		}
+		if conflicts(candidateLock, existing) {
+			return &AcquireLockResult{
+				ConflictingOwner: existing.Owner,
+			}, fmt.Errorf("lock conflict: owner %q holds conflicting %s lock on inode %d [%d,%d)",
+				existing.Owner, existing.Type, existing.Ino, existing.Start, existing.End)
+		}
+	}
+
+	// No conflicts, create the lease.
+	leaseID := GenerateLeaseID()
+	candidateLock.LeaseID = leaseID
+
+	// Store the lease.
+	leaseData, err := json.Marshal(candidateLock)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling lease: %w", err)
+	}
+	if err := s.apply(&fsmOp{Op: opPut, Bucket: bucketLocks, Key: lockKey(leaseID), Value: leaseData}); err != nil {
+		return nil, fmt.Errorf("storing lease: %w", err)
+	}
+
+	// Update the index.
+	if err := s.addLockToIndex(ctx, args.Ino, leaseID); err != nil {
+		// Best effort cleanup on index update failure.
+		_ = s.apply(&fsmOp{Op: opDelete, Bucket: bucketLocks, Key: lockKey(leaseID)})
+		return nil, fmt.Errorf("updating lock index: %w", err)
+	}
+
+	return &AcquireLockResult{
+		LeaseID:   leaseID,
+		ExpiresAt: candidateLock.ExpiresAt,
+	}, nil
+}
+
+// RenewLock extends the expiration time of an existing lock lease.
+func (s *RaftStore) RenewLock(ctx context.Context, args *RenewLockArgs) (*LockLease, error) {
+	leaseData, err := s.fsm.Get(bucketLocks, lockKey(args.LeaseID))
+	if err != nil {
+		return nil, fmt.Errorf("lease not found: %w", err)
+	}
+
+	var lease LockLease
+	if err := json.Unmarshal(leaseData, &lease); err != nil {
+		return nil, fmt.Errorf("unmarshaling lease: %w", err)
+	}
+
+	if lease.IsExpired() {
+		return nil, fmt.Errorf("cannot renew expired lease %s", args.LeaseID)
+	}
+
+	// Update expiration.
+	lease.ExpiresAt = time.Now().Add(args.TTL).UnixNano()
+
+	newLeaseData, err := json.Marshal(lease)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling lease: %w", err)
+	}
+	if err := s.apply(&fsmOp{Op: opPut, Bucket: bucketLocks, Key: lockKey(args.LeaseID), Value: newLeaseData}); err != nil {
+		return nil, fmt.Errorf("storing renewed lease: %w", err)
+	}
+
+	return &lease, nil
+}
+
+// ReleaseLock releases a lock lease, removing it from the metadata store.
+func (s *RaftStore) ReleaseLock(ctx context.Context, args *ReleaseLockArgs) error {
+	// Verify the lease exists and belongs to the owner (if specified).
+	leaseData, err := s.fsm.Get(bucketLocks, lockKey(args.LeaseID))
+	if err != nil {
+		return fmt.Errorf("lease not found: %w", err)
+	}
+
+	var lease LockLease
+	if err := json.Unmarshal(leaseData, &lease); err != nil {
+		return fmt.Errorf("unmarshaling lease: %w", err)
+	}
+
+	if args.Owner != "" && lease.Owner != args.Owner {
+		return fmt.Errorf("lease owner mismatch: expected %q, got %q", lease.Owner, args.Owner)
+	}
+
+	// Remove the lease.
+	if err := s.apply(&fsmOp{Op: opDelete, Bucket: bucketLocks, Key: lockKey(args.LeaseID)}); err != nil {
+		return fmt.Errorf("deleting lease: %w", err)
+	}
+
+	// Remove from index.
+	if err := s.removeLockFromIndex(ctx, lease.Ino, args.LeaseID); err != nil {
+		// Log but don't fail - stale index entries are cleaned up during reads.
+		return fmt.Errorf("removing from index: %w", err)
+	}
+
+	return nil
+}
+
+// TestLock checks if a lock could be acquired without actually acquiring it.
+// Returns nil if no conflict exists, or the conflicting lock if one does.
+func (s *RaftStore) TestLock(ctx context.Context, args *TestLockArgs) (*LockLease, error) {
+	locks, err := s.getLocksForInode(ctx, args.Ino)
+	if err != nil {
+		return nil, fmt.Errorf("checking existing locks: %w", err)
+	}
+
+	candidateLock := &LockLease{
+		VolumeID: args.VolumeID,
+		Ino:      args.Ino,
+		Start:    args.Start,
+		End:      args.End,
+		Type:     args.Type,
+	}
+
+	for _, existing := range locks {
+		if existing.IsExpired() {
+			continue
+		}
+		if conflicts(candidateLock, existing) {
+			return existing, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// GetLock retrieves a lock lease by ID.
+func (s *RaftStore) GetLock(ctx context.Context, leaseID string) (*LockLease, error) {
+	leaseData, err := s.fsm.Get(bucketLocks, lockKey(leaseID))
+	if err != nil {
+		return nil, fmt.Errorf("lease not found: %w", err)
+	}
+
+	var lease LockLease
+	if err := json.Unmarshal(leaseData, &lease); err != nil {
+		return nil, fmt.Errorf("unmarshaling lease: %w", err)
+	}
+
+	return &lease, nil
+}
+
+// ListLocks returns all active (non-expired) locks, optionally filtered by volume ID.
+func (s *RaftStore) ListLocks(_ context.Context, volumeID string) ([]*LockLease, error) {
+	all, err := s.fsm.GetAll(bucketLocks)
+	if err != nil {
+		return nil, fmt.Errorf("listing locks: %w", err)
+	}
+
+	var result []*LockLease
+	now := time.Now().UnixNano()
+
+	for _, data := range all {
+		var lease LockLease
+		if err := json.Unmarshal(data, &lease); err != nil {
+			continue // Skip corrupted entries.
+		}
+		if lease.ExpiresAt < now {
+			continue // Skip expired leases.
+		}
+		if volumeID != "" && lease.VolumeID != volumeID {
+			continue // Filter by volume.
+		}
+		result = append(result, &lease)
+	}
+
+	return result, nil
+}
+
+// CleanupExpiredLocks removes expired lock leases. Should be called periodically.
+func (s *RaftStore) CleanupExpiredLocks(ctx context.Context) (int, error) {
+	all, err := s.fsm.GetAll(bucketLocks)
+	if err != nil {
+		return 0, fmt.Errorf("listing locks: %w", err)
+	}
+
+	now := time.Now().UnixNano()
+	cleaned := 0
+
+	for key, data := range all {
+		var lease LockLease
+		if err := json.Unmarshal(data, &lease); err != nil {
+			continue
+		}
+		if lease.ExpiresAt < now {
+			// Remove expired lease.
+			if err := s.apply(&fsmOp{Op: opDelete, Bucket: bucketLocks, Key: key}); err == nil {
+				_ = s.removeLockFromIndex(ctx, lease.Ino, lease.LeaseID)
+				cleaned++
+			}
+		}
+	}
+
+	return cleaned, nil
+}
+
+// getLocksForInode retrieves all locks for a given inode.
+func (s *RaftStore) getLocksForInode(ctx context.Context, ino uint64) ([]*LockLease, error) {
+	// Get the index for this inode.
+	indexData, err := s.fsm.Get(bucketLocks, lockIndexKey(ino))
+	if err != nil {
+		// No locks for this inode yet.
+		return nil, nil
+	}
+
+	var index lockIndex
+	if err := json.Unmarshal(indexData, &index); err != nil {
+		return nil, fmt.Errorf("unmarshaling lock index: %w", err)
+	}
+
+	var locks []*LockLease
+	for _, leaseID := range index.LeaseIDs {
+		leaseData, err := s.fsm.Get(bucketLocks, lockKey(leaseID))
+		if err != nil {
+			// Lease may have been deleted, skip.
+			continue
+		}
+		var lease LockLease
+		if err := json.Unmarshal(leaseData, &lease); err != nil {
+			continue
+		}
+		locks = append(locks, &lease)
+	}
+
+	return locks, nil
+}
+
+// addLockToIndex adds a lease ID to the inode's lock index.
+func (s *RaftStore) addLockToIndex(ctx context.Context, ino uint64, leaseID string) error {
+	indexData, err := s.fsm.Get(bucketLocks, lockIndexKey(ino))
+	if err != nil {
+		// No index yet, create a new one.
+		index := lockIndex{
+			Ino:      ino,
+			LeaseIDs: []string{leaseID},
+		}
+		data, err := json.Marshal(index)
+		if err != nil {
+			return fmt.Errorf("marshaling new index: %w", err)
+		}
+		return s.apply(&fsmOp{Op: opPut, Bucket: bucketLocks, Key: lockIndexKey(ino), Value: data})
+	}
+
+	var index lockIndex
+	if err := json.Unmarshal(indexData, &index); err != nil {
+		return fmt.Errorf("unmarshaling index: %w", err)
+	}
+
+	// Check for duplicates.
+	for _, existingID := range index.LeaseIDs {
+		if existingID == leaseID {
+			return nil // Already in index.
+		}
+	}
+
+	index.LeaseIDs = append(index.LeaseIDs, leaseID)
+	data, err := json.Marshal(index)
+	if err != nil {
+		return fmt.Errorf("marshaling updated index: %w", err)
+	}
+	return s.apply(&fsmOp{Op: opPut, Bucket: bucketLocks, Key: lockIndexKey(ino), Value: data})
+}
+
+// removeLockFromIndex removes a lease ID from the inode's lock index.
+func (s *RaftStore) removeLockFromIndex(ctx context.Context, ino uint64, leaseID string) error {
+	indexData, err := s.fsm.Get(bucketLocks, lockIndexKey(ino))
+	if err != nil {
+		// Index doesn't exist, nothing to do.
+		return nil
+	}
+
+	var index lockIndex
+	if err := json.Unmarshal(indexData, &index); err != nil {
+		return fmt.Errorf("unmarshaling index: %w", err)
+	}
+
+	// Filter out the lease ID.
+	newLeaseIDs := make([]string, 0, len(index.LeaseIDs))
+	found := false
+	for _, existingID := range index.LeaseIDs {
+		if existingID != leaseID {
+			newLeaseIDs = append(newLeaseIDs, existingID)
+		} else {
+			found = true
+		}
+	}
+
+	if !found {
+		return nil // Lease ID not in index.
+	}
+
+	if len(newLeaseIDs) == 0 {
+		// Remove the index entry entirely.
+		return s.apply(&fsmOp{Op: opDelete, Bucket: bucketLocks, Key: lockIndexKey(ino)})
+	}
+
+	index.LeaseIDs = newLeaseIDs
+	data, err := json.Marshal(index)
+	if err != nil {
+		return fmt.Errorf("marshaling updated index: %w", err)
+	}
+	return s.apply(&fsmOp{Op: opPut, Bucket: bucketLocks, Key: lockIndexKey(ino), Value: data})
+}
+
 // splitAndTrim splits a comma-separated list of addresses and trims whitespace.
 func splitAndTrim(s string) []string {
 	parts := strings.Split(s, ",")
