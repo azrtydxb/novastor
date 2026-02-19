@@ -467,13 +467,39 @@ func (n *nfsV3Handler) handleSetattr(ctx context.Context, payload []byte) ([]byt
 	before := *meta
 
 	// Read sattr3.
-	mode, uid, gid, _, sErr := readSattr3(r)
+	mode, uid, gid, size, sErr := readSattr3(r)
 	if sErr != nil {
 		return nfsErrorReplyWcc(nfs3ErrInval), nil
 	}
 
-	// Apply attributes. We only support mode, uid, gid for now.
-	// Size truncation is not supported in this implementation.
+	// Handle size truncation first, before applying other attributes.
+	// This must be done for regular files only.
+	if size != nil {
+		if meta.Type != TypeFile {
+			w := newXDRWriter()
+			w.writeUint32(nfs3ErrInval)
+			n.writeWcc(w, &before, meta)
+			return w.Bytes(), nil
+		}
+		if err := n.fs.Truncate(ctx, ino, int64(*size)); err != nil {
+			logging.L.Warn("nfs: truncate failed",
+				zap.Uint64("ino", ino),
+				zap.Int64("size", int64(*size)),
+				zap.Error(err),
+			)
+			w := newXDRWriter()
+			w.writeUint32(nfs3ErrIO)
+			n.writeWcc(w, &before, meta)
+			return w.Bytes(), nil
+		}
+		// Refresh metadata after truncate to get updated size.
+		meta, err = n.fs.Stat(ctx, ino)
+		if err != nil {
+			return nfsErrorReplyWcc(nfs3ErrIO), nil
+		}
+	}
+
+	// Apply other attributes. We support mode, uid, gid.
 	if mode != nil {
 		meta.Mode = *mode
 	}

@@ -3,7 +3,9 @@ package filer
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -69,6 +71,10 @@ func (s *stubNFSHandler) Symlink(_ context.Context, _ uint64, _ string, target s
 
 func (s *stubNFSHandler) Readlink(_ context.Context, _ uint64) (string, error) {
 	return "/some/target", nil
+}
+
+func (s *stubNFSHandler) Truncate(_ context.Context, _ uint64, _ int64) error {
+	return nil
 }
 
 // waitForAddr polls until the server has a non-nil address or the timeout expires.
@@ -1527,5 +1533,521 @@ func TestNFSServer_AllProcedureDispatches(t *testing.T) {
 		}
 
 		conn.Close()
+	}
+}
+
+// truncationTestHandler implements NFSHandler with a real in-memory file
+// that supports truncation for testing.
+type truncationTestHandler struct {
+	mu       sync.Mutex
+	files    map[uint64][]byte
+	nextIno  uint64
+	rootMeta *InodeMeta
+}
+
+func newTruncationTestHandler() *truncationTestHandler {
+	now := time.Now().UnixNano()
+	return &truncationTestHandler{
+		files: make(map[uint64][]byte),
+		nextIno: 2,
+		rootMeta: &InodeMeta{Ino: 1, Type: TypeDir, Mode: 0755, LinkCount: 2, ATime: now, MTime: now, CTime: now},
+	}
+}
+
+func (h *truncationTestHandler) Stat(_ context.Context, ino uint64) (*InodeMeta, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if ino == 1 {
+		return h.rootMeta, nil
+	}
+	data, ok := h.files[ino]
+	if !ok {
+		return nil, fmt.Errorf("no such inode")
+	}
+	now := time.Now().UnixNano()
+	return &InodeMeta{Ino: ino, Type: TypeFile, Mode: 0644, Size: int64(len(data)), LinkCount: 1, ATime: now, MTime: now, CTime: now}, nil
+}
+
+func (h *truncationTestHandler) Lookup(_ context.Context, parentIno uint64, name string) (*InodeMeta, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if parentIno != 1 {
+		return nil, fmt.Errorf("not found")
+	}
+	// For testing, name "file1" maps to inode 2, "file2" to inode 3
+	ino := uint64(0)
+	if name == "file1" {
+		ino = 2
+	} else if name == "file2" {
+		ino = 3
+	}
+	if ino == 0 {
+		return nil, fmt.Errorf("not found")
+	}
+	data, ok := h.files[ino]
+	if !ok {
+		// Create empty file on lookup
+		h.files[ino] = []byte{}
+		data = []byte{}
+	}
+	now := time.Now().UnixNano()
+	return &InodeMeta{Ino: ino, Type: TypeFile, Mode: 0644, Size: int64(len(data)), LinkCount: 1, ATime: now, MTime: now, CTime: now}, nil
+}
+
+func (h *truncationTestHandler) Mkdir(_ context.Context, _ uint64, _ string, _ uint32) (*InodeMeta, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (h *truncationTestHandler) Create(_ context.Context, _ uint64, _ string, _ uint32) (*InodeMeta, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ino := h.nextIno
+	h.nextIno++
+	h.files[ino] = []byte{}
+	now := time.Now().UnixNano()
+	return &InodeMeta{Ino: ino, Type: TypeFile, Mode: 0644, Size: 0, LinkCount: 1, ATime: now, MTime: now, CTime: now}, nil
+}
+
+func (h *truncationTestHandler) Unlink(_ context.Context, _ uint64, _ string) error {
+	return nil
+}
+
+func (h *truncationTestHandler) Rmdir(_ context.Context, _ uint64, _ string) error {
+	return nil
+}
+
+func (h *truncationTestHandler) ReadDir(_ context.Context, _ uint64) ([]*DirEntry, error) {
+	return []*DirEntry{}, nil
+}
+
+func (h *truncationTestHandler) Read(_ context.Context, ino uint64, offset, length int64) ([]byte, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	data, ok := h.files[ino]
+	if !ok {
+		return nil, fmt.Errorf("no such file")
+	}
+	if offset >= int64(len(data)) {
+		return []byte{}, nil
+	}
+	end := offset + length
+	if end > int64(len(data)) {
+		end = int64(len(data))
+	}
+	return data[offset:end], nil
+}
+
+func (h *truncationTestHandler) Write(_ context.Context, ino uint64, offset int64, data []byte) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	fileData, ok := h.files[ino]
+	if !ok {
+		return 0, fmt.Errorf("no such file")
+	}
+	// Extend file if needed
+	newSize := offset + int64(len(data))
+	if newSize > int64(len(fileData)) {
+		newData := make([]byte, newSize)
+		copy(newData, fileData)
+		fileData = newData
+	}
+	copy(fileData[offset:], data)
+	h.files[ino] = fileData
+	return len(data), nil
+}
+
+func (h *truncationTestHandler) Rename(_ context.Context, _ uint64, _ string, _ uint64, _ string) error {
+	return nil
+}
+
+func (h *truncationTestHandler) Symlink(_ context.Context, _ uint64, _ string, _ string) (*InodeMeta, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (h *truncationTestHandler) Readlink(_ context.Context, _ uint64) (string, error) {
+	return "", fmt.Errorf("not implemented")
+}
+
+func (h *truncationTestHandler) Truncate(_ context.Context, ino uint64, size int64) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.files[ino]
+	if !ok {
+		return fmt.Errorf("no such file")
+	}
+	if size < 0 {
+		return fmt.Errorf("invalid size")
+	}
+	newData := make([]byte, size)
+	copy(newData, h.files[ino])
+	h.files[ino] = newData
+	return nil
+}
+
+// TestNFSServer_SetattrTruncateToZero tests truncating a file to size 0.
+func TestNFSServer_SetattrTruncateToZero(t *testing.T) {
+	handler := newTruncationTestHandler()
+	// Pre-populate a file with content
+	handler.files[2] = []byte("hello world, this is some data")
+
+	srv := NewNFSServer(handler, nil)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Serve("127.0.0.1:0")
+	}()
+
+	addr := waitForAddr(srv, 2*time.Second)
+	if addr == nil {
+		t.Fatal("server did not start listening within timeout")
+	}
+	t.Cleanup(func() {
+		srv.Stop()
+		<-errCh
+	})
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	fileHandle := srv.handles.getOrCreateHandle(2)
+
+	// Build SETATTR payload to truncate to size 0.
+	pw := newXDRWriter()
+	pw.writeOpaque(fileHandle)
+	// sattr3
+	pw.writeBool(false)  // set_mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(true)   // set_size = true
+	pw.writeUint64(0)    // new size = 0
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	// sattrguard3 - check flag (false = no check)
+	pw.writeBool(false)
+
+	call := buildRPCCall(1, nfsProg, nfsVersion, nfsProcSetattr, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK, got %d", nfsStatus)
+	}
+
+	// Verify the file was truncated
+	data, ok := handler.files[2]
+	if !ok {
+		t.Fatal("file was deleted")
+	}
+	if len(data) != 0 {
+		t.Errorf("expected file size 0, got %d", len(data))
+	}
+}
+
+// TestNFSServer_SetattrTruncateSmaller tests truncating a file to a smaller size.
+func TestNFSServer_SetattrTruncateSmaller(t *testing.T) {
+	handler := newTruncationTestHandler()
+	// Pre-populate a file with content
+	handler.files[2] = []byte("hello world, this is some data") // 31 bytes
+
+	srv := NewNFSServer(handler, nil)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Serve("127.0.0.1:0")
+	}()
+
+	addr := waitForAddr(srv, 2*time.Second)
+	if addr == nil {
+		t.Fatal("server did not start listening within timeout")
+	}
+	t.Cleanup(func() {
+		srv.Stop()
+		<-errCh
+	})
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	fileHandle := srv.handles.getOrCreateHandle(2)
+
+	// Build SETATTR payload to truncate to size 5.
+	pw := newXDRWriter()
+	pw.writeOpaque(fileHandle)
+	// sattr3
+	pw.writeBool(false)  // set_mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(true)   // set_size = true
+	pw.writeUint64(5)    // new size = 5
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	// sattrguard3
+	pw.writeBool(false)
+
+	call := buildRPCCall(1, nfsProg, nfsVersion, nfsProcSetattr, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK, got %d", nfsStatus)
+	}
+
+	// Verify the file was truncated to 5 bytes
+	data, ok := handler.files[2]
+	if !ok {
+		t.Fatal("file was deleted")
+	}
+	if len(data) != 5 {
+		t.Errorf("expected file size 5, got %d", len(data))
+	}
+	expected := "hello"
+	if string(data) != expected {
+		t.Errorf("expected content %q, got %q", expected, string(data))
+	}
+}
+
+// TestNFSServer_SetattrTruncateLarger tests truncating a file to a larger size (extending with zeros).
+func TestNFSServer_SetattrTruncateLarger(t *testing.T) {
+	handler := newTruncationTestHandler()
+	// Pre-populate a file with content
+	handler.files[2] = []byte("hello") // 5 bytes
+
+	srv := NewNFSServer(handler, nil)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Serve("127.0.0.1:0")
+	}()
+
+	addr := waitForAddr(srv, 2*time.Second)
+	if addr == nil {
+		t.Fatal("server did not start listening within timeout")
+	}
+	t.Cleanup(func() {
+		srv.Stop()
+		<-errCh
+	})
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	fileHandle := srv.handles.getOrCreateHandle(2)
+
+	// Build SETATTR payload to extend to size 10.
+	pw := newXDRWriter()
+	pw.writeOpaque(fileHandle)
+	// sattr3
+	pw.writeBool(false)  // set_mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(true)   // set_size = true
+	pw.writeUint64(10)   // new size = 10
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	// sattrguard3
+	pw.writeBool(false)
+
+	call := buildRPCCall(1, nfsProg, nfsVersion, nfsProcSetattr, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK, got %d", nfsStatus)
+	}
+
+	// Verify the file was extended to 10 bytes
+	data, ok := handler.files[2]
+	if !ok {
+		t.Fatal("file was deleted")
+	}
+	if len(data) != 10 {
+		t.Errorf("expected file size 10, got %d", len(data))
+	}
+	// First 5 bytes should be "hello", rest should be zeros
+	if string(data[:5]) != "hello" {
+		t.Errorf("expected first 5 bytes to be 'hello', got %q", string(data[:5]))
+	}
+	for i := 5; i < 10; i++ {
+		if data[i] != 0 {
+			t.Errorf("expected byte %d to be 0, got %d", i, data[i])
+		}
+	}
+}
+
+// TestNFSServer_SetattrTruncateWithMode tests truncating a file while also changing mode.
+func TestNFSServer_SetattrTruncateWithMode(t *testing.T) {
+	handler := newTruncationTestHandler()
+	handler.files[2] = []byte("hello world") // 11 bytes
+
+	srv := NewNFSServer(handler, nil)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Serve("127.0.0.1:0")
+	}()
+
+	addr := waitForAddr(srv, 2*time.Second)
+	if addr == nil {
+		t.Fatal("server did not start listening within timeout")
+	}
+	t.Cleanup(func() {
+		srv.Stop()
+		<-errCh
+	})
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	fileHandle := srv.handles.getOrCreateHandle(2)
+
+	// Build SETATTR payload to truncate to size 0 and change mode.
+	pw := newXDRWriter()
+	pw.writeOpaque(fileHandle)
+	// sattr3
+	pw.writeBool(true)   // set_mode = true
+	pw.writeUint32(0600) // new mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(true)   // set_size = true
+	pw.writeUint64(0)    // new size = 0
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	// sattrguard3
+	pw.writeBool(false)
+
+	call := buildRPCCall(1, nfsProg, nfsVersion, nfsProcSetattr, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK, got %d", nfsStatus)
+	}
+
+	// Verify the file was truncated
+	data, ok := handler.files[2]
+	if !ok {
+		t.Fatal("file was deleted")
+	}
+	if len(data) != 0 {
+		t.Errorf("expected file size 0, got %d", len(data))
+	}
+}
+
+// TestNFSServer_SetattrTruncateDirectory tests that truncating a directory returns an error.
+func TestNFSServer_SetattrTruncateDirectory(t *testing.T) {
+	handler := newTruncationTestHandler()
+
+	srv := NewNFSServer(handler, nil)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Serve("127.0.0.1:0")
+	}()
+
+	addr := waitForAddr(srv, 2*time.Second)
+	if addr == nil {
+		t.Fatal("server did not start listening within timeout")
+	}
+	t.Cleanup(func() {
+		srv.Stop()
+		<-errCh
+	})
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	// Use root handle (a directory)
+	rootHandle := srv.handles.getOrCreateHandle(1)
+
+	// Build SETATTR payload to attempt truncating a directory.
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)
+	// sattr3
+	pw.writeBool(false)  // set_mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(true)   // set_size = true
+	pw.writeUint64(0)    // new size = 0
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	// sattrguard3
+	pw.writeBool(false)
+
+	call := buildRPCCall(1, nfsProg, nfsVersion, nfsProcSetattr, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3ErrInval {
+		t.Fatalf("expected NFS3_ERR_INVAL for directory truncate, got %d", nfsStatus)
 	}
 }

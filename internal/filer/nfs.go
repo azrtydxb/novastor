@@ -25,6 +25,7 @@ type NFSHandler interface {
 	Rename(ctx context.Context, oldParent uint64, oldName string, newParent uint64, newName string) error
 	Symlink(ctx context.Context, parentIno uint64, name string, target string) (*InodeMeta, error)
 	Readlink(ctx context.Context, ino uint64) (string, error)
+	Truncate(ctx context.Context, ino uint64, size int64) error
 }
 
 // NFSServer wraps an NFSHandler and serves NFS v3 over TCP using the ONC/RPC
