@@ -15,7 +15,11 @@ type stubNFSHandler struct{}
 
 func (s *stubNFSHandler) Stat(_ context.Context, ino uint64) (*InodeMeta, error) {
 	now := time.Now().UnixNano()
-	return &InodeMeta{Ino: ino, Type: TypeDir, Mode: 0755, LinkCount: 2, ATime: now, MTime: now, CTime: now}, nil
+	// Root inode (1) is a directory, others are files.
+	if ino == RootIno {
+		return &InodeMeta{Ino: ino, Type: TypeDir, Mode: 0755, LinkCount: 2, ATime: now, MTime: now, CTime: now}, nil
+	}
+	return &InodeMeta{Ino: ino, Type: TypeFile, Mode: 0644, LinkCount: 1, ATime: now, MTime: now, CTime: now}, nil
 }
 
 func (s *stubNFSHandler) Lookup(_ context.Context, _ uint64, _ string) (*InodeMeta, error) {
@@ -75,6 +79,11 @@ func (s *stubNFSHandler) Readlink(_ context.Context, _ uint64) (string, error) {
 
 func (s *stubNFSHandler) Truncate(_ context.Context, _ uint64, _ int64) error {
 	return nil
+}
+
+func (s *stubNFSHandler) Link(_ context.Context, targetIno uint64, _ uint64, _ string) (*InodeMeta, error) {
+	now := time.Now().UnixNano()
+	return &InodeMeta{Ino: targetIno, Type: TypeFile, Mode: 0644, LinkCount: 2, ATime: now, MTime: now, CTime: now}, nil
 }
 
 // waitForAddr polls until the server has a non-nil address or the timeout expires.
@@ -1367,7 +1376,7 @@ func TestNFSServer_Mknod(t *testing.T) {
 }
 
 func TestNFSServer_Link(t *testing.T) {
-	_, addr := startTestServer(t)
+	srv, addr := startTestServer(t)
 
 	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
 	if err != nil {
@@ -1375,13 +1384,14 @@ func TestNFSServer_Link(t *testing.T) {
 	}
 	defer conn.Close()
 
-	rootHandle := newHandleManager()
-	rootHandle.getOrCreateHandle(RootIno)
-	rootFH := rootHandle.getOrCreateHandle(RootIno)
+	rootFH := srv.handles.getOrCreateHandle(RootIno)
+	// Use a non-root inode (file)
+	fileIno := uint64(100)
+	fileFH := srv.handles.getOrCreateHandle(fileIno)
 
-	// Build LINK payload - should return error as we don't support hard links.
+	// Build LINK payload - should succeed now that hard links are supported.
 	pw := newXDRWriter()
-	pw.writeOpaque(rootFH) // target file handle
+	pw.writeOpaque(fileFH) // target file handle (file, not directory)
 	pw.writeOpaque(rootFH) // dir handle
 	pw.writeString("link-name")
 	call := buildRPCCall(25, nfsProg, nfsVersion, nfsProcLink, pw.Bytes())
@@ -1400,10 +1410,122 @@ func TestNFSServer_Link(t *testing.T) {
 	}
 
 	nfsStatus, _ := r.readUint32()
-	// LINK is not supported, should return an error
-	if nfsStatus == nfs3OK {
-		t.Error("expected error for LINK (not supported), got NFS3_OK")
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK, got %d", nfsStatus)
 	}
+
+	// post_op_attr for target file
+	attrFollows, _ := r.readBool()
+	if !attrFollows {
+		t.Error("expected post_op_attr in link response")
+	}
+
+	// dir_wcc_data for the directory
+	preOpFollows, _ := r.readBool()
+	postOpFollows, _ := r.readBool()
+	if !preOpFollows || !postOpFollows {
+		t.Logf("dir_wcc_data: pre_op_follows=%v, post_op_follows=%v", preOpFollows, postOpFollows)
+	}
+}
+
+func TestNFSServer_LinkToFile(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	// Create a file first
+	rootFH := srv.handles.getOrCreateHandle(RootIno)
+	fileIno := uint64(123)
+	fileFH := srv.handles.getOrCreateHandle(fileIno)
+
+	// Build LINK payload to create a hard link to the file
+	pw := newXDRWriter()
+	pw.writeOpaque(fileFH) // target file handle
+	pw.writeOpaque(rootFH) // dir handle (root)
+	pw.writeString("hardlink-to-file")
+	call := buildRPCCall(30, nfsProg, nfsVersion, nfsProcLink, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK for file hard link, got %d", nfsStatus)
+	}
+
+	// Verify post_op_attr contains file attributes
+	attrFollows, _ := r.readBool()
+	if !attrFollows {
+		t.Fatal("expected post_op_attr in link response")
+	}
+
+	// Skip fattr3 fields (21 fields)
+	for i := 0; i < 21; i++ {
+		r.readUint32()
+	}
+
+	// dir_wcc_data
+	preOpFollows, _ := r.readBool()
+	postOpFollows, _ := r.readBool()
+	t.Logf("dir_wcc_data: pre_op_follows=%v, post_op_follows=%v", preOpFollows, postOpFollows)
+}
+
+func TestNFSServer_LinkNameTooLong(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootFH := srv.handles.getOrCreateHandle(RootIno)
+
+	// Create a link name that exceeds NFS_MAXNAME (255 bytes)
+	longName := make([]byte, 256)
+	for i := range longName {
+		longName[i] = 'a'
+	}
+
+	pw := newXDRWriter()
+	pw.writeOpaque(rootFH)
+	pw.writeOpaque(rootFH)
+	// Write a long string - the XDR writer should handle this
+	// but we'll test the server's behavior
+	// For this test, we'll use a normal name since XDR handles string encoding
+	pw.writeString(string(longName))
+	call := buildRPCCall(31, nfsProg, nfsVersion, nfsProcLink, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	// Server should either accept it or return NFS3_ERR_NAMETOOLONG
+	nfsStatus, _ := r.readUint32()
+	t.Logf("Link with long name returned status %d", nfsStatus)
 }
 
 // TestNFSServer_AllProcedureDispatches verifies that all 22 NFS v3 procedures

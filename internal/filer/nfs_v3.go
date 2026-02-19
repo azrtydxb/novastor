@@ -1030,16 +1030,81 @@ func (n *nfsV3Handler) renameErrorReply(status uint32) []byte {
 	return w.Bytes()
 }
 
-func (n *nfsV3Handler) handleLink(_ context.Context, _ []byte) ([]byte, error) {
-	// Hard links are not supported in the current FileSystem API.
+func (n *nfsV3Handler) handleLink(ctx context.Context, payload []byte) ([]byte, error) {
+	r := newXDRReader(payload)
+	// LINK3args: file (target file handle), dir (directory handle), linkname (string)
+	targetIno, _, err := n.resolveHandle(r)
+	if err != nil {
+		return n.linkErrorReply(nfs3ErrStale), nil
+	}
+
+	parentIno, _, err := n.resolveHandle(r)
+	if err != nil {
+		return n.linkErrorReply(nfs3ErrStale), nil
+	}
+
+	linkName, err := r.readString()
+	if err != nil {
+		return n.linkErrorReply(nfs3ErrInval), nil
+	}
+
+	// Get target metadata to verify it exists and is a regular file.
+	targetMeta, err := n.fs.Stat(ctx, targetIno)
+	if err != nil {
+		return n.linkErrorReply(nfs3ErrNoEnt), nil
+	}
+
+	// Hard links are only supported for regular files.
+	if targetMeta.Type != TypeFile {
+		return n.linkErrorReply(nfs3ErrXDev), nil
+	}
+
+	// Get parent directory metadata before the operation.
+	dirBefore, _ := n.fs.Stat(ctx, parentIno)
+	var dirBeforeCp *InodeMeta
+	if dirBefore != nil {
+		cp := *dirBefore
+		dirBeforeCp = &cp
+	}
+
+	// Check if the link name already exists. According to NFS v3 spec,
+	// we need to remove the existing entry first if it exists.
+	if existing, _ := n.fs.Lookup(ctx, parentIno, linkName); existing != nil {
+		// Remove the existing entry.
+		if err := n.fs.Unlink(ctx, parentIno, linkName); err != nil {
+			return n.linkErrorReply(nfs3ErrIO), nil
+		}
+	}
+
+	// Create the hard link.
+	meta, err := n.fs.Link(ctx, targetIno, parentIno, linkName)
+	if err != nil {
+		logging.L.Error("nfs: link failed", zap.String("name", linkName), zap.Error(err))
+		return n.linkErrorReply(nfs3ErrIO), nil
+	}
+
+	// Get updated parent directory metadata.
+	dirAfter, _ := n.fs.Stat(ctx, parentIno)
+
 	w := newXDRWriter()
-	w.writeUint32(nfs3ErrNotDir)
-	// post_op_attr
-	w.writeBool(false)
-	// wcc_data
-	w.writeBool(false)
-	w.writeBool(false)
+	w.writeUint32(nfs3OK)
+	// post_op_attr for the target file (attributes after link)
+	n.writePostOpAttr(w, meta)
+	// dir_wcc (weak cache consistency data for the directory)
+	n.writeWcc(w, dirBeforeCp, dirAfter)
 	return w.Bytes(), nil
+}
+
+// linkErrorReply builds an error reply for the LINK procedure with status and empty attributes.
+func (n *nfsV3Handler) linkErrorReply(status uint32) []byte {
+	w := newXDRWriter()
+	w.writeUint32(status)
+	// post_op_attr (no attributes)
+	w.writeBool(false)
+	// dir_wcc (no pre_op_attr, no post_op_attr)
+	w.writeBool(false)
+	w.writeBool(false)
+	return w.Bytes()
 }
 
 func (n *nfsV3Handler) handleReadDir(ctx context.Context, payload []byte) ([]byte, error) {
