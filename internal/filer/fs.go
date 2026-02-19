@@ -354,3 +354,62 @@ func (fs *FileSystem) Readlink(ctx context.Context, ino uint64) (string, error) 
 	}
 	return inode.Target, nil
 }
+
+// Truncate resizes a file to the specified size. If the new size is smaller
+// than the current size, data beyond the new size is discarded. If the new
+// size is larger, the file is extended with zeros. This operation updates
+// the chunk metadata to reflect the new file size.
+func (fs *FileSystem) Truncate(ctx context.Context, ino uint64, size int64) error {
+	if size < 0 {
+		return fmt.Errorf("invalid size %d: must be non-negative", size)
+	}
+
+	inode, err := fs.meta.GetInode(ctx, ino)
+	if err != nil {
+		return fmt.Errorf("getting inode %d: %w", ino, err)
+	}
+	if inode.Type != TypeFile {
+		return fmt.Errorf("inode %d is not a file", ino)
+	}
+
+	// If the size is the same, nothing to do.
+	if size == inode.Size {
+		return nil
+	}
+
+	// If shrinking, we need to read the data up to the new size and write new chunks.
+	// If growing, we need to read existing data, pad with zeros, and write new chunks.
+	var existing []byte
+	if len(inode.ChunkIDs) > 0 && inode.Size > 0 {
+		readSize := inode.Size
+		if size < readSize {
+			readSize = size
+		}
+		existing, err = fs.chunks.ReadChunks(ctx, inode.ChunkIDs, 0, readSize)
+		if err != nil {
+			return fmt.Errorf("reading existing chunks: %w", err)
+		}
+	}
+
+	// Build the new content buffer.
+	buf := make([]byte, size)
+	copy(buf, existing)
+
+	// Write new chunks.
+	chunkIDs, err := fs.chunks.WriteChunks(ctx, buf)
+	if err != nil {
+		return fmt.Errorf("writing chunks: %w", err)
+	}
+
+	// Update inode.
+	now := time.Now().UnixNano()
+	inode.ChunkIDs = chunkIDs
+	inode.Size = size
+	inode.MTime = now
+	inode.CTime = now
+	if err := fs.meta.UpdateInode(ctx, inode); err != nil {
+		return fmt.Errorf("updating inode: %w", err)
+	}
+
+	return nil
+}
