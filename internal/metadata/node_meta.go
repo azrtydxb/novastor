@@ -24,6 +24,12 @@ type NodeMeta struct {
 	// AvailableCapacity is the currently available storage in bytes.
 	AvailableCapacity int64 `json:"availableCapacity"`
 
+	// Zone is the failure domain zone for CRUSH placement (e.g. "us-east-1a").
+	Zone string `json:"zone"`
+
+	// Rack is the failure domain rack for CRUSH placement (e.g. "rack-A").
+	Rack string `json:"rack"`
+
 	// LastHeartbeat is the Unix timestamp (seconds) of the last successful
 	// heartbeat received from this node.
 	LastHeartbeat int64 `json:"lastHeartbeat"`

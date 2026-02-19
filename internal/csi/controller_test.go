@@ -91,6 +91,12 @@ func (p *mockPlacer) Place(count int) []string {
 	return result
 }
 
+func (p *mockPlacer) PlaceKey(key string, count int) []string {
+	// For testing, we use the same behavior as Place.
+	// Deterministic per key is not required for these tests.
+	return p.Place(count)
+}
+
 // --- helpers ---
 
 func setupController() (*ControllerServer, *mockMetadataStore) {

@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"fmt"
+	"go.uber.org/zap"
 	"strings"
 	"sync"
 
