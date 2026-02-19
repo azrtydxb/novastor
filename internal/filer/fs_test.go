@@ -565,3 +565,207 @@ func TestTruncate(t *testing.T) {
 		}
 	}
 }
+
+func TestLink_Basic(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	// Create a target file.
+	file, err := fs.Create(ctx, RootIno, "original.txt", 0644)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if file.LinkCount != 1 {
+		t.Fatalf("expected initial link count 1, got %d", file.LinkCount)
+	}
+
+	// Create a hard link to the file.
+	linked, err := fs.Link(ctx, file.Ino, RootIno, "link.txt")
+	if err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+
+	// The returned metadata should have the same inode number.
+	if linked.Ino != file.Ino {
+		t.Errorf("link inode mismatch: got %d, want %d", linked.Ino, file.Ino)
+	}
+
+	// Link count should be incremented.
+	if linked.LinkCount != 2 {
+		t.Errorf("expected link count 2 after link, got %d", linked.LinkCount)
+	}
+
+	// Both names should resolve to the same inode.
+	originalLookup, err := fs.Lookup(ctx, RootIno, "original.txt")
+	if err != nil {
+		t.Fatalf("Lookup original: %v", err)
+	}
+	linkLookup, err := fs.Lookup(ctx, RootIno, "link.txt")
+	if err != nil {
+		t.Fatalf("Lookup link: %v", err)
+	}
+	if originalLookup.Ino != linkLookup.Ino {
+		t.Errorf("original and link should have same inode: %d vs %d", originalLookup.Ino, linkLookup.Ino)
+	}
+}
+
+func TestLink_CrossDirectory(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	// Create a file in root.
+	file, err := fs.Create(ctx, RootIno, "file.txt", 0644)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Create a subdirectory.
+	dir, err := fs.Mkdir(ctx, RootIno, "subdir", 0755)
+	if err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	// Create a hard link in the subdirectory.
+	linked, err := fs.Link(ctx, file.Ino, dir.Ino, "crossdir-link.txt")
+	if err != nil {
+		t.Fatalf("Link cross-directory: %v", err)
+	}
+
+	if linked.Ino != file.Ino {
+		t.Errorf("cross-directory link inode mismatch: got %d, want %d", linked.Ino, file.Ino)
+	}
+
+	if linked.LinkCount != 2 {
+		t.Errorf("expected link count 2, got %d", linked.LinkCount)
+	}
+
+	// Verify link is accessible from subdirectory.
+	crossLookup, err := fs.Lookup(ctx, dir.Ino, "crossdir-link.txt")
+	if err != nil {
+		t.Fatalf("Lookup cross-directory link: %v", err)
+	}
+	if crossLookup.Ino != file.Ino {
+		t.Errorf("cross-directory lookup inode mismatch: got %d, want %d", crossLookup.Ino, file.Ino)
+	}
+}
+
+func TestLink_DirectoryNotSupported(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	// Create a directory.
+	dir, err := fs.Mkdir(ctx, RootIno, "mydir", 0755)
+	if err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	// Attempting to create a hard link to a directory should fail.
+	_, err = fs.Link(ctx, dir.Ino, RootIno, "dir-link")
+	if err == nil {
+		t.Error("expected error when linking to directory")
+	}
+}
+
+func TestLink_SymlinkNotSupported(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	// Create a symlink.
+	link, err := fs.Symlink(ctx, RootIno, "symlink", "target")
+	if err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	// Attempting to create a hard link to a symlink should fail.
+	_, err = fs.Link(ctx, link.Ino, RootIno, "link-to-symlink")
+	if err == nil {
+		t.Error("expected error when linking to symlink")
+	}
+}
+
+func TestLink_NameReplacement(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	// Create two files.
+	file1, err := fs.Create(ctx, RootIno, "file1.txt", 0644)
+	if err != nil {
+		t.Fatalf("Create file1: %v", err)
+	}
+	file2, err := fs.Create(ctx, RootIno, "file2.txt", 0644)
+	if err != nil {
+		t.Fatalf("Create file2: %v", err)
+	}
+
+	// Create a hard link to file1 using the name of file2.
+	// This should replace the existing entry.
+	linked, err := fs.Link(ctx, file1.Ino, RootIno, "file2.txt")
+	if err != nil {
+		t.Fatalf("Link with name replacement: %v", err)
+	}
+
+	// The link should point to file1.
+	if linked.Ino != file1.Ino {
+		t.Errorf("link should point to file1: got %d, want %d", linked.Ino, file1.Ino)
+	}
+
+	// Looking up "file2.txt" should now resolve to file1's inode.
+	lookup, err := fs.Lookup(ctx, RootIno, "file2.txt")
+	if err != nil {
+		t.Fatalf("Lookup after replacement: %v", err)
+	}
+	if lookup.Ino != file1.Ino {
+		t.Errorf("lookup should resolve to file1: got %d, want %d", lookup.Ino, file1.Ino)
+	}
+
+	// file2's link count should have been decremented to 0, causing its inode to be deleted.
+	_, err = fs.Stat(ctx, file2.Ino)
+	if err == nil {
+		t.Error("file2 inode should have been deleted after link count reached 0")
+	}
+}
+
+func TestLink_MultipleLinks(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	// Create a file.
+	file, err := fs.Create(ctx, RootIno, "original.txt", 0644)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Create multiple hard links.
+	for i := 0; i < 5; i++ {
+		linkName := fmt.Sprintf("link%d.txt", i)
+		linked, err := fs.Link(ctx, file.Ino, RootIno, linkName)
+		if err != nil {
+			t.Fatalf("Link %d: %v", i, err)
+		}
+		expectedCount := uint32(2 + i)
+		if linked.LinkCount != expectedCount {
+			t.Errorf("iteration %d: expected link count %d, got %d", i, expectedCount, linked.LinkCount)
+		}
+	}
+
+	// Final link count should be 6 (original + 5 links).
+	finalMeta, err := fs.Stat(ctx, file.Ino)
+	if err != nil {
+		t.Fatalf("Stat final: %v", err)
+	}
+	if finalMeta.LinkCount != 6 {
+		t.Errorf("expected final link count 6, got %d", finalMeta.LinkCount)
+	}
+}
+
+func TestLink_NonExistentTarget(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	// Try to link to a non-existent inode.
+	_, err := fs.Link(ctx, 9999, RootIno, "link.txt")
+	if err == nil {
+		t.Error("expected error when linking to non-existent inode")
+	}
+}
