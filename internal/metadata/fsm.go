@@ -13,24 +13,24 @@ import (
 )
 
 const (
-	opPut       = "put"
-	opDelete    = "delete"
-	opAddQuota  = "addQuota"
-	opSubQuota  = "subQuota"
+	opPut      = "put"
+	opDelete   = "delete"
+	opAddQuota = "addQuota"
+	opSubQuota = "subQuota"
 
-	bucketVolumes           = "volumes"
-	bucketPlacements        = "placements"
-	bucketObjects           = "objects"
-	bucketBuckets           = "buckets" // S3 buckets, not FSM buckets
-	bucketMultipart         = "multipart"
-	bucketSnapshots         = "snapshots"
-	bucketShardPlacements   = "shardPlacements"
-	bucketVolumeCompliance  = "volumeCompliance"
-	bucketHealTasks         = "healTasks"
-	bucketChunkHealLocks    = "chunkHealLocks"
-	bucketLocks             = "locks" // File lock leases
-	bucketQuotas            = "quotas"
-	bucketUsage             = "usage"
+	bucketVolumes          = "volumes"
+	bucketPlacements       = "placements"
+	bucketObjects          = "objects"
+	bucketBuckets          = "buckets" // S3 buckets, not FSM buckets
+	bucketMultipart        = "multipart"
+	bucketSnapshots        = "snapshots"
+	bucketShardPlacements  = "shardPlacements"
+	bucketVolumeCompliance = "volumeCompliance"
+	bucketHealTasks        = "healTasks"
+	bucketChunkHealLocks   = "chunkHealLocks"
+	bucketLocks            = "locks" // File lock leases
+	bucketQuotas           = "quotas"
+	bucketUsage            = "usage"
 )
 
 // MetadataFSM defines the interface that both the in-memory FSM and the
@@ -64,22 +64,22 @@ var _ MetadataFSM = (*FSM)(nil)
 func NewFSM() *FSM {
 	return &FSM{
 		buckets: map[string]map[string][]byte{
-			bucketVolumes:           {},
-			bucketPlacements:        {},
-			bucketObjects:           {},
-			bucketBuckets:           {},
-			bucketMultipart:         {},
-			bucketSnapshots:         {},
-			bucketShardPlacements:   {},
-			bucketVolumeCompliance:  {},
-			bucketHealTasks:         {},
-			bucketChunkHealLocks:    {},
-			bucketLocks:             {},
-			bucketQuotas:            {},
-			bucketUsage:             {},
-			"nodes":                 {},
-			"inodes":                {},
-			"dirents":               {},
+			bucketVolumes:          {},
+			bucketPlacements:       {},
+			bucketObjects:          {},
+			bucketBuckets:          {},
+			bucketMultipart:        {},
+			bucketSnapshots:        {},
+			bucketShardPlacements:  {},
+			bucketVolumeCompliance: {},
+			bucketHealTasks:        {},
+			bucketChunkHealLocks:   {},
+			bucketLocks:            {},
+			bucketQuotas:           {},
+			bucketUsage:            {},
+			"nodes":                {},
+			"inodes":               {},
+			"dirents":              {},
 		},
 	}
 }

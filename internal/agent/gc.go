@@ -24,10 +24,10 @@ type GCResult struct {
 // on the local agent. It queries the metadata service to determine which
 // local chunks are no longer referenced and deletes them.
 type GarbageCollector struct {
-	store         chunk.Store
-	metaClient    MetadataClient
-	interval      time.Duration
-	batchSize     int
+	store      chunk.Store
+	metaClient MetadataClient
+	interval   time.Duration
+	batchSize  int
 
 	mu         sync.Mutex
 	running    bool

@@ -26,7 +26,7 @@ type BucketMeta struct {
 	CreationDate int64  `json:"creationDate"` // Unix nanoseconds
 	Versioning   string `json:"versioning"`   // "enabled", "suspended", ""
 	Owner        string `json:"owner"`
-	MaxSize      int64  `json:"maxSize"`      // Per-bucket quota limit in bytes (0 = unlimited)
+	MaxSize      int64  `json:"maxSize"` // Per-bucket quota limit in bytes (0 = unlimited)
 }
 
 // MultipartUpload tracks an in-progress multipart upload.

@@ -566,4 +566,3 @@ func (c *GRPCClient) CleanupExpiredLocks(ctx context.Context) (int, error) {
 	}
 	return result.Cleaned, nil
 }
-

@@ -209,8 +209,8 @@ func TestQuotaFSM_ListQuotas(t *testing.T) {
 
 	// Set multiple quotas.
 	quotas := map[QuotaScope]*QuotaSpec{
-		{Kind: "Namespace", Name: "ns1"}: {StorageHard: 1000},
-		{Kind: "Namespace", Name: "ns2"}: {StorageHard: 2000},
+		{Kind: "Namespace", Name: "ns1"}:     {StorageHard: 1000},
+		{Kind: "Namespace", Name: "ns2"}:     {StorageHard: 2000},
 		{Kind: "StoragePool", Name: "pool1"}: {StorageHard: 5000},
 	}
 

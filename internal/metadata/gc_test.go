@@ -108,7 +108,7 @@ func TestGarbageCollector_DeleteStaleNodeMetadata(t *testing.T) {
 		DiskCount:         1,
 		TotalCapacity:     1000000000,
 		AvailableCapacity: 500000000,
-		LastHeartbeat:     now - int64((48*time.Hour).Seconds()), // 48 hours ago
+		LastHeartbeat:     now - int64((48 * time.Hour).Seconds()), // 48 hours ago
 		Status:            "ready",
 	}
 	offlineNode := &NodeMeta{
@@ -117,7 +117,7 @@ func TestGarbageCollector_DeleteStaleNodeMetadata(t *testing.T) {
 		DiskCount:         1,
 		TotalCapacity:     1000000000,
 		AvailableCapacity: 500000000,
-		LastHeartbeat:     now - int64((1*time.Hour).Seconds()), // Recently went offline
+		LastHeartbeat:     now - int64((1 * time.Hour).Seconds()), // Recently went offline
 		Status:            "offline",
 	}
 	offlineStaleNode := &NodeMeta{
@@ -126,7 +126,7 @@ func TestGarbageCollector_DeleteStaleNodeMetadata(t *testing.T) {
 		DiskCount:         1,
 		TotalCapacity:     1000000000,
 		AvailableCapacity: 500000000,
-		LastHeartbeat:     now - int64((10*24*time.Hour).Seconds()), // 10 days ago, offline
+		LastHeartbeat:     now - int64((10 * 24 * time.Hour).Seconds()), // 10 days ago, offline
 		Status:            "offline",
 	}
 

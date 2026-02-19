@@ -404,9 +404,9 @@ func (s *RaftStore) AcquireLock(ctx context.Context, args *AcquireLockArgs) (*Ac
 		}
 		if conflicts(candidateLock, existing) {
 			return &AcquireLockResult{
-				ConflictingOwner: existing.Owner,
-			}, fmt.Errorf("lock conflict: owner %q holds conflicting %s lock on inode %d [%d,%d)",
-				existing.Owner, existing.Type, existing.Ino, existing.Start, existing.End)
+					ConflictingOwner: existing.Owner,
+				}, fmt.Errorf("lock conflict: owner %q holds conflicting %s lock on inode %d [%d,%d)",
+					existing.Owner, existing.Type, existing.Ino, existing.Start, existing.End)
 		}
 	}
 

@@ -700,4 +700,3 @@ func (s *GRPCServer) cleanupExpiredLocks(ctx context.Context) (*pb.MetadataRespo
 		Cleaned int `json:"cleaned"`
 	}{Cleaned: count})
 }
-

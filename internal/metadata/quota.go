@@ -45,11 +45,11 @@ type QuotaUsage struct {
 
 // QuotaError is returned when a quota check fails.
 type QuotaError struct {
-	Scope      QuotaScope
-	Resource   string
-	Requested  int64
-	Limit      int64
-	Used       int64
+	Scope     QuotaScope
+	Resource  string
+	Requested int64
+	Limit     int64
+	Used      int64
 }
 
 func (e *QuotaError) Error() string {

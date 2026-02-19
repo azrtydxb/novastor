@@ -11,31 +11,31 @@ import (
 type InodeType string
 
 const (
-	TypeFile      InodeType = "file"
-	TypeDir       InodeType = "dir"
-	TypeSymlink   InodeType = "symlink"
-	TypeCharDev   InodeType = "char"
-	TypeBlockDev  InodeType = "block"
-	TypeFIFO      InodeType = "fifo"
+	TypeFile     InodeType = "file"
+	TypeDir      InodeType = "dir"
+	TypeSymlink  InodeType = "symlink"
+	TypeCharDev  InodeType = "char"
+	TypeBlockDev InodeType = "block"
+	TypeFIFO     InodeType = "fifo"
 )
 
 // InodeMeta holds POSIX-like metadata for a single inode.
 type InodeMeta struct {
-	Ino       uint64
-	Type      InodeType
-	Size      int64
-	Mode      uint32
-	UID       uint32
-	GID       uint32
-	LinkCount uint32
-	ChunkIDs  []string
-	Target    string
-	Xattrs    map[string]string
+	Ino         uint64
+	Type        InodeType
+	Size        int64
+	Mode        uint32
+	UID         uint32
+	GID         uint32
+	LinkCount   uint32
+	ChunkIDs    []string
+	Target      string
+	Xattrs      map[string]string
 	DeviceMajor uint32
 	DeviceMinor uint32
-	ATime     int64
-	MTime     int64
-	CTime     int64
+	ATime       int64
+	MTime       int64
+	CTime       int64
 }
 
 // DirEntry represents a single directory entry mapping a name to an inode.

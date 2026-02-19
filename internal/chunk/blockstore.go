@@ -44,19 +44,19 @@ type BlockStoreConfig struct {
 
 // BlockStoreDevice represents a single block device in the pool.
 type BlockStoreDevice struct {
-	path    string
-	file    *os.File
-	bitmap  *Bitmap
-	size    int64
-	mu      sync.Mutex
+	path   string
+	file   *os.File
+	bitmap *Bitmap
+	size   int64
+	mu     sync.Mutex
 }
 
 // BlockStoreMetadata is persisted on disk for recovery.
 type BlockStoreMetadata struct {
-	Magic      uint32
-	Version    uint32
+	Magic       uint32
+	Version     uint32
 	DeviceCount uint32
-	Reserved   [12]byte
+	Reserved    [12]byte
 }
 
 // ChunkIndexEntry maps a chunk ID to its location.
