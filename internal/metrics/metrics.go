@@ -61,6 +61,22 @@ var (
 		Help:      "Total chunks with checksum errors found by scrubber",
 	})
 
+	// GCOrphanChunksDeleted counts orphan chunks deleted by agent GC.
+	GCOrphanChunksDeleted = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "agent",
+		Name:      "gc_orphan_chunks_deleted_total",
+		Help:      "Total orphan chunks deleted by garbage collection",
+	})
+
+	// GCLastRunTimestamp tracks the last successful GC run timestamp.
+	GCLastRunTimestamp = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "agent",
+		Name:      "gc_last_run_timestamp",
+		Help:      "Unix timestamp of the last successful GC run",
+	})
+
 	// --------------- Metadata / Raft metrics ---------------
 
 	// RaftState reports the current Raft state (0=follower, 1=candidate, 2=leader).
@@ -95,6 +111,31 @@ var (
 		Name:      "ops_total",
 		Help:      "Total metadata operations",
 	}, []string{"operation"})
+
+	// GCOrphanPlacementsDeleted counts orphan placement maps deleted by metadata GC.
+	GCOrphanPlacementsDeleted = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "meta",
+		Name:      "gc_orphan_placements_deleted_total",
+		Help:      "Total orphan placement maps deleted by metadata garbage collection",
+	})
+
+	// GCStaleNodesDeleted counts stale node metadata entries deleted.
+	GCStaleNodesDeleted = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "meta",
+		Name:      "gc_stale_nodes_deleted_total",
+		Help:      "Total stale node metadata entries deleted by garbage collection",
+	})
+
+	// GCDurationSeconds tracks metadata GC operation duration.
+	GCDurationSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "novastor",
+		Subsystem: "meta",
+		Name:      "gc_duration_seconds",
+		Help:      "Duration of metadata garbage collection runs",
+		Buckets:   []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120},
+	})
 
 	// --------------- Controller metrics ---------------
 
@@ -293,12 +334,17 @@ func Register() {
 	prometheus.MustRegister(ChunkOpsTotal)
 	prometheus.MustRegister(ChunkBytesTotal)
 	prometheus.MustRegister(ScrubErrors)
+	prometheus.MustRegister(GCOrphanChunksDeleted)
+	prometheus.MustRegister(GCLastRunTimestamp)
 
 	// Metadata / Raft metrics
 	prometheus.MustRegister(RaftState)
 	prometheus.MustRegister(RaftCommitIndex)
 	prometheus.MustRegister(RaftApplyLatency)
 	prometheus.MustRegister(MetadataOpsTotal)
+	prometheus.MustRegister(GCOrphanPlacementsDeleted)
+	prometheus.MustRegister(GCStaleNodesDeleted)
+	prometheus.MustRegister(GCDurationSeconds)
 
 	// Controller metrics
 	prometheus.MustRegister(PoolNodeCount)

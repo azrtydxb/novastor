@@ -38,6 +38,8 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "Path to server certificate for mTLS")
 	tlsKey := flag.String("tls-key", "", "Path to server key for mTLS")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
+	gcInterval := flag.Duration("gc-interval", 1*time.Hour, "Interval between metadata garbage collection runs")
+	gcNodeTTL := flag.Duration("gc-node-ttl", 24*time.Hour, "Time after which a node with no heartbeat is considered stale for GC")
 	flag.Parse()
 
 	logging.Init(false)
@@ -77,6 +79,11 @@ func main() {
 
 	// Start Raft metrics monitoring (updates every 5 seconds).
 	store.StartMetricsMonitor(ctx, 5*time.Second)
+
+	// Start the garbage collector for orphan chunks and stale metadata.
+	gc := metadata.NewGarbageCollector(store, *gcInterval, *gcNodeTTL)
+	gc.Start(ctx)
+	log.Printf("Garbage collector started (interval=%s, node-ttl=%s)", *gcInterval, *gcNodeTTL)
 
 	// Build gRPC server options.
 	var serverOpts []grpc.ServerOption
