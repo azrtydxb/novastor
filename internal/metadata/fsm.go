@@ -70,6 +70,7 @@ type FSM struct {
 // Compile-time check that FSM implements MetadataFSM.
 var _ MetadataFSM = (*FSM)(nil)
 
+// NewFSM creates a new in-memory FSM with all required buckets initialized.
 func NewFSM() *FSM {
 	return &FSM{
 		buckets: map[string]map[string][]byte{
@@ -93,6 +94,7 @@ func NewFSM() *FSM {
 	}
 }
 
+// Apply applies a Raft log entry to the FSM, modifying the in-memory state.
 func (f *FSM) Apply(log *raft.Log) interface{} {
 	start := time.Now()
 	defer func() {
@@ -161,6 +163,7 @@ func (f *FSM) Apply(log *raft.Log) interface{} {
 	return nil
 }
 
+// Get retrieves a value by key from the specified bucket.
 func (f *FSM) Get(bucket, key string) ([]byte, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -175,6 +178,7 @@ func (f *FSM) Get(bucket, key string) ([]byte, error) {
 	return data, nil
 }
 
+// GetAll retrieves all key-value pairs from the specified bucket.
 func (f *FSM) GetAll(bucket string) (map[string][]byte, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -195,6 +199,7 @@ type fsmSnapshot struct {
 	data map[string]map[string][]byte
 }
 
+// Snapshot creates a point-in-time snapshot of the FSM state.
 func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -211,6 +216,7 @@ func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 	return &fsmSnapshot{data: cp}, nil
 }
 
+// Restore restores the FSM state from a snapshot.
 func (f *FSM) Restore(rc io.ReadCloser) error {
 	defer rc.Close()
 	var data map[string]map[string][]byte
@@ -223,6 +229,7 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	return nil
 }
 
+// Persist writes the snapshot data to the sink.
 func (s *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
 	data, err := json.Marshal(s.data)
 	if err != nil {
@@ -236,6 +243,7 @@ func (s *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
 	return sink.Close()
 }
 
+// Release releases resources associated with the snapshot.
 func (s *fsmSnapshot) Release() {}
 
 // Close is a no-op for the in-memory FSM since there are no resources to release.

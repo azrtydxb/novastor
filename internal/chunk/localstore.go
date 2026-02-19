@@ -12,10 +12,14 @@ import (
 	"github.com/piwi3910/novastor/internal/metrics"
 )
 
+// LocalStore implements the Store interface using the local filesystem.
+// Chunks are stored in a two-level directory hierarchy for efficient access.
 type LocalStore struct {
 	dir string
 }
 
+// NewLocalStore creates a new local filesystem-backed chunk store.
+// The directory is created if it does not exist.
 func NewLocalStore(dir string) (*LocalStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating chunk store directory: %w", err)
@@ -31,6 +35,8 @@ func (s *LocalStore) chunkPath(id ChunkID) string {
 	return filepath.Join(s.dir, idStr[:2], idStr)
 }
 
+// Put stores a chunk on the local filesystem.
+// The chunk data is prefixed with a 4-byte checksum for integrity verification.
 func (s *LocalStore) Put(_ context.Context, c *Chunk) error {
 	path := s.chunkPath(c.ID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -47,6 +53,8 @@ func (s *LocalStore) Put(_ context.Context, c *Chunk) error {
 	return nil
 }
 
+// Get retrieves a chunk from the local filesystem.
+// Returns an error if the chunk is not found or fails checksum verification.
 func (s *LocalStore) Get(_ context.Context, id ChunkID) (*Chunk, error) {
 	path := s.chunkPath(id)
 	raw, err := os.ReadFile(path)
@@ -70,6 +78,8 @@ func (s *LocalStore) Get(_ context.Context, id ChunkID) (*Chunk, error) {
 	return c, nil
 }
 
+// Delete removes a chunk from the local filesystem.
+// No error is returned if the chunk does not exist.
 func (s *LocalStore) Delete(_ context.Context, id ChunkID) error {
 	path := s.chunkPath(id)
 	err := os.Remove(path)
@@ -80,6 +90,7 @@ func (s *LocalStore) Delete(_ context.Context, id ChunkID) error {
 	return nil
 }
 
+// Has checks whether a chunk exists in the store.
 func (s *LocalStore) Has(_ context.Context, id ChunkID) (bool, error) {
 	path := s.chunkPath(id)
 	_, err := os.Stat(path)
@@ -92,6 +103,7 @@ func (s *LocalStore) Has(_ context.Context, id ChunkID) (bool, error) {
 	return true, nil
 }
 
+// List returns all chunk IDs currently stored in the local store.
 func (s *LocalStore) List(_ context.Context) ([]ChunkID, error) {
 	var ids []ChunkID
 	err := filepath.Walk(s.dir, func(path string, info os.FileInfo, err error) error {

@@ -24,12 +24,14 @@ type Placer interface {
 	RemoveNode(nodeID string)
 }
 
+// RoundRobin implements the Placer interface using round-robin node selection.
 type RoundRobin struct {
 	mu    sync.Mutex
 	nodes []string
 	index int
 }
 
+// NewRoundRobin creates a new round-robin placer with the given initial nodes.
 func NewRoundRobin(nodes []string) *RoundRobin {
 	cp := make([]string, len(nodes))
 	copy(cp, nodes)
@@ -41,6 +43,7 @@ func (rr *RoundRobin) PlaceKey(_ string, count int) []string {
 	return rr.Place(count)
 }
 
+// Place selects the next count nodes in round-robin order.
 func (rr *RoundRobin) Place(count int) []string {
 	rr.mu.Lock()
 	defer rr.mu.Unlock()
@@ -58,6 +61,7 @@ func (rr *RoundRobin) Place(count int) []string {
 	return result
 }
 
+// AddNode adds a node to the round-robin pool if not already present.
 func (rr *RoundRobin) AddNode(nodeID string) {
 	rr.mu.Lock()
 	defer rr.mu.Unlock()
@@ -69,6 +73,7 @@ func (rr *RoundRobin) AddNode(nodeID string) {
 	rr.nodes = append(rr.nodes, nodeID)
 }
 
+// RemoveNode removes a node from the round-robin pool.
 func (rr *RoundRobin) RemoveNode(nodeID string) {
 	rr.mu.Lock()
 	defer rr.mu.Unlock()

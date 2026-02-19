@@ -10,12 +10,17 @@ import (
 	"strings"
 )
 
+// DeviceType represents the type of storage device.
 type DeviceType int
 
 const (
+	// TypeUnknown represents an unknown device type.
 	TypeUnknown DeviceType = iota
+	// TypeNVMe represents an NVMe device.
 	TypeNVMe
+	// TypeSSD represents an SSD device.
 	TypeSSD
+	// TypeHDD represents an HDD device.
 	TypeHDD
 )
 
@@ -32,6 +37,7 @@ func (dt DeviceType) String() string {
 	}
 }
 
+// DeviceInfo contains information about a storage device.
 type DeviceInfo struct {
 	Path       string
 	SizeBytes  uint64
@@ -45,11 +51,13 @@ func (d DeviceInfo) String() string {
 	return fmt.Sprintf("%s (%s, %.1f GB, %s)", d.Path, d.DeviceType, float64(d.SizeBytes)/1e9, d.Model)
 }
 
+// FilterOptions contains criteria for filtering devices.
 type FilterOptions struct {
 	DeviceType   DeviceType
 	MinSizeBytes uint64
 }
 
+// FilterDevices filters a list of devices based on the given options.
 func FilterDevices(devices []DeviceInfo, opts FilterOptions) []DeviceInfo {
 	var result []DeviceInfo
 	for _, d := range devices {
@@ -64,6 +72,8 @@ func FilterDevices(devices []DeviceInfo, opts FilterOptions) []DeviceInfo {
 	return result
 }
 
+// DiscoverDevices scans the system for available block devices and returns
+// their information. It excludes loop, ram, and device-mapper devices.
 func DiscoverDevices() ([]DeviceInfo, error) {
 	sysBlock := "/sys/block"
 	entries, err := os.ReadDir(sysBlock)

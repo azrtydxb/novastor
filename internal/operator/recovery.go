@@ -16,8 +16,11 @@ import (
 type NodeStatus int
 
 const (
+	// NodeHealthy indicates the node is healthy and responding.
 	NodeHealthy NodeStatus = iota
+	// NodeSuspect indicates the node hasn't been heard from recently.
 	NodeSuspect
+	// NodeDown indicates the node is considered down.
 	NodeDown
 )
 

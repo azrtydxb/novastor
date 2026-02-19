@@ -16,10 +16,14 @@ import (
 type HealStatus string
 
 const (
-	HealStatusHealthy  HealStatus = "healthy"
-	HealStatusHealing  HealStatus = "healing"
+	// HealStatusHealthy indicates all chunks are healthy.
+	HealStatusHealthy HealStatus = "healthy"
+	// HealStatusHealing indicates some chunks are being healed.
+	HealStatusHealing HealStatus = "healing"
+	// HealStatusCritical indicates too many chunks are unhealthy.
 	HealStatusCritical HealStatus = "critical"
-	HealStatusUnknown  HealStatus = "unknown"
+	// HealStatusUnknown indicates health status cannot be determined.
+	HealStatusUnknown HealStatus = "unknown"
 )
 
 // jsonClusterHeal represents cluster-level healing status in JSON output format.

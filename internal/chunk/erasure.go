@@ -8,12 +8,16 @@ import (
 	"github.com/klauspost/reedsolomon"
 )
 
+// ErasureCoder provides Reed-Solomon erasure coding for chunk protection.
+// It encodes data into data+parity shards and can reconstruct from missing shards.
 type ErasureCoder struct {
 	dataShards   int
 	parityShards int
 	encoder      reedsolomon.Encoder
 }
 
+// NewErasureCoder creates a new erasure coder with the given shard counts.
+// Returns an error if either parameter is not positive.
 func NewErasureCoder(dataShards, parityShards int) (*ErasureCoder, error) {
 	if dataShards <= 0 || parityShards <= 0 {
 		return nil, fmt.Errorf("data shards (%d) and parity shards (%d) must be positive", dataShards, parityShards)
@@ -25,6 +29,8 @@ func NewErasureCoder(dataShards, parityShards int) (*ErasureCoder, error) {
 	return &ErasureCoder{dataShards: dataShards, parityShards: parityShards, encoder: enc}, nil
 }
 
+// Encode splits data into shards and generates parity shards.
+// Returns dataShards + parityShards shards, any of which can be used for reconstruction.
 func (ec *ErasureCoder) Encode(data []byte) ([][]byte, error) {
 	buf := make([]byte, 8+len(data))
 	binary.BigEndian.PutUint64(buf[:8], uint64(len(data)))
@@ -39,6 +45,8 @@ func (ec *ErasureCoder) Encode(data []byte) ([][]byte, error) {
 	return shards, nil
 }
 
+// Decode reconstructs the original data from a set of shards.
+// At least dataShards valid shards are required for successful reconstruction.
 func (ec *ErasureCoder) Decode(shards [][]byte) ([]byte, error) {
 	if err := ec.encoder.Reconstruct(shards); err != nil {
 		return nil, fmt.Errorf("reconstructing shards: %w", err)
@@ -69,8 +77,13 @@ func (ec *ErasureCoder) Decode(shards [][]byte) ([]byte, error) {
 	return payload[:origLen], nil
 }
 
-func (ec *ErasureCoder) ShardCount() int   { return ec.dataShards + ec.parityShards }
-func (ec *ErasureCoder) DataShards() int   { return ec.dataShards }
+// ShardCount returns the total number of shards (data + parity).
+func (ec *ErasureCoder) ShardCount() int { return ec.dataShards + ec.parityShards }
+
+// DataShards returns the number of data shards.
+func (ec *ErasureCoder) DataShards() int { return ec.dataShards }
+
+// ParityShards returns the number of parity shards.
 func (ec *ErasureCoder) ParityShards() int { return ec.parityShards }
 
 // Reconstruct reconstructs missing shards in-place. Missing shards should be nil.

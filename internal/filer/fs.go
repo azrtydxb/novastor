@@ -14,12 +14,18 @@ import (
 type InodeType string
 
 const (
-	TypeFile     InodeType = "file"
-	TypeDir      InodeType = "dir"
-	TypeSymlink  InodeType = "symlink"
-	TypeCharDev  InodeType = "char"
+	// TypeFile represents a regular file inode.
+	TypeFile InodeType = "file"
+	// TypeDir represents a directory inode.
+	TypeDir InodeType = "dir"
+	// TypeSymlink represents a symbolic link inode.
+	TypeSymlink InodeType = "symlink"
+	// TypeCharDev represents a character device inode.
+	TypeCharDev InodeType = "char"
+	// TypeBlockDev represents a block device inode.
 	TypeBlockDev InodeType = "block"
-	TypeFIFO     InodeType = "fifo"
+	// TypeFIFO represents a FIFO/named pipe inode.
+	TypeFIFO InodeType = "fifo"
 )
 
 // InodeMeta holds POSIX-like metadata for a single inode.

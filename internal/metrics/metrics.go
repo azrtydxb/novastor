@@ -241,7 +241,7 @@ var (
 
 	// --------------- Policy Engine metrics ---------------
 
-	// ComplianceStatus reports the compliance status of each storage pool.
+	// PoolComplianceStatus reports the compliance status of each storage pool.
 	// Status values: 1=compliant, 0=non_compliant
 	PoolComplianceStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "novastor",
