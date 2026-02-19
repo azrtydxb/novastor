@@ -81,9 +81,25 @@ func (s *stubNFSHandler) Truncate(_ context.Context, _ uint64, _ int64) error {
 	return nil
 }
 
+<<<<<<< HEAD
 func (s *stubNFSHandler) Link(_ context.Context, targetIno uint64, _ uint64, _ string) (*InodeMeta, error) {
 	now := time.Now().UnixNano()
 	return &InodeMeta{Ino: targetIno, Type: TypeFile, Mode: 0644, LinkCount: 2, ATime: now, MTime: now, CTime: now}, nil
+=======
+func (s *stubNFSHandler) Mknod(_ context.Context, _ uint64, _ string, mode uint32, devType InodeType, major, minor uint32) (*InodeMeta, error) {
+	now := time.Now().UnixNano()
+	return &InodeMeta{
+		Ino:         300,
+		Type:        devType,
+		Mode:        mode,
+		LinkCount:   1,
+		DeviceMajor: major,
+		DeviceMinor: minor,
+		ATime:       now,
+		MTime:       now,
+		CTime:       now,
+	}, nil
+>>>>>>> c2b66ed ([Feature] Implement MKNOD procedure for special device files in NFS v3)
 }
 
 // waitForAddr polls until the server has a non-nil address or the timeout expires.
@@ -1335,7 +1351,7 @@ func TestNFSServer_Commit(t *testing.T) {
 }
 
 func TestNFSServer_Mknod(t *testing.T) {
-	_, addr := startTestServer(t)
+	srv, addr := startTestServer(t)
 
 	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
 	if err != nil {
@@ -1343,16 +1359,21 @@ func TestNFSServer_Mknod(t *testing.T) {
 	}
 	defer conn.Close()
 
-	rootHandle := newHandleManager()
-	rootHandle.getOrCreateHandle(RootIno)
-	rootFH := rootHandle.getOrCreateHandle(RootIno)
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
 
-	// Build MKNOD payload - should return error as we don't support device files.
+	// Test MKNOD for a FIFO pipe
 	pw := newXDRWriter()
-	pw.writeOpaque(rootFH)
-	pw.writeString("dev-node")
-	pw.writeUint32(1) // ftype3: NF3REG
-	// sattr3 would follow, but we just want to test that the procedure is handled
+	pw.writeOpaque(rootHandle)
+	pw.writeString("test-fifo")
+	pw.writeUint32(nf3FIFO) // ftype3: NF3FIFO
+	// sattr3
+	pw.writeBool(true)   // set_mode
+	pw.writeUint32(0644) // mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(false)  // set_size
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
 	call := buildRPCCall(24, nfsProg, nfsVersion, nfsProcMknod, pw.Bytes())
 	sendRPCRecord(t, conn, call)
 	reply := recvRPCRecord(t, conn)
@@ -1369,9 +1390,124 @@ func TestNFSServer_Mknod(t *testing.T) {
 	}
 
 	nfsStatus, _ := r.readUint32()
-	// MKNOD is not supported, should return an error
-	if nfsStatus == nfs3OK {
-		t.Error("expected error for MKNOD (not supported), got NFS3_OK")
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK for MKNOD FIFO, got %d", nfsStatus)
+	}
+
+	// post_op_fh3: handle follows
+	handleFollows, _ := r.readBool()
+	if !handleFollows {
+		t.Fatal("expected file handle in mknod response")
+	}
+	fh, _ := r.readOpaque()
+	if len(fh) != nfsHandleSize {
+		t.Errorf("expected handle size %d, got %d", nfsHandleSize, len(fh))
+	}
+}
+
+func TestNFSServer_MknodCharDev(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
+
+	// Test MKNOD for a character device
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)
+	pw.writeString("test-chardev")
+	pw.writeUint32(nf3Chr) // ftype3: NF3CHR
+	// sattr3
+	pw.writeBool(true)   // set_mode
+	pw.writeUint32(0666) // mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(false)  // set_size
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	// specdata3 (major, minor)
+	pw.writeUint32(1) // major
+	pw.writeUint32(3) // minor
+	call := buildRPCCall(25, nfsProg, nfsVersion, nfsProcMknod, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK for MKNOD char dev, got %d", nfsStatus)
+	}
+
+	// post_op_fh3: handle follows
+	handleFollows, _ := r.readBool()
+	if !handleFollows {
+		t.Fatal("expected file handle in mknod response")
+	}
+	fh, _ := r.readOpaque()
+	if len(fh) != nfsHandleSize {
+		t.Errorf("expected handle size %d, got %d", nfsHandleSize, len(fh))
+	}
+}
+
+func TestNFSServer_MknodBlockDev(t *testing.T) {
+	srv, addr := startTestServer(t)
+
+	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	rootHandle := srv.handles.getOrCreateHandle(RootIno)
+
+	// Test MKNOD for a block device
+	pw := newXDRWriter()
+	pw.writeOpaque(rootHandle)
+	pw.writeString("test-blockdev")
+	pw.writeUint32(nf3Blk) // ftype3: NF3BLK
+	// sattr3
+	pw.writeBool(true)   // set_mode
+	pw.writeUint32(0660) // mode
+	pw.writeBool(false)  // set_uid
+	pw.writeBool(false)  // set_gid
+	pw.writeBool(false)  // set_size
+	pw.writeUint32(0)    // set_atime = DONT_CHANGE
+	pw.writeUint32(0)    // set_mtime = DONT_CHANGE
+	// specdata3 (major, minor)
+	pw.writeUint32(8) // major
+	pw.writeUint32(0) // minor
+	call := buildRPCCall(26, nfsProg, nfsVersion, nfsProcMknod, pw.Bytes())
+	sendRPCRecord(t, conn, call)
+	reply := recvRPCRecord(t, conn)
+
+	r := newXDRReader(reply)
+	r.readUint32() // xid
+	r.readUint32() // msg_type
+	r.readUint32() // reply_stat
+	r.readUint32() // verifier flavor
+	r.readOpaque() // verifier body
+	acceptStat, _ := r.readUint32()
+	if acceptStat != acceptSuccess {
+		t.Fatalf("expected SUCCESS, got %d", acceptStat)
+	}
+
+	nfsStatus, _ := r.readUint32()
+	if nfsStatus != nfs3OK {
+		t.Fatalf("expected NFS3_OK for MKNOD block dev, got %d", nfsStatus)
 	}
 }
 
@@ -1610,6 +1746,17 @@ func TestNFSServer_AllProcedureDispatches(t *testing.T) {
 			pw := newXDRWriter()
 			pw.writeOpaque(rootFH)
 			pw.writeString("test")
+			// Minimal sattr3 for MKNOD
+			if proc == nfsProcMknod {
+				pw.writeUint32(nf3FIFO) // ftype3: FIFO
+				// sattr3
+				pw.writeBool(false) // set_mode
+				pw.writeBool(false) // set_uid
+				pw.writeBool(false) // set_gid
+				pw.writeBool(false) // set_size
+				pw.writeUint32(0)   // set_atime
+				pw.writeUint32(0)   // set_mtime
+			}
 			payload = pw.Bytes()
 		case nfsProcRename:
 			pw := newXDRWriter()

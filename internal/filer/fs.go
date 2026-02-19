@@ -11,9 +11,12 @@ import (
 type InodeType string
 
 const (
-	TypeFile    InodeType = "file"
-	TypeDir     InodeType = "dir"
-	TypeSymlink InodeType = "symlink"
+	TypeFile      InodeType = "file"
+	TypeDir       InodeType = "dir"
+	TypeSymlink   InodeType = "symlink"
+	TypeCharDev   InodeType = "char"
+	TypeBlockDev  InodeType = "block"
+	TypeFIFO      InodeType = "fifo"
 )
 
 // InodeMeta holds POSIX-like metadata for a single inode.
@@ -28,6 +31,8 @@ type InodeMeta struct {
 	ChunkIDs  []string
 	Target    string
 	Xattrs    map[string]string
+	DeviceMajor uint32
+	DeviceMinor uint32
 	ATime     int64
 	MTime     int64
 	CTime     int64
@@ -353,6 +358,34 @@ func (fs *FileSystem) Readlink(ctx context.Context, ino uint64) (string, error) 
 		return "", fmt.Errorf("inode %d is not a symlink", ino)
 	}
 	return inode.Target, nil
+}
+
+// Mknod creates a special device file (FIFO, character, or block) within the specified parent.
+func (fs *FileSystem) Mknod(ctx context.Context, parentIno uint64, name string, mode uint32, devType InodeType, major, minor uint32) (*InodeMeta, error) {
+	ino := fs.allocIno()
+	now := time.Now().UnixNano()
+
+	meta := &InodeMeta{
+		Ino:         ino,
+		Type:        devType,
+		Mode:        mode,
+		LinkCount:   1,
+		DeviceMajor: major,
+		DeviceMinor: minor,
+		ATime:       now,
+		MTime:       now,
+		CTime:       now,
+	}
+	if err := fs.meta.CreateInode(ctx, meta); err != nil {
+		return nil, fmt.Errorf("creating device inode: %w", err)
+	}
+
+	entry := &DirEntry{Name: name, Ino: ino, Type: devType}
+	if err := fs.meta.CreateDirEntry(ctx, parentIno, entry); err != nil {
+		return nil, fmt.Errorf("creating dir entry: %w", err)
+	}
+
+	return meta, nil
 }
 
 // Truncate resizes a file to the specified size. If the new size is smaller

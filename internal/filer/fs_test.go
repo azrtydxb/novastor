@@ -769,3 +769,126 @@ func TestLink_NonExistentTarget(t *testing.T) {
 		t.Error("expected error when linking to non-existent inode")
 	}
 }
+
+func TestMknod_FIFO(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	fifo, err := fs.Mknod(ctx, RootIno, "mypipe", 0644, TypeFIFO, 0, 0)
+	if err != nil {
+		t.Fatalf("Mknod FIFO: %v", err)
+	}
+	if fifo.Type != TypeFIFO {
+		t.Errorf("expected FIFO type, got %s", fifo.Type)
+	}
+	if fifo.Mode != 0644 {
+		t.Errorf("expected mode 0644, got %o", fifo.Mode)
+	}
+
+	// Lookup should find the FIFO.
+	looked, err := fs.Lookup(ctx, RootIno, "mypipe")
+	if err != nil {
+		t.Fatalf("Lookup FIFO: %v", err)
+	}
+	if looked.Type != TypeFIFO {
+		t.Errorf("lookup type mismatch: got %s", looked.Type)
+	}
+}
+
+func TestMknod_CharDev(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	charDev, err := fs.Mknod(ctx, RootIno, "null", 0666, TypeCharDev, 1, 3)
+	if err != nil {
+		t.Fatalf("Mknod CharDev: %v", err)
+	}
+	if charDev.Type != TypeCharDev {
+		t.Errorf("expected CharDev type, got %s", charDev.Type)
+	}
+	if charDev.DeviceMajor != 1 {
+		t.Errorf("expected major 1, got %d", charDev.DeviceMajor)
+	}
+	if charDev.DeviceMinor != 3 {
+		t.Errorf("expected minor 3, got %d", charDev.DeviceMinor)
+	}
+
+	// Lookup should find the character device.
+	looked, err := fs.Lookup(ctx, RootIno, "null")
+	if err != nil {
+		t.Fatalf("Lookup CharDev: %v", err)
+	}
+	if looked.Type != TypeCharDev {
+		t.Errorf("lookup type mismatch: got %s", looked.Type)
+	}
+	if looked.DeviceMajor != 1 || looked.DeviceMinor != 3 {
+		t.Errorf("device numbers not preserved: major=%d, minor=%d", looked.DeviceMajor, looked.DeviceMinor)
+	}
+}
+
+func TestMknod_BlockDev(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	blockDev, err := fs.Mknod(ctx, RootIno, "sda", 0660, TypeBlockDev, 8, 0)
+	if err != nil {
+		t.Fatalf("Mknod BlockDev: %v", err)
+	}
+	if blockDev.Type != TypeBlockDev {
+		t.Errorf("expected BlockDev type, got %s", blockDev.Type)
+	}
+	if blockDev.DeviceMajor != 8 {
+		t.Errorf("expected major 8, got %d", blockDev.DeviceMajor)
+	}
+	if blockDev.DeviceMinor != 0 {
+		t.Errorf("expected minor 0, got %d", blockDev.DeviceMinor)
+	}
+
+	// Lookup should find the block device.
+	looked, err := fs.Lookup(ctx, RootIno, "sda")
+	if err != nil {
+		t.Fatalf("Lookup BlockDev: %v", err)
+	}
+	if looked.Type != TypeBlockDev {
+		t.Errorf("lookup type mismatch: got %s", looked.Type)
+	}
+}
+
+func TestMknod_ReadDirContainsDevices(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	_, _ = fs.Create(ctx, RootIno, "file.txt", 0644)
+	_, _ = fs.Mkdir(ctx, RootIno, "dir", 0755)
+	_, _ = fs.Mknod(ctx, RootIno, "pipe", 0644, TypeFIFO, 0, 0)
+	_, _ = fs.Mknod(ctx, RootIno, "chardev", 0666, TypeCharDev, 1, 3)
+	_, _ = fs.Mknod(ctx, RootIno, "blockdev", 0660, TypeBlockDev, 8, 0)
+
+	entries, err := fs.ReadDir(ctx, RootIno)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 5 {
+		t.Fatalf("expected 5 entries, got %d", len(entries))
+	}
+
+	types := make(map[string]InodeType)
+	for _, e := range entries {
+		types[e.Name] = e.Type
+	}
+	if types["file.txt"] != TypeFile {
+		t.Error("file.txt not found or wrong type")
+	}
+	if types["dir"] != TypeDir {
+		t.Error("dir not found or wrong type")
+	}
+	if types["pipe"] != TypeFIFO {
+		t.Error("pipe not found or wrong type")
+	}
+	if types["chardev"] != TypeCharDev {
+		t.Error("chardev not found or wrong type")
+	}
+	if types["blockdev"] != TypeBlockDev {
+		t.Error("blockdev not found or wrong type")
+	}
+}
