@@ -123,6 +123,7 @@ func main() {
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
 	metricsAddr := flag.String("metrics-addr", ":9101", "Prometheus metrics listen address")
 	scrubInterval := flag.Duration("scrub-interval", 24*time.Hour, "Interval between scrub runs")
+	gcInterval := flag.Duration("gc-interval", 1*time.Hour, "Interval between garbage collection runs")
 	heartbeatInterval := flag.Duration("heartbeat-interval", 30*time.Second, "Interval between metadata heartbeats")
 	nodeID := flag.String("node-id", "", "Unique node ID (defaults to hostname)")
 	tlsCA := flag.String("tls-ca", "", "Path to CA certificate for mTLS")
@@ -288,6 +289,15 @@ func main() {
 	// Start the scrubber.
 	scrubber := chunk.NewScrubber(store, logReporter{}, *scrubInterval)
 	scrubber.Start(ctx)
+
+	// Start the garbage collector for orphan chunks.
+	if metaClient != nil {
+		agentGC := agent.NewGarbageCollector(store, metaClient, *gcInterval)
+		agentGC.Start(ctx)
+		logging.L.Info("agent garbage collector started", zap.Duration("interval", *gcInterval))
+	} else {
+		logging.L.Info("agent garbage collector disabled: no metadata connection")
+	}
 
 	// Register this node with the metadata service.
 	if metaClient != nil {
