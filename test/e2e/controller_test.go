@@ -60,13 +60,9 @@ func NewClient() (client.Client, error) {
 // This test requires a Kubernetes cluster and will be skipped if:
 // - KUBECONFIG is not set
 // - Not running in-cluster
-// - CI environment is detected (no cluster available)
+//
+// Note: In CI, a kind cluster is provisioned by the workflow.
 func TestControllerDeployment(t *testing.T) {
-	// Skip in CI or if no k8s config is available
-	if os.Getenv("CI") != "" {
-		t.Skip("Skipping controller deployment test in CI (no Kubernetes cluster available)")
-	}
-
 	k8sClient, err := NewClient()
 	if err != nil {
 		t.Fatalf("failed to create k8s client: %v", err)

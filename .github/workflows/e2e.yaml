@@ -1,0 +1,63 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  e2e:
+    name: E2E Controller Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup kind
+        uses: helm/kind-action@v1.8.0
+        with:
+          cluster_name: kind
+          version: v0.20.0
+          node_image: kindest/node:v1.29.0
+          kubectl_version: v1.29.0
+
+      - name: Verify cluster
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Generate manifests
+        run: |
+          make manifests || echo "Using existing CRD files"
+
+      - name: Install CRDs
+        run: |
+          kubectl apply -f config/crd/bases/ || echo "CRD install skipped"
+
+      - name: Create test namespace
+        run: |
+          kubectl create namespace novastor-e2e-test --dry-run=client
+          kubectl create namespace novastor-system --dry-run=client
+          kubectl create namespace novastor-e2e-test || true
+          kubectl create namespace novastor-system || true
+
+      - name: Run E2E tests
+        run: |
+          go test -v -tags=e2e ./test/e2e/... -timeout 30m
+        env:
+          KUBECONFIG: /root/.kube/config
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          kubectl get events -n novastor-system || true
+          kubectl describe pods -n novastor-system || true
+          kubectl get all -n novastor-e2e-test || true
