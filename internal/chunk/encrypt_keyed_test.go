@@ -320,3 +320,79 @@ func TestKeyedEncryptedStore_MultipleRotations(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyedEncryptedStore_ImplementsCapacityStore(t *testing.T) {
+	var _ CapacityStore = &KeyedEncryptedStore{}
+}
+
+func TestKeyedEncryptedStore_Stats(t *testing.T) {
+	inner := newTestLocalStore(t)
+	key := newTestKey(t)
+	km, err := NewStaticKeyManager(key)
+	if err != nil {
+		t.Fatalf("NewStaticKeyManager: %v", err)
+	}
+
+	store := NewKeyedEncryptedStore(inner, km)
+	ctx := context.Background()
+
+	// KeyedEncryptedStore should delegate Stats to inner LocalStore.
+	stats, err := store.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+	if stats.TotalBytes <= 0 {
+		t.Errorf("TotalBytes = %d, want > 0", stats.TotalBytes)
+	}
+}
+
+func TestKeyedEncryptedStore_ImplementsChunkMetaStore(t *testing.T) {
+	var _ ChunkMetaStore = &KeyedEncryptedStore{}
+}
+
+func TestKeyedEncryptedStore_GetMeta(t *testing.T) {
+	inner := newTestLocalStore(t)
+	key := newTestKey(t)
+	km, err := NewStaticKeyManager(key)
+	if err != nil {
+		t.Fatalf("NewStaticKeyManager: %v", err)
+	}
+
+	store := NewKeyedEncryptedStore(inner, km)
+	ctx := context.Background()
+
+	data := []byte("test metadata")
+	c := &Chunk{ID: NewChunkID(data), Data: data}
+	c.Checksum = c.ComputeChecksum()
+	_ = store.Put(ctx, c)
+
+	// GetMeta should delegate to inner LocalStore.
+	meta, err := store.GetMeta(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("GetMeta failed: %v", err)
+	}
+	if meta.ID != c.ID {
+		t.Errorf("GetMeta ID = %s, want %s", meta.ID, c.ID)
+	}
+}
+
+func TestKeyedEncryptedStore_ImplementsHealthCheckStore(t *testing.T) {
+	var _ HealthCheckStore = &KeyedEncryptedStore{}
+}
+
+func TestKeyedEncryptedStore_HealthCheck(t *testing.T) {
+	inner := newTestLocalStore(t)
+	key := newTestKey(t)
+	km, err := NewStaticKeyManager(key)
+	if err != nil {
+		t.Fatalf("NewStaticKeyManager: %v", err)
+	}
+
+	store := NewKeyedEncryptedStore(inner, km)
+	ctx := context.Background()
+
+	// HealthCheck should delegate to inner LocalStore.
+	if err := store.HealthCheck(ctx); err != nil {
+		t.Errorf("HealthCheck failed: %v", err)
+	}
+}
