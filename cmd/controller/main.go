@@ -22,6 +22,7 @@ import (
 	"github.com/piwi3910/novastor/internal/logging"
 	"github.com/piwi3910/novastor/internal/metadata"
 	"github.com/piwi3910/novastor/internal/operator"
+	"github.com/piwi3910/novastor/internal/policy"
 	"github.com/piwi3910/novastor/internal/transport"
 )
 
@@ -161,6 +162,10 @@ func main() {
 	var tlsCert string
 	var tlsKey string
 	var tlsRotationInterval time.Duration
+	var policyEngineEnabled bool
+	var policyScanIntervalStr string
+	var policyRepairEnabled bool
+	var policyRepairConcurrency int
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to.")
@@ -174,6 +179,10 @@ func main() {
 	flag.StringVar(&tlsCert, "tls-cert", "", "Path to client certificate for mTLS")
 	flag.StringVar(&tlsKey, "tls-key", "", "Path to client key for mTLS")
 	flag.DurationVar(&tlsRotationInterval, "tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
+	flag.BoolVar(&policyEngineEnabled, "policy-engine-enabled", true, "Enable policy engine for compliance checking and reconciliation.")
+	flag.StringVar(&policyScanIntervalStr, "policy-scan-interval", "5m", "Interval between compliance scans.")
+	flag.BoolVar(&policyRepairEnabled, "policy-repair-enabled", true, "Enable automatic repair of non-compliant chunks.")
+	flag.IntVar(&policyRepairConcurrency, "policy-repair-concurrency", 4, "Maximum number of concurrent policy repair operations.")
 
 	opts := crzap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -293,6 +302,42 @@ func main() {
 			"heartbeatTimeout", heartbeatTimeout,
 			"concurrency", recoveryConcurrency,
 		)
+
+		// Set up the policy engine if enabled.
+		if policyEngineEnabled {
+			policyScanInterval, parseErr := time.ParseDuration(policyScanIntervalStr)
+			if parseErr != nil {
+				setupLog.Error(parseErr, "invalid policy-scan-interval value", "value", policyScanIntervalStr)
+				os.Exit(1)
+			}
+
+			poolLookup := policy.NewK8sPoolLookup(mgr.GetClient())
+			nodeChecker := policy.NewK8sNodeAvailabilityChecker(mgr.GetClient())
+			metaAdapter := policy.NewGRPCMetadataAdapter(metaClient)
+
+			policyRunnable := policy.NewPolicyEngineRunnable(
+				metaAdapter,
+				poolLookup,
+				nodeChecker,
+				chunkReplicator,
+				nil, // shardReplicator - TODO: implement erasure coding shard replication
+				nil, // eventRecorder - optional
+				policyScanInterval,
+				policyRepairEnabled,
+			)
+			policyRunnable.Reconciler().SetMaxConcurrent(policyRepairConcurrency)
+
+			if err := mgr.Add(policyRunnable); err != nil {
+				setupLog.Error(err, "unable to add policy engine runnable to manager")
+				os.Exit(1)
+			}
+
+			setupLog.Info("policy engine enabled",
+				"scanInterval", policyScanInterval,
+				"repairEnabled", policyRepairEnabled,
+				"concurrency", policyRepairConcurrency,
+			)
+		}
 	}
 
 	// Health and readiness probes.

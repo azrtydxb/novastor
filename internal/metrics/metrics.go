@@ -171,6 +171,75 @@ var (
 		Help:      "Chunks recovered",
 	})
 
+	// RecoveryFailed counts the total number of chunk recovery failures.
+	RecoveryFailed = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "controller",
+		Name:      "recovery_chunks_failed_total",
+		Help:      "Chunk recovery failures",
+	})
+
+	// --------------- Policy Engine metrics ---------------
+
+	// ComplianceStatus reports the compliance status of each storage pool.
+	// Status values: 1=compliant, 0=non_compliant
+	PoolComplianceStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "policy",
+		Name:      "pool_compliance_status",
+		Help:      "Compliance status of storage pool (1=compliant, 0=non_compliant)",
+	}, []string{"pool", "mode"})
+
+	// ChunkComplianceViolations counts chunks by compliance status per pool.
+	ChunkComplianceViolations = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "policy",
+		Name:      "chunk_compliance_violations",
+		Help:      "Number of chunks with compliance violations",
+	}, []string{"pool", "status"})
+
+	// PolicyScanDuration tracks the time taken for compliance scans.
+	PolicyScanDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "novastor",
+		Subsystem: "policy",
+		Name:      "scan_duration_seconds",
+		Help:      "Compliance scan duration",
+		Buckets:   prometheus.DefBuckets,
+	}, []string{"scope"})
+
+	// PolicyRepairQueued tracks the number of chunks queued for repair.
+	PolicyRepairQueued = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "policy",
+		Name:      "repair_queued",
+		Help:      "Chunks queued for repair",
+	})
+
+	// PolicyRepairCompleted counts the total number of chunk repairs completed.
+	PolicyRepairCompleted = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "policy",
+		Name:      "repair_completed_total",
+		Help:      "Chunk repairs completed",
+	})
+
+	// PolicyRepairFailed counts the total number of chunk repair failures.
+	PolicyRepairFailed = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "policy",
+		Name:      "repair_failed_total",
+		Help:      "Chunk repair failures",
+	})
+
+	// PolicyRepairDuration tracks the time taken for repair operations.
+	PolicyRepairDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "novastor",
+		Subsystem: "policy",
+		Name:      "repair_duration_seconds",
+		Help:      "Time to complete chunk repair",
+		Buckets:   prometheus.DefBuckets,
+	})
+
 	// --------------- CSI metrics ---------------
 
 	// VolumeCount is the number of currently provisioned volumes.
@@ -410,6 +479,16 @@ func Register() {
 	prometheus.MustRegister(PoolCapacityBytes)
 	prometheus.MustRegister(RecoveryPending)
 	prometheus.MustRegister(RecoveryCompleted)
+	prometheus.MustRegister(RecoveryFailed)
+
+	// Policy Engine metrics
+	prometheus.MustRegister(PoolComplianceStatus)
+	prometheus.MustRegister(ChunkComplianceViolations)
+	prometheus.MustRegister(PolicyScanDuration)
+	prometheus.MustRegister(PolicyRepairQueued)
+	prometheus.MustRegister(PolicyRepairCompleted)
+	prometheus.MustRegister(PolicyRepairFailed)
+	prometheus.MustRegister(PolicyRepairDuration)
 
 	// CSI metrics
 	prometheus.MustRegister(VolumeCount)
