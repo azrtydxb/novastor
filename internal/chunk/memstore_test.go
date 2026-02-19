@@ -109,7 +109,7 @@ func TestMemoryStore_Close(t *testing.T) {
 	}
 }
 
-func TestMemoryStore_ImplementsCapacityStore(t *testing.T) {
+func TestMemoryStore_ImplementsCapacityStore(_ *testing.T) {
 	var _ CapacityStore = &MemoryStore{}
 }
 
@@ -157,7 +157,7 @@ func TestMemoryStore_Stats(t *testing.T) {
 	}
 }
 
-func TestMemoryStore_ImplementsChunkMetaStore(t *testing.T) {
+func TestMemoryStore_ImplementsChunkMetaStore(_ *testing.T) {
 	var _ ChunkMetaStore = &MemoryStore{}
 }
 
@@ -195,7 +195,7 @@ func TestMemoryStore_GetMetaNotFound(t *testing.T) {
 	}
 }
 
-func TestMemoryStore_ImplementsHealthCheckStore(t *testing.T) {
+func TestMemoryStore_ImplementsHealthCheckStore(_ *testing.T) {
 	var _ HealthCheckStore = &MemoryStore{}
 }
 

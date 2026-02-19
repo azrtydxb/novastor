@@ -1,3 +1,6 @@
+// Package controller provides Kubernetes controllers for NovaStor resources.
+// This file manages the lifecycle of SharedFilesystem custom resources,
+// which provision and manage NFS-accessible filesystems backed by NovaStor.
 package controller
 
 import (
@@ -192,7 +195,7 @@ func (r *SharedFilesystemReconciler) reconcileNFSDeployment(ctx context.Context,
 	return err
 }
 
-func (r *SharedFilesystemReconciler) reconcileNFSService(ctx context.Context, fs *novastorev1alpha1.SharedFilesystem, name, deployName string) error {
+func (r *SharedFilesystemReconciler) reconcileNFSService(ctx context.Context, fs *novastorev1alpha1.SharedFilesystem, name, _ string) error {
 	svc := &corev1.Service{}
 	svc.Name = name
 	svc.Namespace = fs.Namespace

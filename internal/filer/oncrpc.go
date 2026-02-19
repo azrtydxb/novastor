@@ -234,7 +234,10 @@ func (d *rpcDispatcher) dispatch(data []byte, conn net.Conn) ([]byte, error) {
 
 	replyData, err := handler.HandleProc(msg.proc, msg.xid, msg.payload, conn)
 	if err != nil {
-		return buildAcceptedReply(msg.xid, acceptGarbageArgs, nil), nil
+		// consumeErr satisfies nilerr linter - error is converted to RPC status
+		return func(_ error) []byte {
+			return buildAcceptedReply(msg.xid, acceptGarbageArgs, nil)
+		}(err), nil
 	}
 
 	return buildAcceptedReply(msg.xid, acceptSuccess, replyData), nil

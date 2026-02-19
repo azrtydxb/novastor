@@ -14,7 +14,6 @@ var (
 	errInvalidAuthFmt    = errors.New("invalid Authorization header format")
 	errAccessDenied      = errors.New("access key does not match")
 	errSignatureMismatch = errors.New("signature does not match")
-	errMissingSignedHdr  = errors.New("missing signed header")
 )
 
 // authenticate performs full SigV4 signature verification for AWS4-HMAC-SHA256 requests.

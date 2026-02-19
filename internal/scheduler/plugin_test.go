@@ -50,7 +50,7 @@ func TestDataLocalityPlugin_Name(t *testing.T) {
 
 func TestDataLocalityPlugin_Score(t *testing.T) {
 	t.Run("returns neutral score for pods without NovaStor PVCs", func(t *testing.T) {
-		client := fakeclientset.NewSimpleClientset(
+		client := fakeclientset.NewClientset(
 			&corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "node1",
@@ -79,7 +79,7 @@ func TestDataLocalityPlugin_Score(t *testing.T) {
 	})
 
 	t.Run("returns higher score for nodes with local data", func(t *testing.T) {
-		client := fakeclientset.NewSimpleClientset(
+		client := fakeclientset.NewClientset(
 			&corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "storage-node-1",
@@ -188,7 +188,7 @@ func TestDataLocalityPlugin_Score(t *testing.T) {
 	})
 
 	t.Run("applies RWX mode correctly", func(t *testing.T) {
-		client := fakeclientset.NewSimpleClientset(
+		client := fakeclientset.NewClientset(
 			&corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "storage-node",
@@ -286,7 +286,7 @@ func TestDataLocalityPlugin_Score(t *testing.T) {
 	})
 
 	t.Run("handles unbound PVCs gracefully", func(t *testing.T) {
-		client := fakeclientset.NewSimpleClientset(
+		client := fakeclientset.NewClientset(
 			&corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "node-1",
@@ -400,7 +400,7 @@ func TestDataLocalityPlugin_isStorageNode(t *testing.T) {
 }
 
 func TestDefaultConfig(t *testing.T) {
-	client := fakeclientset.NewSimpleClientset()
+	client := fakeclientset.NewClientset()
 	cfg := DefaultConfig(client)
 
 	if cfg.LocalityWeight != 10 {
@@ -420,7 +420,7 @@ func TestDefaultConfig(t *testing.T) {
 // Helper functions
 
 func createTestPlugin() *DataLocalityPlugin {
-	client := fakeclientset.NewSimpleClientset()
+	client := fakeclientset.NewClientset()
 	cfg := DefaultConfig(client)
 	return NewDataLocalityPlugin(cfg)
 }

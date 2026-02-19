@@ -94,7 +94,7 @@ func (rm *RecoveryManager) Heartbeat(nodeID string) {
 }
 
 // CheckNodes iterates all nodes and updates status based on timeouts.
-func (rm *RecoveryManager) CheckNodes(ctx context.Context) {
+func (rm *RecoveryManager) CheckNodes(_ context.Context) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	now := time.Now()

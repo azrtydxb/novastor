@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/piwi3910/novastor/internal/metrics"
@@ -69,7 +70,7 @@ func NewQuotaStore(store *RaftStore) *QuotaStore {
 }
 
 // SetQuota sets a quota for a scope.
-func (q *QuotaStore) SetQuota(ctx context.Context, scope QuotaScope, spec *QuotaSpec) error {
+func (q *QuotaStore) SetQuota(_ context.Context, scope QuotaScope, spec *QuotaSpec) error {
 	data, err := json.Marshal(spec)
 	if err != nil {
 		return fmt.Errorf("marshaling quota spec: %w", err)
@@ -83,12 +84,15 @@ func (q *QuotaStore) SetQuota(ctx context.Context, scope QuotaScope, spec *Quota
 }
 
 // GetQuota retrieves the quota spec for a scope.
-// Returns nil if no quota is set for the scope.
-func (q *QuotaStore) GetQuota(ctx context.Context, scope QuotaScope) (*QuotaSpec, error) {
+// Returns nil, nil if no quota is set for the scope (not found is OK).
+func (q *QuotaStore) GetQuota(_ context.Context, scope QuotaScope) (*QuotaSpec, error) {
 	data, err := q.store.fsm.Get(bucketQuotas, scope.String())
 	if err != nil {
-		// No quota set for this scope.
-		return nil, nil
+		// No quota set for this scope - not found is acceptable.
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting quota: %w", err)
 	}
 	var spec QuotaSpec
 	if err := json.Unmarshal(data, &spec); err != nil {
@@ -98,11 +102,14 @@ func (q *QuotaStore) GetQuota(ctx context.Context, scope QuotaScope) (*QuotaSpec
 }
 
 // GetUsage retrieves the current usage for a scope.
-func (q *QuotaStore) GetUsage(ctx context.Context, scope QuotaScope) (*QuotaUsage, error) {
+func (q *QuotaStore) GetUsage(_ context.Context, scope QuotaScope) (*QuotaUsage, error) {
 	data, err := q.store.fsm.Get(bucketUsage, scope.String())
 	if err != nil {
-		// No usage recorded yet.
-		return &QuotaUsage{}, nil
+		// No usage recorded yet - not found is acceptable.
+		if errors.Is(err, ErrKeyNotFound) {
+			return &QuotaUsage{}, nil
+		}
+		return nil, fmt.Errorf("getting usage: %w", err)
 	}
 	var usage QuotaUsage
 	if err := json.Unmarshal(data, &usage); err != nil {
@@ -157,7 +164,10 @@ func (q *QuotaStore) ReserveStorage(ctx context.Context, scope QuotaScope, bytes
 	}
 
 	// Atomically increment usage.
-	delta, _ := json.Marshal(bytes)
+	delta, err := json.Marshal(bytes)
+	if err != nil {
+		return fmt.Errorf("marshaling quota delta: %w", err)
+	}
 	if err := q.store.apply(&fsmOp{
 		Op:     opAddQuota,
 		Bucket: bucketUsage,
@@ -173,8 +183,11 @@ func (q *QuotaStore) ReserveStorage(ctx context.Context, scope QuotaScope, bytes
 
 // ReleaseStorage releases storage capacity for a scope.
 // It atomically decrements the usage counter.
-func (q *QuotaStore) ReleaseStorage(ctx context.Context, scope QuotaScope, bytes int64) error {
-	delta, _ := json.Marshal(bytes)
+func (q *QuotaStore) ReleaseStorage(_ context.Context, scope QuotaScope, bytes int64) error {
+	delta, err := json.Marshal(bytes)
+	if err != nil {
+		return fmt.Errorf("marshaling quota delta: %w", err)
+	}
 	if err := q.store.apply(&fsmOp{
 		Op:     opSubQuota,
 		Bucket: bucketUsage,
@@ -273,7 +286,7 @@ func (q *QuotaStore) ReleaseObjects(ctx context.Context, scope QuotaScope, count
 }
 
 // DeleteQuota removes a quota for a scope.
-func (q *QuotaStore) DeleteQuota(ctx context.Context, scope QuotaScope) error {
+func (q *QuotaStore) DeleteQuota(_ context.Context, scope QuotaScope) error {
 	return q.store.apply(&fsmOp{
 		Op:     opDelete,
 		Bucket: bucketQuotas,
@@ -282,7 +295,7 @@ func (q *QuotaStore) DeleteQuota(ctx context.Context, scope QuotaScope) error {
 }
 
 // ListQuotas returns all defined quotas.
-func (q *QuotaStore) ListQuotas(ctx context.Context) (map[QuotaScope]*QuotaSpec, error) {
+func (q *QuotaStore) ListQuotas(_ context.Context) (map[QuotaScope]*QuotaSpec, error) {
 	all, err := q.store.fsm.GetAll(bucketQuotas)
 	if err != nil {
 		return nil, fmt.Errorf("listing quotas: %w", err)

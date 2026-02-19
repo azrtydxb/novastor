@@ -1,3 +1,6 @@
+// Package placement provides chunk placement algorithms for NovaStor.
+// This file implements a CRUSH-style placement algorithm that distributes
+// chunks across storage nodes based on failure domains and weights.
 package placement
 
 import (

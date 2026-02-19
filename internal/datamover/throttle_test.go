@@ -48,7 +48,7 @@ func (m *mockReplicator) DeleteChunk(ctx context.Context, chunkID string, node s
 func TestThrottledReplicator_BandwidthLimit(t *testing.T) {
 	// Test that throttling is configured correctly
 	inner := &mockReplicator{
-		replicateChunkFunc: func(ctx context.Context, chunkID string, sourceNode, destNode string) error {
+		replicateChunkFunc: func(_ context.Context, _ string, _, _ string) error {
 			return nil
 		},
 	}

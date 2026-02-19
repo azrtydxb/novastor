@@ -193,7 +193,7 @@ func startTestServer(t *testing.T) (*NFSServer, net.Addr) {
 	srv := NewNFSServer(&stubNFSHandler{}, nil)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.Serve("127.0.0.1:0")
+		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
 	}()
 
 	addr := waitForAddr(srv, 2*time.Second)
@@ -214,7 +214,7 @@ func TestNFSServer_StartStop(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.Serve("127.0.0.1:0")
+		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
 	}()
 
 	addr := waitForAddr(srv, 2*time.Second)
@@ -222,7 +222,7 @@ func TestNFSServer_StartStop(t *testing.T) {
 		t.Fatal("server did not start listening within timeout")
 	}
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("expected to connect to NFS server at %s: %v", addr, err)
 	}
@@ -247,7 +247,7 @@ func TestNFSServer_AcceptConnection(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.Serve("127.0.0.1:0")
+		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
 	}()
 
 	addr := waitForAddr(srv, 2*time.Second)
@@ -255,7 +255,7 @@ func TestNFSServer_AcceptConnection(t *testing.T) {
 		t.Fatal("server did not start listening within timeout")
 	}
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect to NFS server: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestNFSServer_AcceptConnection(t *testing.T) {
 func TestNFSServer_NullProc(t *testing.T) {
 	_, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestNFSServer_NullProc(t *testing.T) {
 func TestNFSServer_MountExport(t *testing.T) {
 	_, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestNFSServer_MountExport(t *testing.T) {
 func TestNFSServer_MountMnt(t *testing.T) {
 	_, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestNFSServer_MountMnt(t *testing.T) {
 func TestNFSServer_Getattr(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestNFSServer_Getattr(t *testing.T) {
 func TestNFSServer_Lookup(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -477,7 +477,7 @@ func TestNFSServer_Lookup(t *testing.T) {
 func TestNFSServer_ReadDir(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -561,7 +561,7 @@ func TestNFSServer_ReadDir(t *testing.T) {
 func TestNFSServer_Create(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestNFSServer_Create(t *testing.T) {
 func TestNFSServer_ReadWrite(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -681,7 +681,7 @@ func TestNFSServer_ReadWrite(t *testing.T) {
 func TestNFSServer_FsInfo(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -715,7 +715,7 @@ func TestNFSServer_FsInfo(t *testing.T) {
 func TestNFSServer_FsStat(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -749,7 +749,7 @@ func TestNFSServer_FsStat(t *testing.T) {
 func TestNFSServer_MountNull(t *testing.T) {
 	_, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -769,7 +769,7 @@ func TestNFSServer_MountNull(t *testing.T) {
 func TestNFSServer_ProgUnavail(t *testing.T) {
 	_, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -795,7 +795,7 @@ func TestNFSServer_ProgUnavail(t *testing.T) {
 func TestNFSServer_ProgMismatch(t *testing.T) {
 	_, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -821,7 +821,7 @@ func TestNFSServer_ProgMismatch(t *testing.T) {
 func TestNFSServer_MultipleRPCs(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -848,7 +848,7 @@ func TestNFSServer_MultipleRPCs(t *testing.T) {
 func TestNFSServer_Mkdir(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -901,7 +901,7 @@ func TestNFSServer_Mkdir(t *testing.T) {
 func TestNFSServer_PathConf(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -935,7 +935,7 @@ func TestNFSServer_PathConf(t *testing.T) {
 func TestNFSServer_Access(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -970,7 +970,7 @@ func TestNFSServer_Access(t *testing.T) {
 func TestNFSServer_Setattr(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1022,7 +1022,7 @@ func TestNFSServer_Setattr(t *testing.T) {
 func TestNFSServer_Remove(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1058,7 +1058,7 @@ func TestNFSServer_Remove(t *testing.T) {
 func TestNFSServer_Rmdir(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1094,7 +1094,7 @@ func TestNFSServer_Rmdir(t *testing.T) {
 func TestNFSServer_Rename(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1134,7 +1134,7 @@ func TestNFSServer_Rename(t *testing.T) {
 func TestNFSServer_Symlink(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1185,7 +1185,7 @@ func TestNFSServer_Symlink(t *testing.T) {
 func TestNFSServer_Readlink(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1221,7 +1221,7 @@ func TestNFSServer_Readlink(t *testing.T) {
 func TestNFSServer_ReadDirPlus(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1311,7 +1311,7 @@ func TestNFSServer_ReadDirPlus(t *testing.T) {
 func TestNFSServer_Commit(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1352,7 +1352,7 @@ func TestNFSServer_Commit(t *testing.T) {
 func TestNFSServer_Mknod(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1407,7 +1407,7 @@ func TestNFSServer_Mknod(t *testing.T) {
 func TestNFSServer_MknodCharDev(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1465,7 +1465,7 @@ func TestNFSServer_MknodCharDev(t *testing.T) {
 func TestNFSServer_MknodBlockDev(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1513,7 +1513,7 @@ func TestNFSServer_MknodBlockDev(t *testing.T) {
 func TestNFSServer_Link(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1566,7 +1566,7 @@ func TestNFSServer_Link(t *testing.T) {
 func TestNFSServer_LinkToFile(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1622,7 +1622,7 @@ func TestNFSServer_LinkToFile(t *testing.T) {
 func TestNFSServer_LinkNameTooLong(t *testing.T) {
 	srv, addr := startTestServer(t)
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -1670,7 +1670,7 @@ func TestNFSServer_AllProcedureDispatches(t *testing.T) {
 
 	// Procedures 0-21 should all be recognized
 	for proc := uint32(0); proc <= 21; proc++ {
-		conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+		conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 		if err != nil {
 			t.Fatalf("proc %d: failed to connect: %v", proc, err)
 		}
@@ -1735,9 +1735,10 @@ func TestNFSServer_AllProcedureDispatches(t *testing.T) {
 			pw.writeBool(false)
 			pw.writeUint32(0)
 			pw.writeUint32(0)
-			if proc == nfsProcSymlink {
+			switch proc {
+			case nfsProcSymlink:
 				pw.writeString("target")
-			} else if proc == nfsProcCreate {
+			case nfsProcCreate:
 				pw.writeUint32(createUnchecked)
 			}
 			payload = pw.Bytes()
@@ -1843,10 +1844,11 @@ func (h *truncationTestHandler) Lookup(_ context.Context, parentIno uint64, name
 		return nil, fmt.Errorf("not found")
 	}
 	// For testing, name "file1" maps to inode 2, "file2" to inode 3
-	ino := uint64(0)
-	if name == "file1" {
+	var ino uint64
+	switch name {
+	case "file1":
 		ino = 2
-	} else if name == "file2" {
+	case "file2":
 		ino = 3
 	}
 	if ino == 0 {
@@ -1976,7 +1978,7 @@ func TestNFSServer_SetattrTruncateToZero(t *testing.T) {
 	srv := NewNFSServer(handler, nil)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.Serve("127.0.0.1:0")
+		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
 	}()
 
 	addr := waitForAddr(srv, 2*time.Second)
@@ -1988,7 +1990,7 @@ func TestNFSServer_SetattrTruncateToZero(t *testing.T) {
 		<-errCh
 	})
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -2049,7 +2051,7 @@ func TestNFSServer_SetattrTruncateSmaller(t *testing.T) {
 	srv := NewNFSServer(handler, nil)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.Serve("127.0.0.1:0")
+		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
 	}()
 
 	addr := waitForAddr(srv, 2*time.Second)
@@ -2061,7 +2063,7 @@ func TestNFSServer_SetattrTruncateSmaller(t *testing.T) {
 		<-errCh
 	})
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -2126,7 +2128,7 @@ func TestNFSServer_SetattrTruncateLarger(t *testing.T) {
 	srv := NewNFSServer(handler, nil)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.Serve("127.0.0.1:0")
+		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
 	}()
 
 	addr := waitForAddr(srv, 2*time.Second)
@@ -2138,7 +2140,7 @@ func TestNFSServer_SetattrTruncateLarger(t *testing.T) {
 		<-errCh
 	})
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -2207,7 +2209,7 @@ func TestNFSServer_SetattrTruncateWithMode(t *testing.T) {
 	srv := NewNFSServer(handler, nil)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.Serve("127.0.0.1:0")
+		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
 	}()
 
 	addr := waitForAddr(srv, 2*time.Second)
@@ -2219,7 +2221,7 @@ func TestNFSServer_SetattrTruncateWithMode(t *testing.T) {
 		<-errCh
 	})
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -2279,7 +2281,7 @@ func TestNFSServer_SetattrTruncateDirectory(t *testing.T) {
 	srv := NewNFSServer(handler, nil)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.Serve("127.0.0.1:0")
+		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
 	}()
 
 	addr := waitForAddr(srv, 2*time.Second)
@@ -2291,7 +2293,7 @@ func TestNFSServer_SetattrTruncateDirectory(t *testing.T) {
 		<-errCh
 	})
 
-	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr.String())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}

@@ -32,7 +32,7 @@ var snapshotCmd = &cobra.Command{
 var snapshotListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List snapshots",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err
@@ -84,7 +84,7 @@ var snapshotGetCmd = &cobra.Command{
 	Use:   "get [snapshot-id]",
 	Short: "Get snapshot details",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err
@@ -112,7 +112,7 @@ var snapshotCreateVolumeID string
 var snapshotCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a snapshot from a volume",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err
@@ -153,7 +153,7 @@ var snapshotDeleteCmd = &cobra.Command{
 	Use:   "delete [snapshot-id]",
 	Short: "Delete a snapshot",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err

@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -31,6 +32,14 @@ const (
 	bucketLocks            = "locks" // File lock leases
 	bucketQuotas           = "quotas"
 	bucketUsage            = "usage"
+)
+
+// Sentinel errors for FSM operations.
+var (
+	// ErrBucketNotFound is returned when attempting to access a non-existent bucket.
+	ErrBucketNotFound = errors.New("bucket not found")
+	// ErrKeyNotFound is returned when a key does not exist in a bucket.
+	ErrKeyNotFound = errors.New("key not found")
 )
 
 // MetadataFSM defines the interface that both the in-memory FSM and the
@@ -157,11 +166,11 @@ func (f *FSM) Get(bucket, key string) ([]byte, error) {
 	defer f.mu.RUnlock()
 	b, ok := f.buckets[bucket]
 	if !ok {
-		return nil, fmt.Errorf("bucket %s not found", bucket)
+		return nil, fmt.Errorf("%w: bucket %s", ErrBucketNotFound, bucket)
 	}
 	data, ok := b[key]
 	if !ok {
-		return nil, fmt.Errorf("key %s not found in bucket %s", key, bucket)
+		return nil, fmt.Errorf("%w: key %s not found in bucket %s", ErrKeyNotFound, key, bucket)
 	}
 	return data, nil
 }

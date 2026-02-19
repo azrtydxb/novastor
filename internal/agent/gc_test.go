@@ -15,7 +15,7 @@ type mockMetadataClient struct {
 	referencedChunks map[string]struct{}
 }
 
-func (m *mockMetadataClient) GetAllReferencedChunks(ctx context.Context) (map[string]struct{}, error) {
+func (m *mockMetadataClient) GetAllReferencedChunks(_ context.Context) (map[string]struct{}, error) {
 	return m.referencedChunks, nil
 }
 
@@ -312,7 +312,7 @@ func TestGarbageCollector_LastResult(t *testing.T) {
 	}
 }
 
-func TestGarbageCollector_StartStop(t *testing.T) {
+func TestGarbageCollector_StartStop(_ *testing.T) {
 	store := &mockStore{
 		chunks: make(map[string]*chunk.Chunk),
 	}

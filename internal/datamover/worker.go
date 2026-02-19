@@ -93,7 +93,7 @@ func (w *worker) processTask(ctx context.Context, task *metadata.HealTask, cfg *
 	// Ensure heartbeat is stopped and lock is released
 	defer func() {
 		heartbeatCancel()
-		_ = <-heartbeatDone
+		<-heartbeatDone
 		_ = w.locker.Release(context.Background(), lockID, task.ID)
 	}()
 

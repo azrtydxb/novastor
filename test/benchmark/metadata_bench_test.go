@@ -13,7 +13,8 @@ import (
 // getFreePort returns an available TCP port on localhost.
 func getFreePort(b *testing.B) string {
 	b.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	lc := net.ListenConfig{}
+	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		b.Fatal(err)
 	}

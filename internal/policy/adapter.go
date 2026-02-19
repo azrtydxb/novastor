@@ -1,3 +1,6 @@
+// Package policy provides compliance and repair policies for NovaStor.
+// This file implements adapters that bridge the policy package with
+// the metadata service.
 package policy
 
 import (

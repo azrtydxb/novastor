@@ -32,7 +32,7 @@ func (m *MetricsReporter) ReportChunkViolations(poolName string, compliant, unde
 }
 
 // ReportScanStart records the start of a compliance scan.
-func (m *MetricsReporter) ReportScanStart(scope string) time.Time {
+func (m *MetricsReporter) ReportScanStart(_ string) time.Time {
 	return time.Now()
 }
 

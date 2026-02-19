@@ -9,6 +9,7 @@ import (
 	"github.com/piwi3910/novastor/internal/metadata"
 )
 
+// ChunkSize is the fixed size (4 MB) for all data chunks.
 const ChunkSize = 4 * 1024 * 1024
 
 type ChunkID string

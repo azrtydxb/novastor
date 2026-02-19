@@ -1,3 +1,6 @@
+// Package main provides the NovaStor storage agent binary.
+// The agent runs on each storage node and manages local chunk storage,
+// NVMe-oF target services, and coordination with the metadata service.
 package main
 
 import (
@@ -152,7 +155,7 @@ func main() {
 	}
 
 	// Optionally wrap the backend store with encryption.
-	var store chunk.Store = backendStore
+	store := backendStore
 	if *encryptionEnabled {
 		var km chunk.KeyManager
 		switch {
@@ -343,7 +346,8 @@ func main() {
 	}()
 
 	// Start gRPC listener.
-	listener, err := net.Listen("tcp", *listenAddr)
+	lc := net.ListenConfig{}
+	listener, err := lc.Listen(ctx, "tcp", *listenAddr)
 	if err != nil {
 		logging.L.Fatal("failed to listen", zap.String("addr", *listenAddr), zap.Error(err))
 	}

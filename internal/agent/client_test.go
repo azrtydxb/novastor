@@ -26,7 +26,8 @@ func startServer(t *testing.T) (addr string, cleanup func()) {
 		t.Fatalf("creating local store: %v", err)
 	}
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listening: %v", err)
 	}

@@ -202,7 +202,7 @@ func (s *LVMStore) lvPath(lvName string) string {
 // Snapshot creates a snapshot of a chunk's logical volume.
 // The snapshot is a new thin volume that shares data with the source
 // until written to (copy-on-write).
-func (s *LVMStore) Snapshot(ctx context.Context, sourceID, snapshotID ChunkID) error {
+func (s *LVMStore) Snapshot(_ context.Context, sourceID, snapshotID ChunkID) error {
 	sourceLV := s.lvNameForChunk(sourceID)
 	snapLV := s.lvNameForChunk(snapshotID)
 
@@ -235,7 +235,7 @@ func (s *LVMStore) Snapshot(ctx context.Context, sourceID, snapshotID ChunkID) e
 // Resize changes the size of a chunk's logical volume.
 // This is primarily used for testing or special cases where
 // chunk sizes differ from the default.
-func (s *LVMStore) Resize(ctx context.Context, id ChunkID, newSizeBytes int64) error {
+func (s *LVMStore) Resize(_ context.Context, id ChunkID, newSizeBytes int64) error {
 	lvName := s.lvNameForChunk(id)
 
 	exists, err := lvmLVExists(s.vgName, lvName)
@@ -256,7 +256,7 @@ func (s *LVMStore) Resize(ctx context.Context, id ChunkID, newSizeBytes int64) e
 }
 
 // Capacity returns the capacity information for the thin pool.
-func (s *LVMStore) Capacity(ctx context.Context) (totalBytes, freeBytes int64, err error) {
+func (s *LVMStore) Capacity(_ context.Context) (totalBytes, freeBytes int64, err error) {
 	return lvmThinPoolCapacity(s.vgName, s.thinPool)
 }
 
@@ -264,7 +264,7 @@ func (s *LVMStore) Capacity(ctx context.Context) (totalBytes, freeBytes int64, e
 
 // lvmVGExists checks if a volume group exists.
 func lvmVGExists(vgName string) error {
-	out, err := exec.Command("vgs", "--noheadings", "-o", "vg_name", vgName).CombinedOutput()
+	out, err := exec.CommandContext(context.Background(), "vgs", "--noheadings", "-o", "vg_name", vgName).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("vgs command failed: %w, output: %s", err, string(out))
 	}
@@ -276,7 +276,7 @@ func lvmVGExists(vgName string) error {
 
 // lvmThinPoolExists checks if a thin pool exists in a volume group.
 func lvmThinPoolExists(vgName, poolName string) error {
-	out, err := exec.Command("lvs", "--noheadings", "-o", "lv_name", vgName+"/"+poolName).CombinedOutput()
+	out, err := exec.CommandContext(context.Background(), "lvs", "--noheadings", "-o", "lv_name", vgName+"/"+poolName).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("lvs command failed: %w, output: %s", err, string(out))
 	}
@@ -288,7 +288,7 @@ func lvmThinPoolExists(vgName, poolName string) error {
 
 // lvmLVExists checks if a logical volume exists.
 func lvmLVExists(vgName, lvName string) (bool, error) {
-	out, err := exec.Command("lvs", "--noheadings", "-o", "lv_name", vgName+"/"+lvName).CombinedOutput()
+	out, err := exec.CommandContext(context.Background(), "lvs", "--noheadings", "-o", "lv_name", vgName+"/"+lvName).CombinedOutput()
 	if err != nil {
 		if strings.Contains(string(out), "Failed to find logical volume") {
 			return false, nil
@@ -308,7 +308,7 @@ func lvmCreateThinLV(vgName, poolName, lvName string, sizeSectors int64) error {
 		"--name", lvName,
 		vgName + "/" + poolName,
 	}
-	out, err := exec.Command("lvcreate", args...).CombinedOutput()
+	out, err := exec.CommandContext(context.Background(), "lvcreate", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("lvcreate failed: %w, output: %s", err, string(out))
 	}
@@ -329,7 +329,7 @@ func lvmRemoveLV(vgName, lvName string) error {
 func lvmListLVs(vgName, prefix string) ([]string, error) {
 	// lvs --noheadings -o lv_name <vg>
 	// Filter for volumes starting with prefix.
-	out, err := exec.Command("lvs", "--noheadings", "-o", "lv_name", vgName).CombinedOutput()
+	out, err := exec.CommandContext(context.Background(), "lvs", "--noheadings", "-o", "lv_name", vgName).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("lvs command failed: %w, output: %s", err, string(out))
 	}
@@ -353,7 +353,7 @@ func lvmCreateSnapshot(vgName, _ /* poolName */, sourceLV, snapLV string) error 
 		"--name", snapLV,
 		vgName + "/" + sourceLV,
 	}
-	out, err := exec.Command("lvcreate", args...).CombinedOutput()
+	out, err := exec.CommandContext(context.Background(), "lvcreate", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("lvcreate snapshot failed: %w, output: %s", err, string(out))
 	}
@@ -379,7 +379,7 @@ func lvmResizeLV(vgName, lvName string, newSectors int64) error {
 func lvmThinPoolCapacity(vgName, poolName string) (totalBytes, freeBytes int64, err error) {
 	// lvs --noheadings --units=b --nosuffix -o lv_size,pool_lv <vg>/<pool>
 	// For thin pools, we need to get the data percent and size.
-	out, err := exec.Command("lvs", "--noheadings", "--units=b", "--nosuffix",
+	out, err := exec.CommandContext(context.Background(), "lvs", "--noheadings", "--units=b", "--nosuffix",
 		"-o", "lv_size,data_percent", vgName+"/"+poolName).CombinedOutput()
 	if err != nil {
 		return 0, 0, fmt.Errorf("lvs command failed: %w, output: %s", err, string(out))

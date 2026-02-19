@@ -50,7 +50,7 @@ var complianceCmd = &cobra.Command{
 var complianceListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List compliance status for all volumes",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err
@@ -197,7 +197,7 @@ var complianceGetCmd = &cobra.Command{
 	Use:   "get [volume-id]",
 	Short: "Get detailed compliance status for a specific volume",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err

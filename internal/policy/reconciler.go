@@ -268,7 +268,7 @@ func (r *Reconciler) repairTask(ctx context.Context, task RepairTask) error {
 }
 
 // repairReplicatedChunk replicates a chunk to a new node.
-func (r *Reconciler) repairReplicatedChunk(ctx context.Context, task RepairTask, pool *v1alpha1.StoragePool, healthyNodes []string) error {
+func (r *Reconciler) repairReplicatedChunk(ctx context.Context, task RepairTask, _ *v1alpha1.StoragePool, healthyNodes []string) error {
 	if len(task.AvailableNodes) == 0 {
 		return fmt.Errorf("no available replicas for chunk %s", task.ChunkID)
 	}

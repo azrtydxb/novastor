@@ -1,3 +1,6 @@
+// Package metrics provides Prometheus metrics collection for NovaStor.
+// This package defines all exported metrics across the NovaStor system,
+// including agent, controller, CSI, filer, metadata, and S3 gateway metrics.
 package metrics
 
 import "github.com/prometheus/client_golang/prometheus"

@@ -63,7 +63,7 @@ var healCmd = &cobra.Command{
 var healStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show cluster healing status",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err
@@ -207,7 +207,7 @@ var healStatusCmd = &cobra.Command{
 var healNodesCmd = &cobra.Command{
 	Use:   "nodes",
 	Short: "Show node health for healing assessment",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err
@@ -271,7 +271,7 @@ var healNodesCmd = &cobra.Command{
 var healVolumesCmd = &cobra.Command{
 	Use:   "volumes",
 	Short: "Show volumes that need healing",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		client, err := connectMeta()
 		if err != nil {
 			return err

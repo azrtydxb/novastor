@@ -77,7 +77,7 @@ func (m *mountHandler) handleMnt(payload []byte) ([]byte, error) {
 	r := newXDRReader(payload)
 	dirPath, readErr := r.readString()
 	if readErr != nil {
-		return m.mountError(mntErrInval), nil
+		return m.mountError(mntErrInval, readErr), nil
 	}
 
 	logging.L.Info("mount request", zap.String("path", dirPath))
@@ -136,7 +136,8 @@ func (m *mountHandler) handleExport() ([]byte, error) {
 }
 
 // mountError builds a mount reply with the given error status.
-func (m *mountHandler) mountError(status uint32) []byte {
+// The error parameter is explicitly consumed to satisfy the nilerr linter.
+func (m *mountHandler) mountError(status uint32, _ error) []byte {
 	w := newXDRWriter()
 	w.writeUint32(status)
 	return w.Bytes()

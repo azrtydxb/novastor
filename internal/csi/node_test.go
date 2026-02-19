@@ -15,11 +15,11 @@ import (
 // mockChunkClient is a test double for ChunkClient.
 type mockChunkClient struct{}
 
-func (m *mockChunkClient) GetChunk(ctx context.Context, nodeID string, chunkID string) ([]byte, error) {
+func (m *mockChunkClient) GetChunk(_ context.Context, _ string, _ string) ([]byte, error) {
 	return nil, nil
 }
 
-func (m *mockChunkClient) PutChunk(ctx context.Context, nodeID string, chunkID string, data []byte) error {
+func (m *mockChunkClient) PutChunk(_ context.Context, _ string, _ string, _ []byte) error {
 	return nil
 }
 

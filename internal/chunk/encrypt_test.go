@@ -255,7 +255,7 @@ func TestEncryptedStore_RandomNonce(t *testing.T) {
 	}
 }
 
-func TestEncryptedStore_ImplementsCapacityStore(t *testing.T) {
+func TestEncryptedStore_ImplementsCapacityStore(_ *testing.T) {
 	var _ CapacityStore = &EncryptedStore{}
 }
 
@@ -278,7 +278,7 @@ func TestEncryptedStore_Stats(t *testing.T) {
 	}
 }
 
-func TestEncryptedStore_ImplementsChunkMetaStore(t *testing.T) {
+func TestEncryptedStore_ImplementsChunkMetaStore(_ *testing.T) {
 	var _ ChunkMetaStore = &EncryptedStore{}
 }
 
@@ -306,7 +306,7 @@ func TestEncryptedStore_GetMeta(t *testing.T) {
 	}
 }
 
-func TestEncryptedStore_ImplementsHealthCheckStore(t *testing.T) {
+func TestEncryptedStore_ImplementsHealthCheckStore(_ *testing.T) {
 	var _ HealthCheckStore = &EncryptedStore{}
 }
 
@@ -329,13 +329,13 @@ func TestEncryptedStore_HealthCheck(t *testing.T) {
 // It's used to test that EncryptedStore properly handles stores without optional interfaces.
 type nonCapacityStore struct{}
 
-func (ncs *nonCapacityStore) Put(_ context.Context, c *Chunk) error { return nil }
-func (ncs *nonCapacityStore) Get(_ context.Context, id ChunkID) (*Chunk, error) {
+func (ncs *nonCapacityStore) Put(_ context.Context, _ *Chunk) error { return nil }
+func (ncs *nonCapacityStore) Get(_ context.Context, _ ChunkID) (*Chunk, error) {
 	return nil, fmt.Errorf("not found")
 }
-func (ncs *nonCapacityStore) Delete(_ context.Context, id ChunkID) error      { return nil }
-func (ncs *nonCapacityStore) Has(_ context.Context, id ChunkID) (bool, error) { return false, nil }
-func (ncs *nonCapacityStore) List(_ context.Context) ([]ChunkID, error)       { return nil, nil }
+func (ncs *nonCapacityStore) Delete(_ context.Context, _ ChunkID) error      { return nil }
+func (ncs *nonCapacityStore) Has(_ context.Context, _ ChunkID) (bool, error) { return false, nil }
+func (ncs *nonCapacityStore) List(_ context.Context) ([]ChunkID, error)      { return nil, nil }
 
 func TestEncryptedStore_NoStatsOnNonCapacityStore(t *testing.T) {
 	ms := &nonCapacityStore{}

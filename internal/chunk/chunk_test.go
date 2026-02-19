@@ -27,7 +27,9 @@ func TestNewChunkID_DifferentData(t *testing.T) {
 
 func TestNewChunkID_SameData(t *testing.T) {
 	data := []byte("same data")
-	if NewChunkID(data) != NewChunkID(data) {
+	id1 := NewChunkID(data)
+	id2 := NewChunkID(data)
+	if id1 != id2 {
 		t.Error("same data should produce same chunk ID")
 	}
 }

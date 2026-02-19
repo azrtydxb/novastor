@@ -6,19 +6,6 @@ import (
 	"testing"
 )
 
-func makeNodes(count int, zone, rack string) []Node {
-	nodes := make([]Node, count)
-	for i := range nodes {
-		nodes[i] = Node{
-			ID:     fmt.Sprintf("node-%s-%s-%d", zone, rack, i),
-			Weight: 1.0,
-			Zone:   zone,
-			Rack:   rack,
-		}
-	}
-	return nodes
-}
-
 func TestCRUSH_PlaceReturnsCorrectCount(t *testing.T) {
 	nodes := []Node{
 		{ID: "a", Weight: 1, Zone: "z1", Rack: "r1"},

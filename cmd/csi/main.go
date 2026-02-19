@@ -1,3 +1,6 @@
+// Package main provides the NovaStor CSI driver binary.
+// The CSI driver implements the Container Storage Interface for provisioning
+// and managing NovaStor block volumes in Kubernetes.
 package main
 
 import (
@@ -204,7 +207,6 @@ func main() {
 
 	// Build the NodeChunkClient from agent addresses.
 	nodeChunkClient := agent.NewNodeChunkClient(dialOpts...)
-	var nodeIDs []string
 	if *agentAddrs != "" {
 		for _, entry := range strings.Split(*agentAddrs, ",") {
 			entry = strings.TrimSpace(entry)
@@ -219,7 +221,6 @@ func main() {
 			if err := nodeChunkClient.AddNode(nID, addr); err != nil {
 				log.Fatalf("Failed to connect to agent node %s at %s: %v", nID, addr, err)
 			}
-			nodeIDs = append(nodeIDs, nID)
 			log.Printf("Connected to agent node %s at %s", nID, addr)
 		}
 	}
@@ -379,7 +380,8 @@ func main() {
 		}
 	}
 
-	listener, err := net.Listen(scheme, addr)
+	lc := net.ListenConfig{}
+	listener, err := lc.Listen(ctx, scheme, addr)
 	if err != nil {
 		log.Fatalf("Failed to listen on %s://%s: %v", scheme, addr, err)
 	}

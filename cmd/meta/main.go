@@ -1,3 +1,6 @@
+// Package main provides the NovaStor metadata service binary.
+// The metadata service maintains cluster metadata using Raft consensus,
+// storing information about volumes, files, objects, and placement maps.
 package main
 
 import (
@@ -109,7 +112,8 @@ func main() {
 	metaServer.Register(grpcServer)
 
 	// Start gRPC listener.
-	listener, err := net.Listen("tcp", *grpcAddr)
+	lc := net.ListenConfig{}
+	listener, err := lc.Listen(ctx, "tcp", *grpcAddr)
 	if err != nil {
 		log.Fatalf("Failed to listen on %s: %v", *grpcAddr, err)
 	}

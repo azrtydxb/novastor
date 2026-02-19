@@ -64,12 +64,12 @@ func (m *mockMetadataStore) ListVolumesMeta(_ context.Context) ([]*metadata.Volu
 	return result, nil
 }
 
-func (m *mockMetadataStore) PutPlacementMap(_ context.Context, pm *metadata.PlacementMap) error {
+func (m *mockMetadataStore) PutPlacementMap(_ context.Context, _ *metadata.PlacementMap) error {
 	// No-op for tests: placement maps are not tested in the mock.
 	return nil
 }
 
-func (m *mockMetadataStore) DeletePlacementMap(_ context.Context, chunkID string) error {
+func (m *mockMetadataStore) DeletePlacementMap(_ context.Context, _ string) error {
 	// No-op for tests: placement maps are not tested in the mock.
 	return nil
 }
@@ -91,7 +91,7 @@ func (p *mockPlacer) Place(count int) []string {
 	return result
 }
 
-func (p *mockPlacer) PlaceKey(key string, count int) []string {
+func (p *mockPlacer) PlaceKey(_ string, count int) []string {
 	// For testing, we use the same behavior as Place.
 	// Deterministic per key is not required for these tests.
 	return p.Place(count)
@@ -683,16 +683,14 @@ func TestListVolumes_AllEntries(t *testing.T) {
 func TestListVolumes_MaxEntries(t *testing.T) {
 	cs, _ := setupController()
 
-	var volIDs []string
 	for _, name := range []string{"page-a", "page-b", "page-c"} {
-		resp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 			Name:          name,
 			CapacityRange: &csi.CapacityRange{RequiredBytes: 4 * 1024 * 1024},
 		})
 		if err != nil {
 			t.Fatalf("CreateVolume %s failed: %v", name, err)
 		}
-		volIDs = append(volIDs, resp.GetVolume().GetVolumeId())
 	}
 
 	resp, err := cs.ListVolumes(context.Background(), &csi.ListVolumesRequest{MaxEntries: 2})
@@ -1069,7 +1067,7 @@ type mockNodeMetaStore struct {
 	nodes []*metadata.NodeMeta
 }
 
-func (m *mockNodeMetaStore) ListLiveNodeMetas(_ context.Context, ttl time.Duration) ([]*metadata.NodeMeta, error) {
+func (m *mockNodeMetaStore) ListLiveNodeMetas(_ context.Context, _ time.Duration) ([]*metadata.NodeMeta, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.nodes, nil

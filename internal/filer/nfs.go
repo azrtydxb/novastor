@@ -81,8 +81,9 @@ func (s *NFSServer) Addr() net.Addr {
 
 // Serve listens on the given address and handles NFS v3 connections using
 // ONC/RPC record marking over TCP.
-func (s *NFSServer) Serve(addr string) error {
-	ln, err := net.Listen("tcp", addr)
+func (s *NFSServer) Serve(ctx context.Context, addr string) error {
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", addr, err)
 	}

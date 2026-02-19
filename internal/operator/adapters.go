@@ -1,3 +1,6 @@
+// Package operator provides recovery and replication operators for NovaStor.
+// This file implements adapters that bridge the operator package with
+// the metadata and placement services.
 package operator
 
 import (

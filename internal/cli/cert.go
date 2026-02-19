@@ -40,7 +40,7 @@ This command creates:
 All certificates use ECDSA P-256 keys and TLS 1.3. The server certificate
 includes the cluster.local service DNS naming convention for Kubernetes
 internal services.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		return runCertBootstrap()
 	},
 }

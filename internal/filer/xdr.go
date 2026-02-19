@@ -2,7 +2,6 @@ package filer
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
 )
 
@@ -29,10 +28,6 @@ func (w *xdrWriter) writeUint32(v uint32) {
 	b := make([]byte, 4)
 	binary.BigEndian.PutUint32(b, v)
 	w.buf = append(w.buf, b...)
-}
-
-func (w *xdrWriter) writeInt32(v int32) {
-	w.writeUint32(uint32(v))
 }
 
 func (w *xdrWriter) writeUint64(v uint64) {
@@ -99,11 +94,6 @@ func (r *xdrReader) readUint32() (uint32, error) {
 	return v, nil
 }
 
-func (r *xdrReader) readInt32() (int32, error) {
-	v, err := r.readUint32()
-	return int32(v), err
-}
-
 func (r *xdrReader) readUint64() (uint64, error) {
 	if r.pos+8 > len(r.data) {
 		return 0, io.ErrUnexpectedEOF
@@ -166,14 +156,4 @@ func (r *xdrReader) readString() (string, error) {
 		return "", err
 	}
 	return string(data), nil
-}
-
-// skip advances the position by n bytes (with 4-byte alignment).
-func (r *xdrReader) skip(n int) error {
-	aligned := n + (4-n%4)%4
-	if r.pos+aligned > len(r.data) {
-		return fmt.Errorf("xdr: cannot skip %d bytes, only %d remaining", aligned, len(r.data)-r.pos)
-	}
-	r.pos += aligned
-	return nil
 }

@@ -1,3 +1,6 @@
+// Package metadata provides the metadata service for NovaStor.
+// This file implements distributed locking primitives for coordinating
+// access to shared filesystem resources.
 package metadata
 
 import (
@@ -167,13 +170,6 @@ type LockClient interface {
 	GetLock(ctx context.Context, leaseID string) (*LockLease, error)
 	ListLocks(ctx context.Context, volumeID string) ([]*LockLease, error)
 	CleanupExpiredLocks(ctx context.Context) (int, error)
-}
-
-// initLocksBucket ensures the locks bucket exists in the FSM.
-func initLocksBucket(fsm MetadataFSM) error {
-	// The FSM dynamically creates buckets on first use, so no explicit init needed.
-	// This is a no-op but documents the requirement.
-	return nil
 }
 
 // GenerateLeaseID creates a unique lease ID.

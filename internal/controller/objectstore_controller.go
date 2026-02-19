@@ -273,7 +273,7 @@ func (r *ObjectStoreReconciler) reconcileS3Deployment(ctx context.Context, store
 	return err
 }
 
-func (r *ObjectStoreReconciler) reconcileS3Service(ctx context.Context, store *novastorev1alpha1.ObjectStore, name, deployName string, port int32) error {
+func (r *ObjectStoreReconciler) reconcileS3Service(ctx context.Context, store *novastorev1alpha1.ObjectStore, name, _ string, port int32) error {
 	svc := &corev1.Service{}
 	svc.Name = name
 	svc.Namespace = store.Namespace
