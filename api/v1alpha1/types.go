@@ -4,6 +4,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +k8s:deepcopy-gen:package,register
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.dataProtection.mode`
@@ -94,6 +96,10 @@ type BlockVolumeSpec struct {
 	Size string `json:"size"`
 	// +kubebuilder:validation:Enum=ReadWriteOnce;ReadOnlyMany
 	AccessMode string `json:"accessMode"`
+	// Quota specifies an optional per-volume quota limit.
+	// When set, the volume cannot grow beyond this size.
+	// +optional
+	Quota *int64 `json:"quota,omitempty"`
 }
 
 type BlockVolumeStatus struct {
@@ -191,6 +197,10 @@ type BucketPolicySpec struct {
 	MaxBuckets int `json:"maxBuckets,omitempty"`
 	// +kubebuilder:validation:Enum=enabled;disabled;suspended
 	Versioning string `json:"versioning,omitempty"`
+	// MaxBucketSize is the per-bucket storage quota in bytes.
+	// When set, individual buckets cannot exceed this size.
+	// +optional
+	MaxBucketSize int64 `json:"maxBucketSize,omitempty"`
 }
 
 type ObjectStoreStatus struct {
@@ -204,4 +214,93 @@ type ObjectStoreList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ObjectStore `json:"items"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Scope",type=string,JSONPath=`.spec.scope.kind`
+// +kubebuilder:printcolumn:name="Scope Name",type=string,JSONPath=`.spec.scope.name`
+// +kubebuilder:printcolumn:name="Storage Limit",type=string,JSONPath=`.spec.storage.hard`
+// +kubebuilder:printcolumn:name="Used",type=string,JSONPath=`.status.storage.used`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+
+// StorageQuota defines storage consumption limits for a scope.
+// Scopes can be namespaces (tenant-level), specific storage pools, or individual buckets.
+type StorageQuota struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              StorageQuotaSpec   `json:"spec,omitempty"`
+	Status            StorageQuotaStatus `json:"status,omitempty"`
+}
+
+type StorageQuotaSpec struct {
+	// Scope defines the target of this quota.
+	Scope QuotaScope `json:"scope"`
+
+	// Storage defines storage limits.
+	Storage *StorageQuotaSpecStorage `json:"storage,omitempty"`
+
+	// ObjectCount defines object/bucket count limits.
+	ObjectCount *ObjectCountQuotaSpec `json:"objectCount,omitempty"`
+}
+
+type QuotaScope struct {
+	// +kubebuilder:validation:Enum=Namespace;StoragePool;Bucket;Volume
+	Kind string `json:"kind"`
+
+	// Name identifies the scope target.
+	// For Namespace: the namespace name
+	// For StoragePool: the pool name
+	// For Bucket: the bucket name
+	// For Volume: the volume ID
+	Name string `json:"name"`
+}
+
+type StorageQuotaSpecStorage struct {
+	// Hard is the hard limit in bytes. Requests exceeding this limit are rejected.
+	Hard int64 `json:"hard"`
+
+	// Soft is the soft limit in bytes. When exceeded, warnings are issued but requests are allowed.
+	// +optional
+	Soft int64 `json:"soft,omitempty"`
+}
+
+type ObjectCountQuotaSpec struct {
+	// Hard is the hard limit for object/bucket count.
+	Hard int64 `json:"hard"`
+}
+
+type StorageQuotaStatus struct {
+	// Phase indicates the quota enforcement state.
+	// +kubebuilder:validation:Enum=Active;Exceeded;Warning
+	Phase string `json:"phase,omitempty"`
+
+	// Storage reports storage usage.
+	Storage *StorageQuotaStatusStorage `json:"storage,omitempty"`
+
+	// ObjectCount reports object/bucket count usage.
+	ObjectCount *ObjectCountQuotaStatus `json:"objectCount,omitempty"`
+
+	// Conditions represent the latest available observations.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type StorageQuotaStatusStorage struct {
+	// Used is the current usage in bytes.
+	Used int64 `json:"used,omitempty"`
+
+	// UsedString is the current usage in human-readable format.
+	UsedString string `json:"usedString,omitempty"`
+}
+
+type ObjectCountQuotaStatus struct {
+	// Used is the current count.
+	Used int64 `json:"used,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type StorageQuotaList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []StorageQuota `json:"items"`
 }

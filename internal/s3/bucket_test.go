@@ -184,7 +184,7 @@ const testSecretKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
 func newTestGateway() (*Gateway, *memBucketStore) {
 	bs := newMemBucketStore()
-	gw := NewGateway(bs, newMemObjectStore(), newMemChunkStore(), newMemMultipartStore(), testAccessKey, testSecretKey)
+	gw := NewGateway(bs, newMemObjectStore(), newMemChunkStore(), newMemMultipartStore(), nil, testAccessKey, testSecretKey)
 	return gw, bs
 }
 

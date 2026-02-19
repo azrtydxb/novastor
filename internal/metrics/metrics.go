@@ -132,7 +132,6 @@ var (
 		Subsystem: "agent",
 		Name:      "dedup_physical_bytes",
 		Help:      "Total physical bytes stored (after deduplication)",
->>>>>>> bc567d7 ([Feature] Implement chunk-level deduplication)
 	})
 
 	// --------------- Metadata / Raft metrics ---------------
@@ -542,6 +541,64 @@ var (
 		Name:      "lock_lease_expirations_total",
 		Help:      "Total expired lock leases",
 	})
+
+	// --------------- Quota metrics ---------------
+
+	// QuotaRejections counts operations rejected due to quota limits.
+	QuotaRejections = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "quota",
+		Name:      "rejections_total",
+		Help:      "Operations rejected due to quota limits",
+	}, []string{"scope_kind"})
+
+	// QuotaSoftWarnings counts soft limit warnings.
+	QuotaSoftWarnings = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "quota",
+		Name:      "soft_warnings_total",
+		Help:      "Soft limit warnings issued",
+	})
+
+	// QuotaReservations counts bytes reserved for quota.
+	QuotaReservations = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "quota",
+		Name:      "storage_reserved_bytes_total",
+		Help:      "Storage bytes reserved for quota",
+	})
+
+	// QuotaReleases counts bytes released from quota.
+	QuotaReleases = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "quota",
+		Name:      "storage_released_bytes_total",
+		Help:      "Storage bytes released from quota",
+	})
+
+	// QuotaObjectReservations counts objects reserved for quota.
+	QuotaObjectReservations = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "quota",
+		Name:      "objects_reserved_total",
+		Help:      "Objects reserved for quota",
+	})
+
+	// QuotaObjectReleases counts objects released from quota.
+	QuotaObjectReleases = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "novastor",
+		Subsystem: "quota",
+		Name:      "objects_released_total",
+		Help:      "Objects released from quota",
+	})
+
+	// QuotaUsageBytes reports current quota usage in bytes by scope.
+	QuotaUsageBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "novastor",
+		Subsystem: "quota",
+		Name:      "usage_bytes",
+		Help:      "Current quota usage in bytes",
+	}, []string{"scope_kind", "scope_name"})
 )
 
 // Register registers all NovaStor metrics with the default Prometheus registry.
@@ -608,6 +665,7 @@ func Register() {
 	prometheus.MustRegister(NFSOpDuration)
 	prometheus.MustRegister(ActiveLocks)
 
+
 	// Webhook metrics
 	prometheus.MustRegister(WebhookAdmissionReviewsTotal)
 	prometheus.MustRegister(WebhookAdmissionReviewDuration)
@@ -628,4 +686,13 @@ func Register() {
 	prometheus.MustRegister(LockOperationsTotal)
 	prometheus.MustRegister(LockRenewalFailures)
 	prometheus.MustRegister(LockLeaseExpirations)
+
+	// Quota metrics
+	prometheus.MustRegister(QuotaRejections)
+	prometheus.MustRegister(QuotaSoftWarnings)
+	prometheus.MustRegister(QuotaReservations)
+	prometheus.MustRegister(QuotaReleases)
+	prometheus.MustRegister(QuotaObjectReservations)
+	prometheus.MustRegister(QuotaObjectReleases)
+	prometheus.MustRegister(QuotaUsageBytes)
 }

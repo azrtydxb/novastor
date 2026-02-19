@@ -8,6 +8,7 @@ type BucketInfo struct {
 	CreationDate int64
 	Versioning   string
 	Owner        string
+	MaxSize      int64 // Per-bucket quota limit in bytes (0 = unlimited)
 }
 
 // ObjectInfo represents S3 object metadata.
@@ -68,4 +69,16 @@ type MultipartStore interface {
 	PutMultipart(ctx context.Context, info *MultipartInfo) error
 	GetMultipart(ctx context.Context, uploadID string) (*MultipartInfo, error)
 	DeleteMultipart(ctx context.Context, uploadID string) error
+}
+
+// QuotaChecker defines the interface for checking storage quotas.
+type QuotaChecker interface {
+	// CheckStorageQuota checks if a storage allocation would exceed the quota.
+	CheckStorageQuota(ctx context.Context, scope string, requestedBytes int64) error
+	// ReserveStorage reserves storage capacity for a scope.
+	ReserveStorage(ctx context.Context, scope string, bytes int64) error
+	// ReleaseStorage releases storage capacity for a scope.
+	ReleaseStorage(ctx context.Context, scope string, bytes int64) error
+	// GetBucketUsage returns the current usage for a bucket.
+	GetBucketUsage(ctx context.Context, bucket string) (int64, error)
 }

@@ -1,0 +1,36 @@
+apiVersion: novastor.io/v1alpha1
+kind: StorageQuota
+metadata:
+  name: tenant-a-quota
+  namespace: default
+spec:
+  scope:
+    kind: Namespace
+    name: tenant-a
+  storage:
+    hard: 107374182400  # 100 GB
+    soft: 85899345920   # 80 GB
+---
+apiVersion: novastor.io/v1alpha1
+kind: StorageQuota
+metadata:
+  name: pool-default-quota
+spec:
+  scope:
+    kind: StoragePool
+    name: default
+  storage:
+    hard: 1099511627776  # 1 TB
+---
+apiVersion: novastor.io/v1alpha1
+kind: StorageQuota
+metadata:
+  name: s3-bucket-limit
+spec:
+  scope:
+    kind: Bucket
+    name: uploads
+  storage:
+    hard: 10737418240  # 10 GB per bucket
+  objectCount:
+    hard: 10000  # Max 10,000 objects

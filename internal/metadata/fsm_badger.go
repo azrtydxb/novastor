@@ -73,6 +73,60 @@ func (f *BadgerFSM) Apply(log *raft.Log) interface{} {
 		if err != nil {
 			return fmt.Errorf("badger delete: %w", err)
 		}
+	case opAddQuota:
+		// AddQu atomically adds a delta to a usage counter.
+		err := f.db.Update(func(txn *badger.Txn) error {
+			var delta int64
+			if err := json.Unmarshal(op.Value, &delta); err != nil {
+				return fmt.Errorf("unmarshaling quota delta: %w", err)
+			}
+			current := int64(0)
+			item, err := txn.Get(compositeKey(op.Bucket, op.Key))
+			if err == nil {
+				val, err := item.ValueCopy(nil)
+				if err == nil {
+					if err := json.Unmarshal(val, &current); err != nil {
+						return fmt.Errorf("unmarshaling current usage: %w", err)
+					}
+				}
+			}
+			newVal := current + delta
+			if newVal < 0 {
+				newVal = 0
+			}
+			updated, _ := json.Marshal(newVal)
+			return txn.Set(compositeKey(op.Bucket, op.Key), updated)
+		})
+		if err != nil {
+			return fmt.Errorf("badger add quota: %w", err)
+		}
+	case opSubQuota:
+		// SubQu atomically subtracts a delta from a usage counter.
+		err := f.db.Update(func(txn *badger.Txn) error {
+			var delta int64
+			if err := json.Unmarshal(op.Value, &delta); err != nil {
+				return fmt.Errorf("unmarshaling quota delta: %w", err)
+			}
+			current := int64(0)
+			item, err := txn.Get(compositeKey(op.Bucket, op.Key))
+			if err == nil {
+				val, err := item.ValueCopy(nil)
+				if err == nil {
+					if err := json.Unmarshal(val, &current); err != nil {
+						return fmt.Errorf("unmarshaling current usage: %w", err)
+					}
+				}
+			}
+			newVal := current - delta
+			if newVal < 0 {
+				newVal = 0
+			}
+			updated, _ := json.Marshal(newVal)
+			return txn.Set(compositeKey(op.Bucket, op.Key), updated)
+		})
+		if err != nil {
+			return fmt.Errorf("badger sub quota: %w", err)
+		}
 	default:
 		return fmt.Errorf("unknown op: %s", op.Op)
 	}

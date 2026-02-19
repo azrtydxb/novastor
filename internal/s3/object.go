@@ -24,7 +24,8 @@ func (g *Gateway) handlePutObject(w http.ResponseWriter, r *http.Request, bucket
 	ctx := r.Context()
 
 	// Verify bucket exists.
-	if _, err := g.buckets.GetBucket(ctx, bucket); err != nil {
+	bucketInfo, err := g.buckets.GetBucket(ctx, bucket)
+	if err != nil {
 		writeS3Error(w, "NoSuchBucket", "The specified bucket does not exist", http.StatusNotFound)
 		return
 	}
@@ -33,6 +34,27 @@ func (g *Gateway) handlePutObject(w http.ResponseWriter, r *http.Request, bucket
 	if err != nil {
 		writeS3Error(w, "InternalError", "failed to read request body", http.StatusInternalServerError)
 		return
+	}
+
+	objectSize := int64(len(body))
+
+	// Check bucket-level quota if configured.
+	if g.quota != nil && bucketInfo.MaxSize > 0 {
+		// Get current bucket usage.
+		currentUsage, err := g.quota.GetBucketUsage(ctx, bucket)
+		if err != nil {
+			writeS3Error(w, "InternalError", "failed to check bucket quota", http.StatusInternalServerError)
+			return
+		}
+
+		// Check if adding this object would exceed the bucket quota.
+		if currentUsage+objectSize > bucketInfo.MaxSize {
+			writeS3Error(w, "QuotaExceeded",
+				fmt.Sprintf("Bucket quota exceeded: current usage %d bytes + object size %d bytes would exceed limit %d bytes",
+					currentUsage, objectSize, bucketInfo.MaxSize),
+				http.StatusForbidden)
+			return
+		}
 	}
 
 	metrics.S3BytesIn.Add(float64(len(body)))
@@ -68,7 +90,7 @@ func (g *Gateway) handlePutObject(w http.ResponseWriter, r *http.Request, bucket
 	obj := &ObjectInfo{
 		Bucket:      bucket,
 		Key:         key,
-		Size:        int64(len(body)),
+		Size:        objectSize,
 		ETag:        etag,
 		ContentType: contentType,
 		UserMeta:    make(map[string]string),
@@ -79,6 +101,15 @@ func (g *Gateway) handlePutObject(w http.ResponseWriter, r *http.Request, bucket
 	if err := g.objects.PutObject(ctx, obj); err != nil {
 		writeS3Error(w, "InternalError", "failed to store object metadata", http.StatusInternalServerError)
 		return
+	}
+
+	// Reserve quota for the object after successful creation.
+	if g.quota != nil {
+		if err := g.quota.ReserveStorage(ctx, "bucket:"+bucket, objectSize); err != nil {
+			// Log but don't fail - the object was created successfully.
+			// This may cause quota tracking to be slightly off, but prevents
+			// leaving the object in an inconsistent state.
+		}
 	}
 
 	w.Header().Set("ETag", `"`+etag+`"`)
@@ -156,8 +187,22 @@ func (g *Gateway) handleDeleteObject(w http.ResponseWriter, r *http.Request, buc
 
 	ctx := r.Context()
 
+	// Get the object size before deletion for quota release.
+	var objectSize int64
+	obj, err := g.objects.GetObject(ctx, bucket, key)
+	if err == nil {
+		objectSize = obj.Size
+	}
+
 	// S3 delete is idempotent: succeed even if the object does not exist.
 	_ = g.objects.DeleteObject(ctx, bucket, key)
+
+	// Release quota for the deleted object.
+	if g.quota != nil && objectSize > 0 {
+		if err := g.quota.ReleaseStorage(ctx, "bucket:"+bucket, objectSize); err != nil {
+			// Log but don't fail - the object was deleted successfully.
+		}
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
