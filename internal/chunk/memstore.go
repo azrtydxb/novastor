@@ -9,14 +9,17 @@ import (
 // MemoryStore implements the Store interface in memory.
 // It is primarily useful for testing and development.
 type MemoryStore struct {
-	mu     sync.RWMutex
-	chunks map[ChunkID]*Chunk
+	mu         sync.RWMutex
+	chunks     map[ChunkID]*Chunk
+	totalBytes int64
+	maxBytes   int64
 }
 
 // NewMemoryStore creates a new in-memory chunk store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		chunks: make(map[ChunkID]*Chunk),
+		chunks:   make(map[ChunkID]*Chunk),
+		maxBytes: 1 << 40, // Default 1TB limit (effectively unlimited for tests)
 	}
 }
 
@@ -24,6 +27,11 @@ func NewMemoryStore() *MemoryStore {
 func (s *MemoryStore) Put(_ context.Context, c *Chunk) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Check if replacing an existing chunk.
+	if existing, exists := s.chunks[c.ID]; exists {
+		s.totalBytes -= int64(len(existing.Data))
+	}
 
 	// Store a copy to prevent external mutation.
 	chunkCopy := &Chunk{
@@ -34,6 +42,7 @@ func (s *MemoryStore) Put(_ context.Context, c *Chunk) error {
 	copy(chunkCopy.Data, c.Data)
 
 	s.chunks[c.ID] = chunkCopy
+	s.totalBytes += int64(len(c.Data))
 	return nil
 }
 
@@ -63,6 +72,9 @@ func (s *MemoryStore) Delete(_ context.Context, id ChunkID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if existing, exists := s.chunks[id]; exists {
+		s.totalBytes -= int64(len(existing.Data))
+	}
 	delete(s.chunks, id)
 	return nil
 }
@@ -94,5 +106,50 @@ func (s *MemoryStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.chunks = make(map[ChunkID]*Chunk)
+	s.totalBytes = 0
+	return nil
+}
+
+// Stats returns storage capacity and usage statistics for the MemoryStore.
+// Since memory is dynamically allocated, total is set to a configured maximum.
+func (s *MemoryStore) Stats(_ context.Context) (*StoreStats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return &StoreStats{
+		TotalBytes:     s.maxBytes,
+		UsedBytes:      s.totalBytes,
+		AvailableBytes: s.maxBytes - s.totalBytes,
+		ChunkCount:     int64(len(s.chunks)),
+	}, nil
+}
+
+// GetMeta returns chunk metadata without loading the full data payload.
+func (s *MemoryStore) GetMeta(_ context.Context, id ChunkID) (*ChunkMeta, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	c, exists := s.chunks[id]
+	if !exists {
+		return nil, fmt.Errorf("chunk %s not found", id)
+	}
+
+	return &ChunkMeta{
+		ID:       c.ID,
+		Size:     int64(len(c.Data)),
+		Checksum: c.Checksum,
+	}, nil
+}
+
+// HealthCheck verifies that the memory store is operational.
+// For an in-memory store, this is essentially a no-op unless corrupted.
+func (s *MemoryStore) HealthCheck(_ context.Context) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Basic check: ensure the map is initialized.
+	if s.chunks == nil {
+		return fmt.Errorf("memory store not initialized")
+	}
 	return nil
 }

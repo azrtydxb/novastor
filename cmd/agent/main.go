@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -39,54 +38,36 @@ func (logReporter) ReportCorruptChunk(_ context.Context, chunkID chunk.ChunkID) 
 	return nil
 }
 
-// diskUsedBytes walks the given directory and returns the total size of all
-// regular files found. It is used to compute the disk-used metric from the
-// chunk store directory.
-func diskUsedBytes(dir string) uint64 {
-	var total uint64
-	_ = filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
+// buildNodeMeta constructs current NodeMeta from the store state.
+// It uses the CapacityStore interface when available to get capacity information.
+func buildNodeMeta(ctx context.Context, nodeID, listenAddr string, store chunk.Store, status string) *metadata.NodeMeta {
+	meta := &metadata.NodeMeta{
+		NodeID:        nodeID,
+		Address:       listenAddr,
+		DiskCount:     1,
+		LastHeartbeat: time.Now().Unix(),
+		Status:        status,
+	}
+
+	// If the store implements CapacityStore, use it to get capacity information.
+	if cs, ok := store.(chunk.CapacityStore); ok {
+		stats, err := cs.Stats(ctx)
+		if err != nil {
+			logging.L.Warn("failed to get store stats", zap.Error(err))
+		} else {
+			meta.TotalCapacity = stats.TotalBytes
+			meta.AvailableCapacity = stats.AvailableBytes
 		}
-		total += uint64(info.Size())
-		return nil
-	})
-	return total
-}
-
-// diskStats returns the total and free bytes for the filesystem containing dir
-// using syscall.Statfs. On failure it logs a warning and returns zeros.
-func diskStats(dir string) (total, free uint64) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(dir, &stat); err != nil {
-		logging.L.Warn("failed to stat filesystem", zap.String("dir", dir), zap.Error(err))
-		return 0, 0
 	}
-	// Bsize is the fundamental block size; Blocks/Bfree count in those units.
-	total = uint64(stat.Bsize) * stat.Blocks
-	free = uint64(stat.Bsize) * stat.Bfree
-	return total, free
-}
 
-// buildNodeMeta constructs current NodeMeta from the local store state.
-func buildNodeMeta(_ context.Context, nodeID, listenAddr, dataDir string, _ chunk.Store, status string) *metadata.NodeMeta {
-	total, free := diskStats(dataDir)
-	return &metadata.NodeMeta{
-		NodeID:            nodeID,
-		Address:           listenAddr,
-		DiskCount:         1,
-		TotalCapacity:     int64(total),
-		AvailableCapacity: int64(free),
-		LastHeartbeat:     time.Now().Unix(),
-		Status:            status,
-	}
+	return meta
 }
 
 // registerNode sends the initial NodeMeta registration and then periodically
 // sends heartbeats until the context is cancelled.
-func registerNode(ctx context.Context, client *metadata.GRPCClient, nodeID, listenAddr, dataDir string, store chunk.Store, heartbeatInterval time.Duration) {
+func registerNode(ctx context.Context, client *metadata.GRPCClient, nodeID, listenAddr string, store chunk.Store, heartbeatInterval time.Duration) {
 	// Initial registration.
-	if err := client.PutNodeMeta(ctx, buildNodeMeta(ctx, nodeID, listenAddr, dataDir, store, "ready")); err != nil {
+	if err := client.PutNodeMeta(ctx, buildNodeMeta(ctx, nodeID, listenAddr, store, "ready")); err != nil {
 		logging.L.Warn("node registration failed; will retry on next heartbeat", zap.Error(err))
 	} else {
 		logging.L.Info("node registered with metadata service", zap.String("nodeID", nodeID))
@@ -98,7 +79,7 @@ func registerNode(ctx context.Context, client *metadata.GRPCClient, nodeID, list
 		select {
 		case <-ctx.Done():
 			// Mark node as offline on graceful shutdown.
-			offlineMeta := buildNodeMeta(context.Background(), nodeID, listenAddr, dataDir, store, "offline")
+			offlineMeta := buildNodeMeta(context.Background(), nodeID, listenAddr, store, "offline")
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := client.PutNodeMeta(shutdownCtx, offlineMeta); err != nil {
@@ -106,7 +87,7 @@ func registerNode(ctx context.Context, client *metadata.GRPCClient, nodeID, list
 			}
 			return
 		case <-ticker.C:
-			if err := client.PutNodeMeta(ctx, buildNodeMeta(ctx, nodeID, listenAddr, dataDir, store, "ready")); err != nil {
+			if err := client.PutNodeMeta(ctx, buildNodeMeta(ctx, nodeID, listenAddr, store, "ready")); err != nil {
 				logging.L.Warn("heartbeat failed", zap.String("nodeID", nodeID), zap.Error(err))
 			} else {
 				logging.L.Debug("heartbeat sent", zap.String("nodeID", nodeID))
@@ -201,16 +182,37 @@ func main() {
 		return int64(len(ids))
 	}
 	collector.DiskStatsFn = func() []metrics.DiskStats {
-		used := diskUsedBytes(*dataDir)
-		total, free := diskStats(*dataDir)
-		return []metrics.DiskStats{
-			{
-				Device: *dataDir,
-				Total:  total,
-				Used:   used,
-				Free:   free,
-			},
+		// Use CapacityStore interface if available.
+		if cs, ok := store.(chunk.CapacityStore); ok {
+			stats, err := cs.Stats(context.Background())
+			if err != nil {
+				logging.L.Warn("metrics: getting store stats failed", zap.Error(err))
+				return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
+			}
+			total := stats.TotalBytes
+			if total < 0 {
+				total = 0
+			}
+			used := stats.UsedBytes
+			if used < 0 {
+				used = 0
+			}
+			free := stats.AvailableBytes
+			if free < 0 {
+				free = 0
+			}
+			return []metrics.DiskStats{
+				{
+					Device: *dataDir,
+					Total:  uint64(total),
+					Used:   uint64(used),
+					Free:   uint64(free),
+				},
+			}
 		}
+		// If CapacityStore is not implemented, return zeros.
+		logging.L.Warn("metrics: store does not support capacity stats")
+		return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
 	}
 
 	// Main context for the agent lifetime.
@@ -301,7 +303,7 @@ func main() {
 
 	// Register this node with the metadata service.
 	if metaClient != nil {
-		defer func() { _ = metaClient.Close() }()
+		defer metaClient.Close()
 		// Use the pod IP for gRPC registration so that other components
 		// (e.g. the CSI controller) can dial this agent via the pod network.
 		// Fall back to listenAddr when pod-ip is not set.
@@ -312,7 +314,7 @@ func main() {
 				registrationAddr = net.JoinHostPort(*podIP, port)
 			}
 		}
-		go registerNode(ctx, metaClient, *nodeID, registrationAddr, *dataDir, store, *heartbeatInterval)
+		go registerNode(ctx, metaClient, *nodeID, registrationAddr, store, *heartbeatInterval)
 	}
 
 	// Start Prometheus metrics HTTP server.
@@ -351,7 +353,7 @@ func main() {
 		srv.GracefulStop()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		_ = metricsServer.Shutdown(shutdownCtx)
+		metricsServer.Shutdown(shutdownCtx)
 	}()
 
 	if err := srv.Serve(listener); err != nil {

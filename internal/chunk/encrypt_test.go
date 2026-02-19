@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"fmt"
 	"testing"
 )
 
@@ -251,5 +252,100 @@ func TestEncryptedStore_RandomNonce(t *testing.T) {
 
 	if bytes.Equal(raw1.Data, raw2.Data) {
 		t.Error("encrypting same plaintext produced identical ciphertexts; nonce should differ")
+	}
+}
+
+func TestEncryptedStore_ImplementsCapacityStore(t *testing.T) {
+	var _ CapacityStore = &EncryptedStore{}
+}
+
+func TestEncryptedStore_Stats(t *testing.T) {
+	inner := newTestLocalStore(t)
+	key := newTestKey(t)
+	enc, err := NewEncryptedStore(inner, key)
+	if err != nil {
+		t.Fatalf("creating encrypted store: %v", err)
+	}
+	ctx := context.Background()
+
+	// EncryptedStore should delegate Stats to inner LocalStore.
+	stats, err := enc.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+	if stats.TotalBytes <= 0 {
+		t.Errorf("TotalBytes = %d, want > 0", stats.TotalBytes)
+	}
+}
+
+func TestEncryptedStore_ImplementsChunkMetaStore(t *testing.T) {
+	var _ ChunkMetaStore = &EncryptedStore{}
+}
+
+func TestEncryptedStore_GetMeta(t *testing.T) {
+	inner := newTestLocalStore(t)
+	key := newTestKey(t)
+	enc, err := NewEncryptedStore(inner, key)
+	if err != nil {
+		t.Fatalf("creating encrypted store: %v", err)
+	}
+	ctx := context.Background()
+
+	data := []byte("test metadata")
+	c := &Chunk{ID: NewChunkID(data), Data: data}
+	c.Checksum = c.ComputeChecksum()
+	_ = enc.Put(ctx, c)
+
+	// GetMeta should delegate to inner LocalStore.
+	meta, err := enc.GetMeta(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("GetMeta failed: %v", err)
+	}
+	if meta.ID != c.ID {
+		t.Errorf("GetMeta ID = %s, want %s", meta.ID, c.ID)
+	}
+}
+
+func TestEncryptedStore_ImplementsHealthCheckStore(t *testing.T) {
+	var _ HealthCheckStore = &EncryptedStore{}
+}
+
+func TestEncryptedStore_HealthCheck(t *testing.T) {
+	inner := newTestLocalStore(t)
+	key := newTestKey(t)
+	enc, err := NewEncryptedStore(inner, key)
+	if err != nil {
+		t.Fatalf("creating encrypted store: %v", err)
+	}
+	ctx := context.Background()
+
+	// HealthCheck should delegate to inner LocalStore.
+	if err := enc.HealthCheck(ctx); err != nil {
+		t.Errorf("HealthCheck failed: %v", err)
+	}
+}
+
+// nonCapacityStore is a minimal Store implementation that does NOT implement CapacityStore.
+// It's used to test that EncryptedStore properly handles stores without optional interfaces.
+type nonCapacityStore struct{}
+
+func (ncs *nonCapacityStore) Put(_ context.Context, c *Chunk) error { return nil }
+func (ncs *nonCapacityStore) Get(_ context.Context, id ChunkID) (*Chunk, error) {
+	return nil, fmt.Errorf("not found")
+}
+func (ncs *nonCapacityStore) Delete(_ context.Context, id ChunkID) error      { return nil }
+func (ncs *nonCapacityStore) Has(_ context.Context, id ChunkID) (bool, error) { return false, nil }
+func (ncs *nonCapacityStore) List(_ context.Context) ([]ChunkID, error)       { return nil, nil }
+
+func TestEncryptedStore_NoStatsOnNonCapacityStore(t *testing.T) {
+	ms := &nonCapacityStore{}
+
+	// EncryptedStore with a non-CapacityStore inner should return error from Stats.
+	enc := &EncryptedStore{inner: ms}
+
+	ctx := context.Background()
+	_, err := enc.Stats(ctx)
+	if err == nil {
+		t.Error("Expected error when inner store doesn't implement CapacityStore")
 	}
 }
