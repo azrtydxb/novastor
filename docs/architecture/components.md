@@ -43,6 +43,76 @@ type Store interface {
 }
 ```
 
+### Storage Backends
+
+The Chunk Storage Engine supports pluggable storage backends through the `Store` interface:
+
+| Backend | Package | Description |
+|---|---|---|
+| **LocalStore** | `internal/chunk/localstore.go` | File-based storage using a local directory hierarchy |
+| **LVMStore** | `internal/chunk/lvmstore.go` | LVM thin volumes for efficient snapshot and copy operations |
+
+#### LVM Backend
+
+The LVM backend stores each chunk as a separate thin logical volume. This enables:
+
+- **Efficient snapshots**: Copy-on-write snapshots for fast chunk duplication
+- **Thin provisioning**: Over-allocate storage with actual allocation on write
+- **Volume resize**: Dynamic resizing of chunk volumes
+- **Capacity tracking**: Query thin pool usage via LVM commands
+
+```go
+// Create an LVM-backed store
+store, err := chunk.NewLVMStore("novastor", "chunks")
+if err != nil {
+    log.Fatalf("creating LVM store: %v", err)
+}
+```
+
+**Requirements**:
+
+- LVM2 tools installed (`lvcreate`, `lvremove`, `lvs`, `vgs`)
+- A pre-configured volume group with a thin pool
+
+**Configuration**:
+
+| Parameter | Default | Description |
+|---|---|---|
+| Volume Group | `novastor` | LVM volume group name |
+| Thin Pool | `chunks` | Thin pool within the VG |
+| Chunk LV Prefix | `chunk-` | Prefix for chunk logical volumes |
+
+**LVM Commands Used**:
+
+| Operation | Command |
+|---|---|
+| Create volume | `lvcreate -V 4M --thin --name chunk-<id> novastor/chunks` |
+| Delete volume | `lvremove -f novastor/chunk-<id>` |
+| List volumes | `lvs --noheadings -o lv_name novastor` |
+| Create snapshot | `lvcreate -s --name snap-<id> novastor/chunk-<id>` |
+| Query capacity | `lvs --noheadings --units=b --nosuffix -o lv_size,data_percent` |
+
+**Snapshot Support**:
+
+The LVM backend supports efficient chunk snapshots via the `Snapshot` method:
+
+```go
+// Create a snapshot of an existing chunk
+err := lvmStore.Snapshot(ctx, sourceChunkID, snapshotChunkID)
+```
+
+Snapshots are implemented as LVM thin snapshots, which share data blocks with the source until modified (copy-on-write).
+
+**Capacity Tracking**:
+
+The `Capacity` method returns current thin pool usage:
+
+```go
+total, free, err := lvmStore.Capacity(ctx)
+// total: total thin pool size in bytes
+// free: available space in bytes
+```
+
 ---
 
 ## Metadata Service
