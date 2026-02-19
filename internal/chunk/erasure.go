@@ -72,3 +72,8 @@ func (ec *ErasureCoder) Decode(shards [][]byte) ([]byte, error) {
 func (ec *ErasureCoder) ShardCount() int   { return ec.dataShards + ec.parityShards }
 func (ec *ErasureCoder) DataShards() int   { return ec.dataShards }
 func (ec *ErasureCoder) ParityShards() int { return ec.parityShards }
+
+// Reconstruct reconstructs missing shards in-place. Missing shards should be nil.
+func (ec *ErasureCoder) Reconstruct(shards [][]byte) error {
+	return ec.encoder.Reconstruct(shards)
+}
