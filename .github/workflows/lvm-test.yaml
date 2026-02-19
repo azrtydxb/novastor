@@ -1,0 +1,42 @@
+name: LVM Store Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lvm-tests:
+    name: LVM Store Tests
+    runs-on: ubuntu-latest
+    container:
+      image: golang:1.24
+      options: --privileged
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y lvm2 thin-provisioning-tools
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup loop devices
+        run: |
+          truncate -s 1G /tmp/loop1.img
+          truncate -s 1G /tmp/loop2.img
+          losetup /dev/loop0 /tmp/loop1.img
+          losetup /dev/loop1 /tmp/loop2.img
+
+      - name: Setup LVM
+        run: |
+          pvcreate /dev/loop0 /dev/loop1
+          vgcreate novastor-test /dev/loop0 /dev/loop1
+          lvcreate -L 512M -T novastor-test/thinpool
+
+      - name: Run LVM tests
+        run: go test -v ./internal/chunk/... -run LVM
+        env:
+          LVM_VG_NAME: novastor-test
+          LVM_THIN_POOL: thinpool
