@@ -213,130 +213,257 @@ func TestCreateVolumeNoNodes(t *testing.T) {
 	}
 }
 
-// --- Replicas parameter tests ---
+// --- Data protection parameter tests ---
 
-func TestCreateVolumeWithReplicas(t *testing.T) {
-	tests := []struct {
-		name           string
-		replicas       string
-		expectedFactor int
-	}{
-		{"default replicas (no parameter)", "", defaultReplicationFactor},
-		{"replicas=2", "2", 2},
-		{"replicas=3", "3", 3},
-		{"replicas=5", "5", 5},
-		{"replicas=1", "1", 1},
+func TestCreateVolume_DefaultProtection(t *testing.T) {
+	cs, store := setupController()
+	req := &csi.CreateVolumeRequest{
+		Name: "default-protection",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 4 * 1024 * 1024,
+		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cs, store := setupController()
-			req := &csi.CreateVolumeRequest{
-				Name: "test-replicas",
-				CapacityRange: &csi.CapacityRange{
-					RequiredBytes: 4 * 1024 * 1024,
-				},
-				Parameters: map[string]string{},
-			}
-			if tt.replicas != "" {
-				req.Parameters["replicas"] = tt.replicas
-			}
+	resp, err := cs.CreateVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
 
-			resp, err := cs.CreateVolume(context.Background(), req)
-			if err != nil {
-				t.Fatalf("CreateVolume failed: %v", err)
-			}
-
-			vm, err := store.GetVolumeMeta(context.Background(), resp.GetVolume().GetVolumeId())
-			if err != nil {
-				t.Fatalf("volume metadata not found: %v", err)
-			}
-
-			if vm.DataProtection == nil {
-				t.Fatal("expected DataProtection to be set")
-			}
-			if vm.DataProtection.Mode != "replication" {
-				t.Errorf("expected mode replication, got %q", vm.DataProtection.Mode)
-			}
-			if vm.DataProtection.ReplicationFactor != tt.expectedFactor {
-				t.Errorf("expected replication factor %d, got %d", tt.expectedFactor, vm.DataProtection.ReplicationFactor)
-			}
-		})
+	vm, err := store.GetVolumeMeta(context.Background(), resp.GetVolume().GetVolumeId())
+	if err != nil {
+		t.Fatalf("volume metadata not found: %v", err)
+	}
+	if vm.DataProtection == nil {
+		t.Fatal("expected DataProtection to be set")
+	}
+	if vm.DataProtection.Mode != metadata.ProtectionModeReplication {
+		t.Errorf("expected default mode replication, got %s", vm.DataProtection.Mode)
+	}
+	if vm.DataProtection.Replication == nil {
+		t.Fatal("expected Replication config to be set")
+	}
+	if vm.DataProtection.Replication.Factor != 3 {
+		t.Errorf("expected default replication factor 3, got %d", vm.DataProtection.Replication.Factor)
+	}
+	if vm.DataProtection.Replication.WriteQuorum != 2 {
+		t.Errorf("expected default write quorum 2, got %d", vm.DataProtection.Replication.WriteQuorum)
 	}
 }
 
-func TestCreateVolumeInvalidReplicas(t *testing.T) {
-	tests := []struct {
-		name         string
-		replicas     string
-		expectedCode codes.Code
-	}{
-		{"replicas=0", "0", codes.OutOfRange},
-		{"replicas=6", "6", codes.OutOfRange},
-		{"replicas=-1", "-1", codes.OutOfRange},
-		{"replicas=invalid", "invalid", codes.InvalidArgument},
-		{"replicas=abc", "abc", codes.InvalidArgument},
+func TestCreateVolume_ReplicationParams(t *testing.T) {
+	cs, store := setupController()
+	req := &csi.CreateVolumeRequest{
+		Name: "replication-vol",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 4 * 1024 * 1024,
+		},
+		Parameters: map[string]string{
+			"protection":  "replication",
+			"replicas":    "5",
+			"writeQuorum": "3",
+		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cs, _ := setupController()
-			req := &csi.CreateVolumeRequest{
-				Name: "test-invalid",
-				CapacityRange: &csi.CapacityRange{
-					RequiredBytes: 4 * 1024 * 1024,
-				},
-				Parameters: map[string]string{
-					"replicas": tt.replicas,
-				},
-			}
+	resp, err := cs.CreateVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
 
-			_, err := cs.CreateVolume(context.Background(), req)
-			if err == nil {
-				t.Fatal("expected error for invalid replicas value")
-			}
-			if st, ok := status.FromError(err); !ok || st.Code() != tt.expectedCode {
-				t.Errorf("expected %v, got %v", tt.expectedCode, err)
-			}
-		})
+	vm, err := store.GetVolumeMeta(context.Background(), resp.GetVolume().GetVolumeId())
+	if err != nil {
+		t.Fatalf("volume metadata not found: %v", err)
+	}
+	if vm.DataProtection.Mode != metadata.ProtectionModeReplication {
+		t.Errorf("expected mode replication, got %s", vm.DataProtection.Mode)
+	}
+	if vm.DataProtection.Replication.Factor != 5 {
+		t.Errorf("expected replication factor 5, got %d", vm.DataProtection.Replication.Factor)
+	}
+	if vm.DataProtection.Replication.WriteQuorum != 3 {
+		t.Errorf("expected write quorum 3, got %d", vm.DataProtection.Replication.WriteQuorum)
 	}
 }
 
-func TestCreateVolumeReplicasOutOfBounds(t *testing.T) {
+func TestCreateVolume_ErasureCodingDefaults(t *testing.T) {
+	cs, store := setupController()
+	req := &csi.CreateVolumeRequest{
+		Name: "ec-default-vol",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 4 * 1024 * 1024,
+		},
+		Parameters: map[string]string{
+			"protection": "erasure-coding",
+		},
+	}
+
+	resp, err := cs.CreateVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
+
+	vm, err := store.GetVolumeMeta(context.Background(), resp.GetVolume().GetVolumeId())
+	if err != nil {
+		t.Fatalf("volume metadata not found: %v", err)
+	}
+	if vm.DataProtection.Mode != metadata.ProtectionModeErasureCoding {
+		t.Errorf("expected mode erasure-coding, got %s", vm.DataProtection.Mode)
+	}
+	if vm.DataProtection.ErasureCoding == nil {
+		t.Fatal("expected ErasureCoding config to be set")
+	}
+	if vm.DataProtection.ErasureCoding.DataShards != 4 {
+		t.Errorf("expected default dataShards 4, got %d", vm.DataProtection.ErasureCoding.DataShards)
+	}
+	if vm.DataProtection.ErasureCoding.ParityShards != 2 {
+		t.Errorf("expected default parityShards 2, got %d", vm.DataProtection.ErasureCoding.ParityShards)
+	}
+}
+
+func TestCreateVolume_ErasureCodingCustom(t *testing.T) {
+	cs, store := setupController()
+	req := &csi.CreateVolumeRequest{
+		Name: "ec-custom-vol",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 8 * 1024 * 1024,
+		},
+		Parameters: map[string]string{
+			"protection":   "erasure-coding",
+			"dataShards":   "8",
+			"parityShards": "3",
+		},
+	}
+
+	resp, err := cs.CreateVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
+
+	vm, err := store.GetVolumeMeta(context.Background(), resp.GetVolume().GetVolumeId())
+	if err != nil {
+		t.Fatalf("volume metadata not found: %v", err)
+	}
+	if vm.DataProtection.Mode != metadata.ProtectionModeErasureCoding {
+		t.Errorf("expected mode erasure-coding, got %s", vm.DataProtection.Mode)
+	}
+	if vm.DataProtection.ErasureCoding.DataShards != 8 {
+		t.Errorf("expected dataShards 8, got %d", vm.DataProtection.ErasureCoding.DataShards)
+	}
+	if vm.DataProtection.ErasureCoding.ParityShards != 3 {
+		t.Errorf("expected parityShards 3, got %d", vm.DataProtection.ErasureCoding.ParityShards)
+	}
+	// Verify chunk count is based on volume size, not EC overhead
+	// (EC overhead is handled at chunk encoding level)
+	if len(vm.ChunkIDs) != 2 {
+		t.Errorf("expected 2 chunks for 8MiB volume, got %d", len(vm.ChunkIDs))
+	}
+}
+
+func TestCreateVolume_InvalidProtectionMode(t *testing.T) {
 	cs, _ := setupController()
-
-	// Test minimum bound (less than 1)
-	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
-		Name: "test-min",
+	req := &csi.CreateVolumeRequest{
+		Name: "invalid-mode",
 		CapacityRange: &csi.CapacityRange{
 			RequiredBytes: 4 * 1024 * 1024,
 		},
 		Parameters: map[string]string{
-			"replicas": "0",
+			"protection": "invalid-mode",
 		},
-	})
-	if err == nil {
-		t.Fatal("expected error for replicas < 1")
-	}
-	if st, ok := status.FromError(err); !ok || st.Code() != codes.OutOfRange {
-		t.Errorf("expected OutOfRange for replicas < 1, got %v", err)
 	}
 
-	// Test maximum bound (greater than 5)
-	_, err = cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
-		Name: "test-max",
+	_, err := cs.CreateVolume(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for invalid protection mode")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestCreateVolume_InvalidReplicas(t *testing.T) {
+	cs, _ := setupController()
+	req := &csi.CreateVolumeRequest{
+		Name: "invalid-replicas",
 		CapacityRange: &csi.CapacityRange{
 			RequiredBytes: 4 * 1024 * 1024,
 		},
 		Parameters: map[string]string{
-			"replicas": "6",
+			"protection": "replication",
+			"replicas":   "invalid",
 		},
-	})
-	if err == nil {
-		t.Fatal("expected error for replicas > 5")
 	}
-	if st, ok := status.FromError(err); !ok || st.Code() != codes.OutOfRange {
-		t.Errorf("expected OutOfRange for replicas > 5, got %v", err)
+
+	_, err := cs.CreateVolume(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for invalid replicas value")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestCreateVolume_InvalidDataShards(t *testing.T) {
+	cs, _ := setupController()
+	req := &csi.CreateVolumeRequest{
+		Name: "invalid-data-shards",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 4 * 1024 * 1024,
+		},
+		Parameters: map[string]string{
+			"protection": "erasure-coding",
+			"dataShards": "1",
+		},
+	}
+
+	_, err := cs.CreateVolume(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for dataShards < 2")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestCreateVolume_RWXWithErasureCoding(t *testing.T) {
+	cs, store := setupController()
+	req := &csi.CreateVolumeRequest{
+		Name: "rwx-ec-vol",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 4 * 1024 * 1024,
+		},
+		Parameters: map[string]string{
+			"protection":   "erasure-coding",
+			"dataShards":   "6",
+			"parityShards": "2",
+		},
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+				},
+			},
+		},
+	}
+
+	resp, err := cs.CreateVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume failed: %v", err)
+	}
+
+	vm, err := store.GetVolumeMeta(context.Background(), resp.GetVolume().GetVolumeId())
+	if err != nil {
+		t.Fatalf("volume metadata not found: %v", err)
+	}
+	// Verify both RWX context and EC config are set
+	if vm.DataProtection.Mode != metadata.ProtectionModeErasureCoding {
+		t.Errorf("expected mode erasure-coding, got %s", vm.DataProtection.Mode)
+	}
+	if vm.DataProtection.ErasureCoding.DataShards != 6 {
+		t.Errorf("expected dataShards 6, got %d", vm.DataProtection.ErasureCoding.DataShards)
+	}
+
+	volCtx := resp.GetVolume().GetVolumeContext()
+	if volCtx["accessMode"] != "RWX" {
+		t.Errorf("expected accessMode RWX in volume context, got %q", volCtx["accessMode"])
 	}
 }
 

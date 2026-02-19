@@ -16,6 +16,21 @@ import (
 	"github.com/piwi3910/novastor/internal/metrics"
 )
 
+// Type aliases for backward compatibility and code clarity.
+// These types are fully defined in protection.go.
+type VolumeProtectionMode = ProtectionMode
+
+// DataProtectionConfig is an alias for ProtectionProfile for code clarity.
+// In storage context, we talk about "data protection configuration"
+// while in metadata context we use "protection profile".
+type DataProtectionConfig = ProtectionProfile
+
+// ReplicationConfig is an alias for ReplicationProfile.
+type ReplicationConfig = ReplicationProfile
+
+// ErasureCodingConfig is an alias for ErasureCodingProfile.
+type ErasureCodingConfig = ErasureCodingProfile
+
 // VolumeMeta stores metadata about a provisioned volume.
 type VolumeMeta struct {
 	VolumeID  string   `json:"volumeID"`
@@ -23,8 +38,8 @@ type VolumeMeta struct {
 	SizeBytes uint64   `json:"sizeBytes"`
 	ChunkIDs  []string `json:"chunkIDs"`
 
-	// DataProtection stores the replication factor for this volume.
-	DataProtection *DataProtection `json:"dataProtection,omitempty"`
+	// DataProtection specifies how the volume's data is protected.
+	DataProtection *DataProtectionConfig `json:"dataProtection,omitempty"`
 
 	// NVMe-oF target fields populated by the CSI controller after target creation.
 	TargetNodeID  string `json:"targetNodeID,omitempty"`
@@ -37,15 +52,6 @@ type VolumeMeta struct {
 
 	// ComplianceInfo tracks the current compliance state of this volume.
 	ComplianceInfo *ComplianceInfo `json:"complianceInfo,omitempty"`
-}
-
-// DataProtection describes how data is protected for a volume.
-type DataProtection struct {
-	// Mode is the protection mode: "replication" or "erasureCoding".
-	Mode string `json:"mode"`
-
-	// ReplicationFactor is the number of replicas (1-5).
-	ReplicationFactor int `json:"replicationFactor,omitempty"`
 }
 
 type PlacementMap struct {

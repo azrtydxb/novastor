@@ -24,14 +24,6 @@ const (
 	// defaultVolumeSize is the fallback volume size when none is requested.
 	defaultVolumeSize uint64 = 1 * 1024 * 1024 * 1024 // 1 GiB
 
-	// StorageClass parameter keys.
-	paramReplicas     = "replicas"
-	paramDataShards   = "dataShards"
-	paramParityShards = "parityShards"
-
-	// Default protection settings.
-	defaultReplicas = 1
-
 	// TopologyDomain is the topology key used for segment topology.
 	// It enables WaitForFirstConsumer binding mode for data locality.
 	TopologyDomain = "novastor.io/node"
@@ -121,7 +113,7 @@ type protectionConfig struct {
 // Returns default configuration (1 replica, no erasure coding) if no parameters are specified.
 func parseProtectionParams(params map[string]string) protectionConfig {
 	cfg := protectionConfig{
-		replicas: defaultReplicas,
+		replicas: defaultReplicationFactor,
 	}
 
 	if params == nil {
@@ -281,8 +273,12 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Error(codes.InvalidArgument, "volume name is required")
 	}
 
-	// Parse protection parameters from StorageClass.
-	protCfg := parseProtectionParams(req.GetParameters())
+	// Parse and validate protection parameters from StorageClass.
+	protParams, err := ParseProtectionParams(req.GetParameters())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid protection parameters: %s", err)
+	}
+	protCfg := protParams.toProtectionConfig()
 
 	// Determine requested capacity.
 	requiredBytes := defaultVolumeSize
@@ -338,11 +334,13 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		chunkIDs[i] = fmt.Sprintf("%s-chunk-%04d", volumeID, i)
 	}
 
+	profile := protCfg.toProtectionProfile()
 	vm := &metadata.VolumeMeta{
 		VolumeID:          volumeID,
 		SizeBytes:         requiredBytes,
 		ChunkIDs:          chunkIDs,
-		ProtectionProfile: protCfg.toProtectionProfile(),
+		ProtectionProfile: profile,
+		DataProtection:    profile, // Same type, just different naming for backward compatibility
 	}
 
 	// Write placement maps for each chunk with multiple nodes for protection.
