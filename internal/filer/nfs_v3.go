@@ -274,6 +274,12 @@ func inodeToFtype3(t InodeType) uint32 {
 		return nf3Dir
 	case TypeSymlink:
 		return nf3Lnk
+	case TypeCharDev:
+		return nf3Chr
+	case TypeBlockDev:
+		return nf3Blk
+	case TypeFIFO:
+		return nf3FIFO
 	default:
 		return nf3Reg
 	}
@@ -295,9 +301,9 @@ func (n *nfsV3Handler) writeFattr3(w *xdrWriter, meta *InodeMeta) {
 	w.writeUint64(uint64(meta.Size))
 	// used3 (uint64) - disk space used; approximate as size
 	w.writeUint64(uint64(meta.Size))
-	// specdata3 (2 x uint32) - for block/char devices
-	w.writeUint32(0)
-	w.writeUint32(0)
+	// specdata3 (2 x uint32) - for block/char devices (major, minor)
+	w.writeUint32(meta.DeviceMajor)
+	w.writeUint32(meta.DeviceMinor)
 	// fsid3 (uint64)
 	w.writeUint64(1) // single filesystem
 	// fileid3 (uint64) - inode number
@@ -881,9 +887,98 @@ func (n *nfsV3Handler) handleSymlink(ctx context.Context, payload []byte) ([]byt
 	return w.Bytes(), nil
 }
 
-func (n *nfsV3Handler) handleMknod(_ context.Context, _ []byte) ([]byte, error) {
-	// MKNOD is for creating special device files; not supported.
-	return nfsErrorReplyWcc(nfs3ErrNotDir), nil
+func (n *nfsV3Handler) handleMknod(ctx context.Context, payload []byte) ([]byte, error) {
+	r := newXDRReader(payload)
+	parentIno, _, err := n.resolveHandle(r)
+	if err != nil {
+		return nfsErrorReplyWcc(nfs3ErrStale), nil
+	}
+	name, err := r.readString()
+	if err != nil {
+		return nfsErrorReplyWcc(nfs3ErrInval), nil
+	}
+
+	// Read ftype3 (file type: char, block, fifo, etc.)
+	ftype, err := r.readUint32()
+	if err != nil {
+		return nfsErrorReplyWcc(nfs3ErrInval), nil
+	}
+
+	// Read sattr3 (settable attributes)
+	mode, _, _, _, sErr := readSattr3(r)
+	if sErr != nil {
+		return nfsErrorReplyWcc(nfs3ErrInval), nil
+	}
+
+	var fileMode uint32 = 0644
+	if mode != nil {
+		fileMode = *mode
+	}
+
+	// Determine device type and major/minor numbers
+	var devType InodeType
+	var major, minor uint32
+
+	switch ftype {
+	case nf3Chr:
+		devType = TypeCharDev
+		// Read specdata3 (major, minor)
+		major, err = r.readUint32()
+		if err != nil {
+			return nfsErrorReplyWcc(nfs3ErrInval), nil
+		}
+		minor, err = r.readUint32()
+		if err != nil {
+			return nfsErrorReplyWcc(nfs3ErrInval), nil
+		}
+	case nf3Blk:
+		devType = TypeBlockDev
+		// Read specdata3 (major, minor)
+		major, err = r.readUint32()
+		if err != nil {
+			return nfsErrorReplyWcc(nfs3ErrInval), nil
+		}
+		minor, err = r.readUint32()
+		if err != nil {
+			return nfsErrorReplyWcc(nfs3ErrInval), nil
+		}
+	case nf3FIFO:
+		devType = TypeFIFO
+		// FIFOs have no specdata
+	default:
+		// Other types (socket, reg) not supported via MKNOD
+		return nfsErrorReplyWcc(nfs3ErrInval), nil
+	}
+
+	dirBefore, _ := n.fs.Stat(ctx, parentIno)
+	var beforeCp *InodeMeta
+	if dirBefore != nil {
+		cp := *dirBefore
+		beforeCp = &cp
+	}
+
+	meta, err := n.fs.Mknod(ctx, parentIno, name, fileMode, devType, major, minor)
+	if err != nil {
+		logging.L.Error("nfs: mknod failed", zap.String("name", name), zap.Error(err))
+		w := newXDRWriter()
+		w.writeUint32(nfs3ErrIO)
+		n.writeWcc(w, beforeCp, dirBefore)
+		return w.Bytes(), nil
+	}
+
+	childHandle := n.handles.getOrCreateHandle(meta.Ino)
+	dirAfter, _ := n.fs.Stat(ctx, parentIno)
+
+	w := newXDRWriter()
+	w.writeUint32(nfs3OK)
+	// post_op_fh3
+	w.writeBool(true)
+	w.writeOpaque(childHandle)
+	// post_op_attr
+	n.writePostOpAttr(w, meta)
+	// dir_wcc
+	n.writeWcc(w, beforeCp, dirAfter)
+	return w.Bytes(), nil
 }
 
 func (n *nfsV3Handler) handleRemove(ctx context.Context, payload []byte) ([]byte, error) {
