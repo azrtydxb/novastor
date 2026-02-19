@@ -43,6 +43,7 @@ func (a *MetadataAdapter) GetBucket(ctx context.Context, name string) (*BucketIn
 		CreationDate: bm.CreationDate,
 		Versioning:   bm.Versioning,
 		Owner:        bm.Owner,
+		MaxSize:      bm.MaxSize,
 	}, nil
 }
 

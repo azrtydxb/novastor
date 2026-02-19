@@ -40,6 +40,16 @@ type MetadataStore interface {
 	DeletePlacementMap(ctx context.Context, chunkID string) error
 }
 
+// QuotaChecker defines the interface for checking storage quotas.
+type QuotaChecker interface {
+	// CheckStorageQuota checks if a storage allocation would exceed the quota.
+	CheckStorageQuota(ctx context.Context, scope metadata.QuotaScope, requestedBytes int64) error
+	// ReserveStorage reserves storage capacity for a scope.
+	ReserveStorage(ctx context.Context, scope metadata.QuotaScope, bytes int64) error
+	// ReleaseStorage releases storage capacity for a scope.
+	ReleaseStorage(ctx context.Context, scope metadata.QuotaScope, bytes int64) error
+}
+
 // NodeMetaStore provides access to node metadata for capacity calculations.
 type NodeMetaStore interface {
 	// ListLiveNodeMetas returns nodes that have sent a heartbeat within the TTL.
@@ -67,25 +77,29 @@ type ControllerServer struct {
 	nodeMeta    NodeMetaStore
 	placer      PlacementEngine
 	agentTarget AgentTargetClient
+	quota       QuotaChecker
 }
 
 // NewControllerServer creates a ControllerServer backed by the given stores.
 // agentTarget may be nil to disable NVMe-oF target management.
-func NewControllerServer(meta MetadataStore, placer PlacementEngine, agentTarget AgentTargetClient) *ControllerServer {
+// quota may be nil to disable quota checking.
+func NewControllerServer(meta MetadataStore, placer PlacementEngine, agentTarget AgentTargetClient, quota QuotaChecker) *ControllerServer {
 	return &ControllerServer{
 		meta:        meta,
 		placer:      placer,
 		agentTarget: agentTarget,
+		quota:       quota,
 	}
 }
 
 // NewControllerServerWithNodeMeta creates a ControllerServer with node metadata support.
-func NewControllerServerWithNodeMeta(meta MetadataStore, nodeMeta NodeMetaStore, placer PlacementEngine, agentTarget AgentTargetClient) *ControllerServer {
+func NewControllerServerWithNodeMeta(meta MetadataStore, nodeMeta NodeMetaStore, placer PlacementEngine, agentTarget AgentTargetClient, quota QuotaChecker) *ControllerServer {
 	return &ControllerServer{
 		meta:        meta,
 		nodeMeta:    nodeMeta,
 		placer:      placer,
 		agentTarget: agentTarget,
+		quota:       quota,
 	}
 }
 
@@ -288,6 +302,34 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 	}
 
+	// Extract quota scope from parameters.
+	// If a namespace is specified, check namespace-level quota.
+	// If a pool is specified, check pool-level quota.
+	var quotaScopes []metadata.QuotaScope
+	if params := req.GetParameters(); params != nil {
+		if ns, ok := params["namespace"]; ok && ns != "" {
+			quotaScopes = append(quotaScopes, metadata.QuotaScope{Kind: "Namespace", Name: ns})
+		}
+		if pool, ok := params["storagePool"]; ok && pool != "" {
+			quotaScopes = append(quotaScopes, metadata.QuotaScope{Kind: "StoragePool", Name: pool})
+		}
+	}
+
+	// Check quotas before provisioning.
+	if cs.quota != nil {
+		for _, scope := range quotaScopes {
+			if err := cs.quota.CheckStorageQuota(ctx, scope, int64(requiredBytes)); err != nil {
+				quotaErr, ok := err.(*metadata.QuotaError)
+				if ok {
+					return nil, status.Errorf(codes.ResourceExhausted,
+						"quota exceeded for %s: requested %d bytes, limit %d bytes, used %d bytes",
+						scope.String(), quotaErr.Requested, quotaErr.Limit, quotaErr.Used)
+				}
+				return nil, status.Errorf(codes.Internal, "quota check failed: %v", err)
+			}
+		}
+	}
+
 	// Calculate chunk count (round up).
 	chunkCount := int((requiredBytes + chunkSize - 1) / chunkSize)
 
@@ -341,6 +383,13 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		ChunkIDs:          chunkIDs,
 		ProtectionProfile: profile,
 		DataProtection:    profile, // Same type, just different naming for backward compatibility
+	}
+
+	// Store the pool in the volume metadata for quota tracking.
+	if params := req.GetParameters(); params != nil {
+		if pool, ok := params["storagePool"]; ok {
+			vm.Pool = pool
+		}
 	}
 
 	// Write placement maps for each chunk with multiple nodes for protection.
@@ -410,6 +459,21 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// This informs the Kubernetes scheduler where the volume is reachable.
 	accessibleTopology := buildVolumeTopology(nodeIDs)
 
+	// Reserve quota for the volume after successful creation.
+	if cs.quota != nil {
+		for _, scope := range quotaScopes {
+			if err := cs.quota.ReserveStorage(ctx, scope, int64(requiredBytes)); err != nil {
+				// Log but don't fail - the volume was created successfully.
+				// This may cause quota tracking to be slightly off, but prevents
+				// leaving the volume in an inconsistent state.
+				logging.L.Warn("failed to reserve quota after volume creation (volume created but quota not updated)",
+					zap.String("volumeID", volumeID),
+					zap.String("scope", scope.String()),
+					zap.Error(err))
+			}
+		}
+	}
+
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
 			VolumeId:           volumeID,
@@ -438,6 +502,14 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
+	// Determine the quota scopes for this volume based on its metadata.
+	var quotaScopes []metadata.QuotaScope
+	if vm.Pool != "" {
+		quotaScopes = append(quotaScopes, metadata.QuotaScope{Kind: "StoragePool", Name: vm.Pool})
+	}
+	// If the volume has a namespace annotation (stored in volume context), include it.
+	// For now, we only track pool-level quota in volume metadata.
+
 	// Tear down NVMe-oF target before removing metadata (best-effort).
 	// If the target deletion fails (e.g., agent unreachable), we still proceed
 	// with metadata cleanup to avoid blocking volume deletion on retries.
@@ -465,6 +537,19 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 
 	if err := cs.meta.DeleteVolumeMeta(ctx, volumeID); err != nil {
 		return nil, status.Errorf(codes.Internal, "deleting volume metadata: %v", err)
+	}
+
+	// Release quota for the deleted volume.
+	if cs.quota != nil {
+		for _, scope := range quotaScopes {
+			if err := cs.quota.ReleaseStorage(ctx, scope, int64(vm.SizeBytes)); err != nil {
+				// Log but don't fail - the volume was deleted successfully.
+				logging.L.Warn("failed to release quota after volume deletion (volume deleted but quota not updated)",
+					zap.String("volumeID", volumeID),
+					zap.String("scope", scope.String()),
+					zap.Error(err))
+			}
+		}
 	}
 
 	return &csi.DeleteVolumeResponse{}, nil

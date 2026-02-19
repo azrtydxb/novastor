@@ -22,6 +22,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&SharedFilesystemList{},
 		&ObjectStore{},
 		&ObjectStoreList{},
+		&StorageQuota{},
+		&StorageQuotaList{},
 	)
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil

@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	opPut    = "put"
-	opDelete = "delete"
+	opPut       = "put"
+	opDelete    = "delete"
+	opAddQuota  = "addQuota"
+	opSubQuota  = "subQuota"
 
 	bucketVolumes           = "volumes"
 	bucketPlacements        = "placements"
@@ -27,6 +29,8 @@ const (
 	bucketHealTasks         = "healTasks"
 	bucketChunkHealLocks    = "chunkHealLocks"
 	bucketLocks             = "locks" // File lock leases
+	bucketQuotas            = "quotas"
+	bucketUsage             = "usage"
 )
 
 // MetadataFSM defines the interface that both the in-memory FSM and the
@@ -71,6 +75,8 @@ func NewFSM() *FSM {
 			bucketHealTasks:         {},
 			bucketChunkHealLocks:    {},
 			bucketLocks:             {},
+			bucketQuotas:            {},
+			bucketUsage:             {},
 			"nodes":                 {},
 			"inodes":                {},
 			"dirents":               {},
@@ -100,6 +106,46 @@ func (f *FSM) Apply(log *raft.Log) interface{} {
 		bucket[op.Key] = op.Value
 	case opDelete:
 		delete(bucket, op.Key)
+	case opAddQuota:
+		// AddQu atomically adds a delta to a usage counter.
+		// The value is the delta to add (may be negative for subtraction).
+		var delta int64
+		if err := json.Unmarshal(op.Value, &delta); err != nil {
+			return fmt.Errorf("unmarshaling quota delta: %w", err)
+		}
+		current := int64(0)
+		if existing, ok := bucket[op.Key]; ok {
+			if err := json.Unmarshal(existing, &current); err != nil {
+				return fmt.Errorf("unmarshaling current usage: %w", err)
+			}
+		}
+		newVal := current + delta
+		// Prevent underflow
+		if newVal < 0 {
+			newVal = 0
+		}
+		updated, _ := json.Marshal(newVal)
+		bucket[op.Key] = updated
+	case opSubQuota:
+		// SubQu atomically subtracts a delta from a usage counter.
+		// This is an alias for AddQuota with a negative delta for clarity.
+		var delta int64
+		if err := json.Unmarshal(op.Value, &delta); err != nil {
+			return fmt.Errorf("unmarshaling quota delta: %w", err)
+		}
+		current := int64(0)
+		if existing, ok := bucket[op.Key]; ok {
+			if err := json.Unmarshal(existing, &current); err != nil {
+				return fmt.Errorf("unmarshaling current usage: %w", err)
+			}
+		}
+		newVal := current - delta
+		// Prevent underflow
+		if newVal < 0 {
+			newVal = 0
+		}
+		updated, _ := json.Marshal(newVal)
+		bucket[op.Key] = updated
 	default:
 		return fmt.Errorf("unknown op: %s", op.Op)
 	}
