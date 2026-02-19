@@ -16,16 +16,17 @@ const (
 	opPut    = "put"
 	opDelete = "delete"
 
-	bucketVolumes         = "volumes"
-	bucketPlacements      = "placements"
-	bucketObjects         = "objects"
-	bucketBuckets         = "buckets" // S3 buckets, not FSM buckets
-	bucketMultipart       = "multipart"
-	bucketSnapshots       = "snapshots"
-	bucketShardPlacements = "shardPlacements"
-	bucketVolumeCompliance = "volumeCompliance"
-	bucketHealTasks       = "healTasks"
-	bucketChunkHealLocks  = "chunkHealLocks"
+	bucketVolumes           = "volumes"
+	bucketPlacements        = "placements"
+	bucketObjects           = "objects"
+	bucketBuckets           = "buckets" // S3 buckets, not FSM buckets
+	bucketMultipart         = "multipart"
+	bucketSnapshots         = "snapshots"
+	bucketShardPlacements   = "shardPlacements"
+	bucketVolumeCompliance  = "volumeCompliance"
+	bucketHealTasks         = "healTasks"
+	bucketChunkHealLocks    = "chunkHealLocks"
+	bucketLocks             = "locks" // File lock leases
 )
 
 // MetadataFSM defines the interface that both the in-memory FSM and the
@@ -59,19 +60,20 @@ var _ MetadataFSM = (*FSM)(nil)
 func NewFSM() *FSM {
 	return &FSM{
 		buckets: map[string]map[string][]byte{
-			bucketVolumes:          {},
-			bucketPlacements:       {},
-			bucketObjects:          {},
-			bucketBuckets:          {},
-			bucketMultipart:        {},
-			bucketSnapshots:        {},
-			bucketShardPlacements:  {},
-			bucketVolumeCompliance: {},
-			bucketHealTasks:        {},
-			bucketChunkHealLocks:   {},
-			"nodes":                {},
-			"inodes":               {},
-			"dirents":              {},
+			bucketVolumes:           {},
+			bucketPlacements:        {},
+			bucketObjects:           {},
+			bucketBuckets:           {},
+			bucketMultipart:         {},
+			bucketSnapshots:         {},
+			bucketShardPlacements:   {},
+			bucketVolumeCompliance:  {},
+			bucketHealTasks:         {},
+			bucketChunkHealLocks:    {},
+			bucketLocks:             {},
+			"nodes":                 {},
+			"inodes":                {},
+			"dirents":               {},
 		},
 	}
 }
