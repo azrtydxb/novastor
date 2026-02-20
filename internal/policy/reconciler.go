@@ -8,7 +8,7 @@ import (
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 
 	"github.com/piwi3910/novastor/api/v1alpha1"
 	"github.com/piwi3910/novastor/internal/logging"
@@ -21,7 +21,7 @@ type Reconciler struct {
 	poolLookup      PoolLookup
 	chunkReplicator ChunkReplicator
 	shardReplicator ShardReplicator
-	eventRecorder   record.EventRecorder
+	eventRecorder   events.EventRecorder
 
 	mu               sync.Mutex
 	maxConcurrent    int
@@ -79,7 +79,7 @@ func (r *Reconciler) SetShardReplicator(replicator ShardReplicator) {
 }
 
 // SetEventRecorder sets the Kubernetes event recorder for emitting events.
-func (r *Reconciler) SetEventRecorder(recorder record.EventRecorder) {
+func (r *Reconciler) SetEventRecorder(recorder events.EventRecorder) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.eventRecorder = recorder
@@ -465,7 +465,7 @@ func (r *Reconciler) emitHealingTaskEvent(task RepairTask) {
 	message := fmt.Sprintf("Healing task created for chunk %s (volume: %s, mode: %s, status: %s)",
 		task.ChunkID, task.VolumeID, task.ProtectionMode, task.Status)
 
-	recorder.Event(pool, corev1.EventTypeNormal, "HealingTaskCreated", message)
+	recorder.Eventf(pool, nil, corev1.EventTypeNormal, "HealingTaskCreated", "CreateHealingTask", message)
 }
 
 // emitRepairCompletedEvent emits an event when a repair completes successfully.
@@ -484,7 +484,7 @@ func (r *Reconciler) emitRepairCompletedEvent(task RepairTask) {
 
 	message := fmt.Sprintf("Repair completed for chunk %s (volume: %s)", task.ChunkID, task.VolumeID)
 
-	recorder.Event(pool, corev1.EventTypeNormal, "HealingCompleted", message)
+	recorder.Eventf(pool, nil, corev1.EventTypeNormal, "HealingCompleted", "CompleteRepair", message)
 }
 
 // emitRepairFailedEvent emits an event when a repair fails.
@@ -503,5 +503,5 @@ func (r *Reconciler) emitRepairFailedEvent(task RepairTask, err error) {
 
 	message := fmt.Sprintf("Repair failed for chunk %s (volume: %s): %v", task.ChunkID, task.VolumeID, err)
 
-	recorder.Event(pool, corev1.EventTypeWarning, "HealingFailed", message)
+	recorder.Eventf(pool, nil, corev1.EventTypeWarning, "HealingFailed", "FailRepair", message)
 }

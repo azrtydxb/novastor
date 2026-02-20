@@ -214,7 +214,7 @@ func main() {
 	}
 
 	// Create event recorder for policy engine.
-	eventRecorder := mgr.GetEventRecorderFor("policy-engine")
+	eventRecorder := mgr.GetEventRecorder("policy-engine")
 
 	// Register controllers.
 	if err := (&controller.StoragePoolReconciler{

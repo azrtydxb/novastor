@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 )
 
 // PolicyEngineRunnable wraps the policy engine and reconciler as a controller-runtime Runnable.
@@ -20,7 +20,7 @@ type PolicyEngineRunnable struct {
 	metrics       *MetricsReporter
 	scanInterval  time.Duration
 	repairEnabled bool
-	eventRecorder record.EventRecorder
+	eventRecorder events.EventRecorder
 }
 
 // NewPolicyEngineRunnable creates a new PolicyEngineRunnable.
@@ -30,7 +30,7 @@ func NewPolicyEngineRunnable(
 	nodeChecker NodeAvailabilityChecker,
 	chunkReplicator ChunkReplicator,
 	shardReplicator ShardReplicator,
-	eventRecorder record.EventRecorder,
+	eventRecorder events.EventRecorder,
 	scanInterval time.Duration,
 	repairEnabled bool,
 ) *PolicyEngineRunnable {
@@ -208,5 +208,5 @@ func (r *PolicyEngineRunnable) emitComplianceEvent(poolName string, report *Pool
 	message := fmt.Sprintf("Pool compliance check failed: %d under-replicated, %d unavailable, %d corrupted chunks",
 		report.UnderReplicatedChunks, report.UnavailableChunks, report.CorruptedChunks)
 
-	r.eventRecorder.Event(pool, corev1.EventTypeWarning, "ComplianceCheckFailed", message)
+	r.eventRecorder.Eventf(pool, nil, corev1.EventTypeWarning, "ComplianceCheckFailed", "CheckCompliance", message)
 }
