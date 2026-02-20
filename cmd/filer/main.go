@@ -160,8 +160,7 @@ func main() {
 
 // runNFSServer starts and manages the NFS server.
 func runNFSServer(ctx context.Context, fs *filer.FileSystem, listenAddr string, stop chan os.Signal) {
-	locker := filer.NewLockManager()
-	nfsSrv := filer.NewNFSServer(fs, locker)
+	nfsSrv := filer.NewNFSServer(fs)
 
 	go func() {
 		if err := nfsSrv.Serve(ctx, listenAddr); err != nil {

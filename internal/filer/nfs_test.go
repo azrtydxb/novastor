@@ -190,7 +190,7 @@ func readFull(r net.Conn, buf []byte) (int, error) {
 
 func startTestServer(t *testing.T) (*NFSServer, net.Addr) {
 	t.Helper()
-	srv := NewNFSServer(&stubNFSHandler{}, nil)
+	srv := NewNFSServer(&stubNFSHandler{})
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
@@ -210,7 +210,7 @@ func startTestServer(t *testing.T) (*NFSServer, net.Addr) {
 }
 
 func TestNFSServer_StartStop(t *testing.T) {
-	srv := NewNFSServer(&stubNFSHandler{}, nil)
+	srv := NewNFSServer(&stubNFSHandler{})
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -243,7 +243,7 @@ func TestNFSServer_StartStop(t *testing.T) {
 }
 
 func TestNFSServer_AcceptConnection(t *testing.T) {
-	srv := NewNFSServer(&stubNFSHandler{}, nil)
+	srv := NewNFSServer(&stubNFSHandler{})
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -2022,7 +2022,7 @@ func TestNFSServer_SetattrTruncateToZero(t *testing.T) {
 	// Pre-populate a file with content
 	handler.files[2] = []byte("hello world, this is some data")
 
-	srv := NewNFSServer(handler, nil)
+	srv := NewNFSServer(handler)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
@@ -2095,7 +2095,7 @@ func TestNFSServer_SetattrTruncateSmaller(t *testing.T) {
 	// Pre-populate a file with content
 	handler.files[2] = []byte("hello world, this is some data") // 31 bytes
 
-	srv := NewNFSServer(handler, nil)
+	srv := NewNFSServer(handler)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
@@ -2172,7 +2172,7 @@ func TestNFSServer_SetattrTruncateLarger(t *testing.T) {
 	// Pre-populate a file with content
 	handler.files[2] = []byte("hello") // 5 bytes
 
-	srv := NewNFSServer(handler, nil)
+	srv := NewNFSServer(handler)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
@@ -2253,7 +2253,7 @@ func TestNFSServer_SetattrTruncateWithMode(t *testing.T) {
 	handler := newTruncationTestHandler()
 	handler.files[2] = []byte("hello world") // 11 bytes
 
-	srv := NewNFSServer(handler, nil)
+	srv := NewNFSServer(handler)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")
@@ -2325,7 +2325,7 @@ func TestNFSServer_SetattrTruncateWithMode(t *testing.T) {
 func TestNFSServer_SetattrTruncateDirectory(t *testing.T) {
 	handler := newTruncationTestHandler()
 
-	srv := NewNFSServer(handler, nil)
+	srv := NewNFSServer(handler)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.Serve(context.Background(), "127.0.0.1:0")

@@ -39,7 +39,6 @@ type NFSHandler interface {
 // user-space NFS servers.
 type NFSServer struct {
 	handler    NFSHandler
-	locker     *LockManager
 	handles    *handleManager
 	dispatcher *rpcDispatcher
 	mu         sync.Mutex
@@ -48,21 +47,22 @@ type NFSServer struct {
 	exportPath string
 }
 
-// NewNFSServer creates a new NFSServer with the given handler and lock manager.
+// NewNFSServer creates a new NFSServer with the given handler.
 // The server supports NFS v3 and MOUNT v3 protocols over a single TCP listener.
-func NewNFSServer(handler NFSHandler, locker *LockManager) *NFSServer {
+// Note: NFS v3 does not include lock procedures (locking is handled by the
+// separate NLM protocol), so no LockManager is needed here.
+func NewNFSServer(handler NFSHandler) *NFSServer {
 	handles := newHandleManager()
 	dispatcher := newRPCDispatcher()
 
 	mountH := newMountHandler(handles, "/")
-	nfsH := newNFSV3Handler(handler, handles, locker)
+	nfsH := newNFSV3Handler(handler, handles)
 
 	dispatcher.register(mountH)
 	dispatcher.register(nfsH)
 
 	return &NFSServer{
 		handler:    handler,
-		locker:     locker,
 		handles:    handles,
 		dispatcher: dispatcher,
 		exportPath: "/",
