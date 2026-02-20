@@ -135,12 +135,12 @@ func generateSecretManifest(caCert, caKey, serverCert, serverKey, clientCert, cl
 	buf.WriteString("  namespace: novastor\n")
 	buf.WriteString("type: Opaque\n")
 	buf.WriteString("data:\n")
-	buf.WriteString(fmt.Sprintf("  ca.crt: %s\n", bytesToBase64(caCert)))
-	buf.WriteString(fmt.Sprintf("  ca.key: %s\n", bytesToBase64(caKey)))
-	buf.WriteString(fmt.Sprintf("  server.crt: %s\n", bytesToBase64(serverCert)))
-	buf.WriteString(fmt.Sprintf("  server.key: %s\n", bytesToBase64(serverKey)))
-	buf.WriteString(fmt.Sprintf("  client.crt: %s\n", bytesToBase64(clientCert)))
-	buf.WriteString(fmt.Sprintf("  client.key: %s\n", bytesToBase64(clientKey)))
+	fmt.Fprintf(&buf, "  ca.crt: %s\n", bytesToBase64(caCert))
+	fmt.Fprintf(&buf, "  ca.key: %s\n", bytesToBase64(caKey))
+	fmt.Fprintf(&buf, "  server.crt: %s\n", bytesToBase64(serverCert))
+	fmt.Fprintf(&buf, "  server.key: %s\n", bytesToBase64(serverKey))
+	fmt.Fprintf(&buf, "  client.crt: %s\n", bytesToBase64(clientCert))
+	fmt.Fprintf(&buf, "  client.key: %s\n", bytesToBase64(clientKey))
 	return buf.String(), nil
 }
 
