@@ -5,7 +5,7 @@ crds:
 
 global:
   image:
-    registry: ghcr.io/piwi3910
+    registry: ghcr.io/piwi3910/novastor
     tag: "0.1.0"
     pullPolicy: IfNotPresent
   imagePullSecrets: []
@@ -18,7 +18,7 @@ global:
     # Uses the main controller image by default which includes the
     # certificate generation logic from internal/transport/certgen.go.
     bootstrapImage:
-      registry: ghcr.io/piwi3910
+      registry: ghcr.io/piwi3910/novastor
       repository: novastor-controller
       tag: "0.1.0"
     # rotationInterval -- Interval for certificate rotation checks.
@@ -28,7 +28,19 @@ global:
     # ca -- Pre-existing CA certificate and key. If provided, these will be
     # used instead of generating a new CA. Set this to null to enable
     # automatic CA generation.
+    # externalSecret -- Set to true if you manage the TLS secret externally
+    # (e.g. created manually or via cert-manager). When true, the chart
+    # will not create the novastor-tls-certs Secret.
+    externalSecret: false
     ca:
+      certPEM: null
+      keyPEM: null
+    # server -- Pre-existing server certificate and key for gRPC endpoints.
+    server:
+      certPEM: null
+      keyPEM: null
+    # client -- Pre-existing client certificate and key for gRPC clients.
+    client:
       certPEM: null
       keyPEM: null
 

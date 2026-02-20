@@ -45,14 +45,14 @@ spec:
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.filer.image.repository }}:{{ include "novastor.imageTag" . }}"
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           args:
-            - --listen=:2049
-            - --metrics-addr=:8080
-            - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+            - -nfs-listen=:2049
+            - -metrics-addr=:8080
+            - -meta-addr={{ include "novastor.fullname" . }}-meta:7001
             {{- if include "novastor.tls.enabled" . }}
-            - --tls-ca={{ include "novastor.tls.caPath" . }}
-            - --tls-cert={{ include "novastor.tls.clientCertPath" . }}
-            - --tls-key={{ include "novastor.tls.clientKeyPath" . }}
-            - --tls-rotation-interval={{ .Values.global.tls.rotationInterval }}
+            - -tls-ca={{ include "novastor.tls.caPath" . }}
+            - -tls-cert={{ include "novastor.tls.clientCertPath" . }}
+            - -tls-key={{ include "novastor.tls.clientKeyPath" . }}
+            - -tls-rotation-interval={{ .Values.global.tls.rotationInterval }}
             {{- end }}
           ports:
             - name: nfs
@@ -86,7 +86,7 @@ spec:
         - name: tls-certs
           secret:
             secretName: {{ include "novastor.tls.volumeName" . }}
-            defaultMode: 0o400
+            defaultMode: 0o444
         {{- end }}
       {{- with .Values.filer.nodeSelector }}
       nodeSelector:

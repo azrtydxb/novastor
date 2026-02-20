@@ -64,12 +64,15 @@ spec:
           args:
             - --listen=0.0.0.0:9100
             - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+            - --node-id=$(NODE_NAME)
             - --host-ip=$(HOST_IP)
             - --pod-ip=$(POD_IP)
             {{- if include "novastor.tls.enabled" . }}
             - --tls-ca={{ include "novastor.tls.caPath" . }}
             - --tls-cert={{ include "novastor.tls.serverCertPath" . }}
             - --tls-key={{ include "novastor.tls.serverKeyPath" . }}
+            - --tls-client-cert={{ include "novastor.tls.clientCertPath" . }}
+            - --tls-client-key={{ include "novastor.tls.clientKeyPath" . }}
             - --tls-rotation-interval={{ .Values.global.tls.rotationInterval }}
             {{- end }}
           securityContext:
@@ -149,7 +152,7 @@ spec:
         - name: tls-certs
           secret:
             secretName: {{ include "novastor.tls.volumeName" . }}
-            defaultMode: 0o400
+            defaultMode: 0o444
         {{- end }}
       {{- with .Values.agent.nodeSelector }}
       nodeSelector:
