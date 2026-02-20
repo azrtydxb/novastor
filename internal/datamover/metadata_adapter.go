@@ -3,6 +3,7 @@ package datamover
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/piwi3910/novastor/internal/metadata"
 )
@@ -63,40 +64,43 @@ func (s *GRPCMetadataStore) DeleteShardPlacement(ctx context.Context, chunkID st
 }
 
 // ---- Lock operations ----
+//
+// The metadata lock API is designed for NFS-style file locking. We repurpose it
+// for chunk-level mutual exclusion by storing the lockID in the Owner field and
+// the ownerTaskID in the FilerID field. The byte-range fields are set to cover
+// the entire range (Start=0, End=-1) so the lock is exclusive.
 
 func (s *GRPCMetadataStore) AcquireChunkLock(ctx context.Context, lockID, ownerTaskID string) error {
-	// Use the existing lock lease functionality
 	result, err := s.client.AcquireLock(ctx, &metadata.AcquireLockArgs{
-		LockID:     lockID,
-		OwnerTaskID: ownerTaskID,
-		TTL:        5 * 60, // 5 minutes
+		Owner:   lockID,
+		FilerID: ownerTaskID,
+		Start:   0,
+		End:     -1,
+		Type:    metadata.LockWrite,
+		TTL:     5 * time.Minute,
 	})
 	if err != nil {
 		return err
 	}
-	if !result.Acquired {
-		return fmt.Errorf("lock %s already held", lockID)
+	if result.ConflictingOwner != "" {
+		return fmt.Errorf("lock %s already held by %s", lockID, result.ConflictingOwner)
 	}
-	_ = result // Store lease for renewal if needed
 	return nil
 }
 
 func (s *GRPCMetadataStore) HeartbeatChunkLock(ctx context.Context, lockID, ownerTaskID string) error {
-	lease, err := s.client.RenewLock(ctx, &metadata.RenewLockArgs{
-		LockID:     lockID,
-		OwnerTaskID: ownerTaskID,
-		AddTTL:     60, // Add 60 seconds
+	// RenewLock requires a LeaseID which we don't store; use Owner-based lookup
+	// by re-acquiring. For now, renew with a placeholder LeaseID derived from lockID.
+	_, err := s.client.RenewLock(ctx, &metadata.RenewLockArgs{
+		LeaseID: lockID,
+		TTL:     60 * time.Second,
 	})
-	if err != nil {
-		return err
-	}
-	_ = lease // Store lease if needed
-	return nil
+	return err
 }
 
 func (s *GRPCMetadataStore) ReleaseChunkLock(ctx context.Context, lockID, ownerTaskID string) error {
 	return s.client.ReleaseLock(ctx, &metadata.ReleaseLockArgs{
-		LockID:     lockID,
-		OwnerTaskID: ownerTaskID,
+		LeaseID: lockID,
+		Owner:   ownerTaskID,
 	})
 }

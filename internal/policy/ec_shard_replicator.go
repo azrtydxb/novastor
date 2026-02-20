@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/piwi3910/novastor/internal/chunk"
 	"github.com/piwi3910/novastor/internal/datamover"
 	"github.com/piwi3910/novastor/internal/metadata"
 )
@@ -12,9 +11,9 @@ import (
 // ECShardReplicator implements the policy.ShardReplicator interface using
 // the datamover package's EC reconstruction functionality.
 type ECShardReplicator struct {
-	metaStore    datamover.MetadataStore
-	agentClient  datamover.AgentClient
-	ecFactory    datamover.ErasureCoderFactory
+	metaStore   datamover.MetadataStore
+	agentClient datamover.AgentClient
+	ecFactory   datamover.ErasureCoderFactory
 }
 
 // NewECShardReplicator creates a new shard replicator for erasure-coded chunks.
@@ -126,10 +125,9 @@ func (r *ECShardReplicator) RegenerateShard(
 
 	// Create new shard placement metadata
 	newPlacement := &metadata.ShardPlacement{
-		ChunkID:   chunkID,
+		ChunkID:    chunkID,
 		ShardIndex: missingShardIndex,
 		NodeID:     destNode,
-		State:      metadata.ShardStateHealthy,
 	}
 
 	// Add shard placement to metadata
