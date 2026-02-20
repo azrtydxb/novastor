@@ -54,6 +54,23 @@ issues:
     - path: internal/filer/nfs_mount\.go
       linters:
         - nilerr
+    # Disable exported-type-stutter and var-naming for specific packages
+    - path: internal/chunk/
+      linters:
+        - revive
+      text: "exported: type name will be used as"
+    - path: internal/metadata/
+      linters:
+        - revive
+      text: "exported: type name will be used as"
+    - path: internal/policy/
+      linters:
+        - revive
+      text: "exported: type name will be used as"
+    - path: internal/metrics/
+      linters:
+        - revive
+      text: "var-naming: avoid package names that conflict"
   settings:
     staticcheck:
       checks:
@@ -78,5 +95,3 @@ issues:
         - name: superfluous-else
         - name: unreachable-code
         - name: redefines-builtin-id
-      disable:
-        - exported-type-stutter # Accept package-prefixed type names for clarity
