@@ -31,7 +31,7 @@ func TestQuotaReconcile_Initialization(t *testing.T) {
 			},
 			Storage: &v1alpha1.StorageQuotaSpecStorage{
 				Hard: 100 * 1024 * 1024 * 1024, // 100GB
-				Soft: 80 * 1024 * 1024 * 1024, // 80GB
+				Soft: 80 * 1024 * 1024 * 1024,  // 80GB
 			},
 		},
 	}

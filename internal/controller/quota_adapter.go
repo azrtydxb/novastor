@@ -78,8 +78,8 @@ func (a *LocalMetadataAdapter) SetQuota(ctx context.Context, scope QuotaScopeSpe
 	}
 
 	spec := &metadata.QuotaSpec{
-		StorageHard:    storageHard,
-		StorageSoft:    storageSoft,
+		StorageHard:     storageHard,
+		StorageSoft:     storageSoft,
 		ObjectCountHard: objectCountHard,
 	}
 
