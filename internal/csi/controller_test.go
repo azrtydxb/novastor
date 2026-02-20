@@ -967,13 +967,12 @@ func TestControllerGetCapabilities(t *testing.T) {
 	}
 
 	expected := map[csi.ControllerServiceCapability_RPC_Type]bool{
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME:         false,
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT:       false,
-		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME:                false,
-		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME:     false,
-		csi.ControllerServiceCapability_RPC_GET_CAPACITY:                 false,
-		csi.ControllerServiceCapability_RPC_LIST_VOLUMES:                 false,
-		csi.ControllerServiceCapability_RPC_LIST_VOLUMES_PUBLISHED_NODES: false,
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME:     false,
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT:   false,
+		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME:            false,
+		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME: false,
+		csi.ControllerServiceCapability_RPC_GET_CAPACITY:             false,
+		csi.ControllerServiceCapability_RPC_LIST_VOLUMES:             false,
 	}
 
 	for _, cap := range resp.GetCapabilities() {
