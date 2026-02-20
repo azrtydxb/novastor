@@ -34,13 +34,17 @@ jobs:
           kubectl cluster-info
           kubectl get nodes
 
-      - name: Generate manifests
-        run: |
-          make manifests || echo "Using existing CRD files"
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
 
       - name: Install CRDs
         run: |
-          kubectl apply -f config/crd/bases/ || echo "CRD install skipped"
+          # Render Helm chart CRDs and apply them
+          helm template novastor deploy/helm/novastor/ \
+            --set crds.install=true \
+            --show-only templates/crds.yaml | kubectl apply -f -
+          # Verify CRDs are installed
+          kubectl get crd | grep novastor
 
       - name: Create test namespace
         run: |
