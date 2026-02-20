@@ -100,15 +100,13 @@ const (
 type nfsV3Handler struct {
 	fs            NFSHandler
 	handles       *handleManager
-	locker        *LockManager
 	writeVerifier [8]byte // stable across server lifetime, changes on restart
 }
 
-func newNFSV3Handler(fs NFSHandler, handles *handleManager, locker *LockManager) *nfsV3Handler {
+func newNFSV3Handler(fs NFSHandler, handles *handleManager) *nfsV3Handler {
 	h := &nfsV3Handler{
 		fs:      fs,
 		handles: handles,
-		locker:  locker,
 	}
 	// Generate write verifier from current time (changes on each server restart).
 	now := time.Now().UnixNano()
@@ -594,11 +592,51 @@ func (n *nfsV3Handler) handleAccess(ctx context.Context, payload []byte) ([]byte
 		return nfsErrorReply(nfs3ErrIO, err), nil
 	}
 
-	// Grant all requested access (NovaStor does not enforce POSIX permissions at the NFS layer).
+	// Check file mode bits against the requested access mask.
+	// We use the owner permission bits (bits 8-6) since NFS v3 AUTH_UNIX
+	// credentials are not validated at this layer.
+	mode := meta.Mode & 0o777
+	isDir := meta.Type == TypeDir
+
+	var granted uint32
+	if accessRequested&access3Read != 0 {
+		if mode&0o400 != 0 {
+			granted |= access3Read
+		}
+	}
+	if accessRequested&access3Lookup != 0 {
+		// LOOKUP only applies to directories.
+		if isDir && mode&0o100 != 0 {
+			granted |= access3Lookup
+		}
+	}
+	if accessRequested&access3Modify != 0 {
+		if mode&0o200 != 0 {
+			granted |= access3Modify
+		}
+	}
+	if accessRequested&access3Extend != 0 {
+		if mode&0o200 != 0 {
+			granted |= access3Extend
+		}
+	}
+	if accessRequested&access3Delete != 0 {
+		// DELETE requires write permission on the parent directory, but we
+		// only have the target inode here. Grant if the target is writable.
+		if mode&0o200 != 0 {
+			granted |= access3Delete
+		}
+	}
+	if accessRequested&access3Execute != 0 {
+		if mode&0o100 != 0 {
+			granted |= access3Execute
+		}
+	}
+
 	w := newXDRWriter()
 	w.writeUint32(nfs3OK)
 	n.writePostOpAttr(w, meta)
-	w.writeUint32(accessRequested)
+	w.writeUint32(granted)
 	return w.Bytes(), nil
 }
 
@@ -696,6 +734,9 @@ func (n *nfsV3Handler) handleWrite(ctx context.Context, payload []byte) ([]byte,
 	if err != nil {
 		return nfsErrorReplyWcc(nfs3ErrInval, err), nil
 	}
+	// The stable parameter is intentionally ignored. NovaStor always writes
+	// synchronously to the chunk storage engine, so all writes are effectively
+	// FILE_SYNC regardless of the client's requested stability level.
 	_ = stable
 
 	data, err := r.readOpaque()
@@ -1482,6 +1523,10 @@ func (n *nfsV3Handler) handlePathConf(ctx context.Context, payload []byte) ([]by
 	return w.Bytes(), nil
 }
 
+// handleCommit is intentionally a no-op. Since all WRITE operations use
+// FILE_SYNC (data is committed synchronously to chunk storage), there is
+// never any unstable data to flush. The COMMIT procedure still returns
+// success with the write verifier so clients can detect server restarts.
 func (n *nfsV3Handler) handleCommit(ctx context.Context, payload []byte) ([]byte, error) {
 	r := newXDRReader(payload)
 	ino, _, err := n.resolveHandle(r)
@@ -1489,7 +1534,7 @@ func (n *nfsV3Handler) handleCommit(ctx context.Context, payload []byte) ([]byte
 		return nfsErrorReplyWcc(nfs3ErrStale, err), nil
 	}
 
-	// offset and count
+	// offset and count are unused since there is no unstable data to flush.
 	_, _ = r.readUint64()
 	_, _ = r.readUint32()
 
