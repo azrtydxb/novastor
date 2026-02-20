@@ -24,6 +24,7 @@ import (
 	novcsi "github.com/piwi3910/novastor/internal/csi"
 	"github.com/piwi3910/novastor/internal/metadata"
 	"github.com/piwi3910/novastor/internal/placement"
+	spdkPkg "github.com/piwi3910/novastor/internal/spdk"
 	"github.com/piwi3910/novastor/internal/transport"
 )
 
@@ -172,6 +173,8 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "Path to client certificate for mTLS")
 	tlsKey := flag.String("tls-key", "", "Path to client key for mTLS")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
+	dataPlane := flag.String("data-plane", "legacy", "Data plane mode: 'legacy' (kernel NVMe) or 'spdk' (SPDK user-space)")
+	spdkSocket := flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "Path to the SPDK JSON-RPC Unix socket (only used with --data-plane=spdk)")
 	flag.Parse()
 
 	log.Printf("novastor-csi %s (commit: %s, built: %s)", version, commit, date)
@@ -432,7 +435,21 @@ func main() {
 	// Register CSI Node service (requires node ID).
 	if *nodeID != "" {
 		mounter := &novcsi.RealMounter{}
-		initiator := &novcsi.LinuxInitiator{}
+
+		// Select NVMe-oF initiator based on data-plane mode.
+		var initiator novcsi.NVMeInitiator
+		if *dataPlane == "spdk" {
+			spdkClient := spdkPkg.NewClient(*spdkSocket)
+			if connErr := spdkClient.Connect(); connErr != nil {
+				log.Printf("WARNING: failed to connect to SPDK data-plane at %s: %v (falling back to kernel initiator)", *spdkSocket, connErr)
+				initiator = &novcsi.LinuxInitiator{}
+			} else {
+				initiator = novcsi.NewSPDKInitiator(spdkClient)
+				log.Printf("CSI node using SPDK initiator (socket: %s)", *spdkSocket)
+			}
+		} else {
+			initiator = &novcsi.LinuxInitiator{}
+		}
 
 		// Use topology-aware constructor if zone/region provided.
 		var node *novcsi.NodeService

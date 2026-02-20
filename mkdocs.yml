@@ -60,6 +60,7 @@ nav:
   - Architecture:
       - Overview: architecture/overview.md
       - Component Details: architecture/components.md
+      - SPDK Data Plane: architecture/spdk-dataplane.md
   - Deployment:
       - Quick Start: deployment/quickstart.md
       - File & S3 Gateway Deployment: deployment/gateway-deployment.md
