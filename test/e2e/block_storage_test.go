@@ -31,7 +31,7 @@ func TestBlockStorage_ProvisionWriteReadDelete(t *testing.T) {
 	placer := placement.NewCRUSHPlacer([]placement.Node{{ID: "node-1", Weight: 1.0}})
 
 	// Create CSI controller with real metadata client and placement engine.
-	ctrl := novacsi.NewControllerServer(tc.metaClient, placer, nil, nil)
+	ctrl := novacsi.NewControllerServer(tc.metaClient, placer, nil, nil, nil)
 
 	// Step 1: CreateVolume via CSI controller.
 	createResp, err := ctrl.CreateVolume(ctx, &csipb.CreateVolumeRequest{
@@ -166,7 +166,7 @@ func TestBlockStorage_DeleteIdempotent(t *testing.T) {
 
 	ctx := context.Background()
 	placer := placement.NewCRUSHPlacer([]placement.Node{{ID: "node-1", Weight: 1.0}})
-	ctrl := novacsi.NewControllerServer(tc.metaClient, placer, nil, nil)
+	ctrl := novacsi.NewControllerServer(tc.metaClient, placer, nil, nil, nil)
 
 	// Deleting a volume that never existed should succeed.
 	_, err := ctrl.DeleteVolume(ctx, &csipb.DeleteVolumeRequest{

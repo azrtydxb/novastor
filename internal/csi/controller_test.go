@@ -102,7 +102,7 @@ func (p *mockPlacer) PlaceKey(_ string, count int) []string {
 func setupController() (*ControllerServer, *mockMetadataStore) {
 	store := newMockMetadataStore()
 	placer := &mockPlacer{nodes: []string{"node-1", "node-2", "node-3"}}
-	return NewControllerServer(store, placer, nil, nil), store
+	return NewControllerServer(store, placer, nil, nil, nil), store
 }
 
 // --- CreateVolume tests ---
@@ -203,7 +203,7 @@ func TestCreateVolume_RWX(t *testing.T) {
 func TestCreateVolumeNoNodes(t *testing.T) {
 	store := newMockMetadataStore()
 	placer := &mockPlacer{nodes: nil}
-	cs := NewControllerServer(store, placer, nil, nil)
+	cs := NewControllerServer(store, placer, nil, nil, nil)
 
 	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name: "no-nodes",
@@ -1045,7 +1045,7 @@ func TestGetCapacity_WithNodeMeta(t *testing.T) {
 		},
 	}
 
-	cs := NewControllerServerWithNodeMeta(store, nodeStore, &mockPlacer{}, nil, nil)
+	cs := NewControllerServerWithNodeMeta(store, nodeStore, &mockPlacer{}, nil, nil, nil)
 
 	resp, err := cs.GetCapacity(context.Background(), &csi.GetCapacityRequest{})
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -89,8 +90,9 @@ type ControllerServer struct {
 	meta        MetadataStore
 	nodeMeta    NodeMetaStore
 	placer      PlacementEngine
-	agentTarget AgentTargetClient
-	quota       QuotaChecker
+	agentTarget     AgentTargetClient
+	quota           QuotaChecker
+	chunkReplicator ChunkReplicator
 
 	// nodeAddrToName maps agent network addresses (ip:port) to Kubernetes node
 	// names. CRUSH placement returns addresses, but PV topology must use K8s
@@ -102,23 +104,26 @@ type ControllerServer struct {
 // NewControllerServer creates a ControllerServer backed by the given stores.
 // agentTarget may be nil to disable NVMe-oF target management.
 // quota may be nil to disable quota checking.
-func NewControllerServer(meta MetadataStore, placer PlacementEngine, agentTarget AgentTargetClient, quota QuotaChecker) *ControllerServer {
+// replicator may be nil to skip chunk replication during provisioning.
+func NewControllerServer(meta MetadataStore, placer PlacementEngine, agentTarget AgentTargetClient, quota QuotaChecker, replicator ChunkReplicator) *ControllerServer {
 	return &ControllerServer{
-		meta:        meta,
-		placer:      placer,
-		agentTarget: agentTarget,
-		quota:       quota,
+		meta:            meta,
+		placer:          placer,
+		agentTarget:     agentTarget,
+		quota:           quota,
+		chunkReplicator: replicator,
 	}
 }
 
 // NewControllerServerWithNodeMeta creates a ControllerServer with node metadata support.
-func NewControllerServerWithNodeMeta(meta MetadataStore, nodeMeta NodeMetaStore, placer PlacementEngine, agentTarget AgentTargetClient, quota QuotaChecker) *ControllerServer {
+func NewControllerServerWithNodeMeta(meta MetadataStore, nodeMeta NodeMetaStore, placer PlacementEngine, agentTarget AgentTargetClient, quota QuotaChecker, replicator ChunkReplicator) *ControllerServer {
 	return &ControllerServer{
-		meta:        meta,
-		nodeMeta:    nodeMeta,
-		placer:      placer,
-		agentTarget: agentTarget,
-		quota:       quota,
+		meta:            meta,
+		nodeMeta:        nodeMeta,
+		placer:          placer,
+		agentTarget:     agentTarget,
+		quota:           quota,
+		chunkReplicator: replicator,
 	}
 }
 
@@ -501,6 +506,35 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
 			_ = cs.agentTarget.DeleteTarget(ctx, nodeIDs[0], volumeID)
 			return nil, status.Errorf(codes.Internal, "updating volume metadata with target info: %v", err)
+		}
+	}
+
+	// Replicate chunks to other placement nodes for data protection.
+	// After CreateTarget writes all chunks on the primary node (nodeIDs[0]),
+	// we copy each chunk to the remaining nodes in its placement map.
+	// Replication failure is logged but does NOT fail CreateVolume — the volume
+	// is usable with data on the primary. The policy engine's periodic scan
+	// will repair any missing replicas.
+	if cs.chunkReplicator != nil && nodesPerChunk > 1 {
+		primaryAddr := nodeIDs[0]
+		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(8) // Limit concurrent replication goroutines.
+		for i, chunkID := range chunkIDs {
+			for r := 1; r < nodesPerChunk; r++ {
+				destAddr := nodeIDs[(i+r)%numNodes]
+				if destAddr == primaryAddr {
+					continue
+				}
+				cid, dest := chunkID, destAddr
+				g.Go(func() error {
+					return cs.chunkReplicator.ReplicateChunk(gCtx, cid, primaryAddr, dest)
+				})
+			}
+		}
+		if err := g.Wait(); err != nil {
+			logging.L.Error("chunk replication failed (volume usable but under-protected)",
+				zap.String("volumeID", volumeID),
+				zap.Error(err))
 		}
 	}
 
