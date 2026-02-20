@@ -1,0 +1,77 @@
+{{- if .Values.dataplane.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "novastor.fullname" . }}-dataplane
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dataplane
+spec:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "novastor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dataplane
+  template:
+    metadata:
+      labels:
+        {{- include "novastor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: dataplane
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      hostNetwork: true
+      hostPID: true
+      containers:
+        - name: dataplane
+          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.dataplane.image.repository }}:{{ include "novastor.imageTag" . }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          args:
+            - --rpc-socket
+            - /var/tmp/novastor-spdk.sock
+            - --reactor-mask
+            - {{ .Values.dataplane.reactorMask | quote }}
+            - --mem-size
+            - {{ .Values.dataplane.memSize | quote }}
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: dev
+              mountPath: /dev
+            - name: sys
+              mountPath: /sys
+            - name: spdk-socket
+              mountPath: /var/tmp
+            - name: hugepages
+              mountPath: /dev/hugepages
+          resources:
+            {{- toYaml .Values.dataplane.resources | nindent 12 }}
+      volumes:
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: spdk-socket
+          hostPath:
+            path: /var/tmp
+            type: DirectoryOrCreate
+        - name: hugepages
+          emptyDir:
+            medium: HugePages
+      {{- with .Values.dataplane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dataplane.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

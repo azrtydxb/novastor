@@ -1,0 +1,67 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	pb "github.com/piwi3910/novastor/api/proto/nvme"
+)
+
+// SPDKTargetClient dials an agent's NVMeTargetService and wraps
+// CreateTarget / DeleteTarget calls. This client is used by the CSI
+// controller regardless of whether the agent is running in SPDK or
+// legacy mode — the server side decides the data path.
+//
+// This type also implements the csi.AgentTargetClient interface so
+// the CSI controller can use it directly.
+type SPDKTargetClient struct {
+	dialOpts []grpc.DialOption
+}
+
+// NewSPDKTargetClient creates a client that can dial any agent address.
+// Unlike NVMeTargetClient which holds a single connection, this client
+// dials per-call so the CSI controller can reach any agent in the cluster.
+func NewSPDKTargetClient(opts ...grpc.DialOption) *SPDKTargetClient {
+	if len(opts) == 0 {
+		opts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	}
+	return &SPDKTargetClient{dialOpts: opts}
+}
+
+// CreateTarget dials the agent at agentAddr and calls CreateTarget.
+func (c *SPDKTargetClient) CreateTarget(ctx context.Context, agentAddr, volumeID string, sizeBytes int64) (subsystemNQN, targetAddress, targetPort string, err error) {
+	conn, err := grpc.NewClient(agentAddr, c.dialOpts...)
+	if err != nil {
+		return "", "", "", fmt.Errorf("dialing agent at %s: %w", agentAddr, err)
+	}
+	defer conn.Close()
+
+	client := pb.NewNVMeTargetServiceClient(conn)
+	resp, err := client.CreateTarget(ctx, &pb.CreateTargetRequest{
+		VolumeId:  volumeID,
+		SizeBytes: sizeBytes,
+	})
+	if err != nil {
+		return "", "", "", fmt.Errorf("CreateTarget RPC for volume %s on %s: %w", volumeID, agentAddr, err)
+	}
+	return resp.GetSubsystemNqn(), resp.GetTargetAddress(), resp.GetTargetPort(), nil
+}
+
+// DeleteTarget dials the agent at agentAddr and calls DeleteTarget.
+func (c *SPDKTargetClient) DeleteTarget(ctx context.Context, agentAddr, volumeID string) error {
+	conn, err := grpc.NewClient(agentAddr, c.dialOpts...)
+	if err != nil {
+		return fmt.Errorf("dialing agent at %s: %w", agentAddr, err)
+	}
+	defer conn.Close()
+
+	client := pb.NewNVMeTargetServiceClient(conn)
+	_, err = client.DeleteTarget(ctx, &pb.DeleteTargetRequest{VolumeId: volumeID})
+	if err != nil {
+		return fmt.Errorf("DeleteTarget RPC for volume %s on %s: %w", volumeID, agentAddr, err)
+	}
+	return nil
+}

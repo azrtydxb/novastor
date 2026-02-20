@@ -23,6 +23,7 @@ import (
 	"github.com/piwi3910/novastor/internal/logging"
 	"github.com/piwi3910/novastor/internal/metadata"
 	"github.com/piwi3910/novastor/internal/metrics"
+	"github.com/piwi3910/novastor/internal/spdk"
 	"github.com/piwi3910/novastor/internal/transport"
 )
 
@@ -120,6 +121,9 @@ func main() {
 	encryptionEnabled := flag.Bool("encryption-enabled", false, "Enable chunk encryption at rest")
 	encryptionKeyDir := flag.String("encryption-key-dir", "", "Path to directory containing encryption key files (file-based key management)")
 	encryptionMasterKey := flag.String("encryption-master-key", "", "Base64-encoded 32-byte master key for derived key management")
+	dataPlane := flag.String("data-plane", "legacy", "Data plane mode: 'legacy' (chunk-backed loop) or 'spdk' (SPDK user-space)")
+	spdkBinary := flag.String("spdk-binary", "/usr/local/bin/novastor-dataplane", "Path to the SPDK data-plane binary")
+	spdkSocket := flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "Path to the SPDK JSON-RPC Unix socket")
 	flag.Parse()
 
 	logging.Init(false)
@@ -312,12 +316,25 @@ func main() {
 	}
 
 	// Create and register the NVMe target server when a host IP is provided.
+	var spdkProcessMgr *spdk.ProcessManager
 	if *hostIP != "" {
-		// NVMe target server requires both chunk store and metadata client
-		// to assemble chunk-backed block devices.
 		if metaClient == nil {
 			logging.L.Warn("NVMe-oF target service disabled: no metadata connection")
+		} else if *dataPlane == "spdk" {
+			// SPDK mode: start the data-plane process and use SPDK-based targets.
+			spdkProcessMgr = spdk.NewProcessManager(*spdkBinary, *spdkSocket, "", logging.L)
+			if err := spdkProcessMgr.Start(ctx); err != nil {
+				logging.L.Fatal("failed to start SPDK data-plane", zap.Error(err))
+			}
+			spdkClient := spdk.NewClient(*spdkSocket)
+			if err := spdkClient.Connect(); err != nil {
+				logging.L.Fatal("failed to connect to SPDK data-plane", zap.Error(err))
+			}
+			spdkServer := agent.NewSPDKTargetServer(*hostIP, spdkClient, metaClient)
+			spdkServer.Register(srv)
+			logging.L.Info("NVMe-oF target service registered (SPDK)", zap.String("hostIP", *hostIP))
 		} else {
+			// Legacy mode: chunk-backed block devices with loop/nvmet.
 			nvmeServer := agent.NewNVMeTargetServer(*hostIP, store, metaClient)
 			nvmeServer.Register(srv)
 			logging.L.Info("NVMe-oF target service registered (chunk-backed)", zap.String("hostIP", *hostIP))
@@ -389,6 +406,11 @@ func main() {
 		logging.L.Info("shutting down agent")
 		cancel() // cancels ctx: stops scrubber loop, heartbeat loop, metrics loop
 		scrubber.Stop()
+		if spdkProcessMgr != nil {
+			if err := spdkProcessMgr.Stop(); err != nil {
+				logging.L.Warn("failed to stop SPDK data-plane", zap.Error(err))
+			}
+		}
 		srv.GracefulStop()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
