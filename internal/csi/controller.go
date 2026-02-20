@@ -795,7 +795,6 @@ func (cs *ControllerServer) ControllerGetCapabilities(_ context.Context, _ *csi.
 		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
 		csi.ControllerServiceCapability_RPC_GET_CAPACITY,
 		csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
-		csi.ControllerServiceCapability_RPC_LIST_VOLUMES_PUBLISHED_NODES,
 	}
 
 	var capabilities []*csi.ControllerServiceCapability

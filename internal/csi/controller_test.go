@@ -973,7 +973,6 @@ func TestControllerGetCapabilities(t *testing.T) {
 		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME:     false,
 		csi.ControllerServiceCapability_RPC_GET_CAPACITY:                 false,
 		csi.ControllerServiceCapability_RPC_LIST_VOLUMES:                 false,
-		csi.ControllerServiceCapability_RPC_LIST_VOLUMES_PUBLISHED_NODES: false,
 	}
 
 	for _, cap := range resp.GetCapabilities() {
