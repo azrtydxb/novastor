@@ -1,0 +1,66 @@
+# Multi-stage build for the NovaStor SPDK data-plane binary.
+#
+# Stage 1: Build SPDK libraries (skipped in stub mode).
+# Stage 2: Build the Rust binary.
+# Stage 3: Minimal runtime image.
+
+# --------------------------------------------------------------------------
+# Stage 1: SPDK builder (only used when building with SPDK support)
+# --------------------------------------------------------------------------
+FROM ubuntu:22.04 AS spdk-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git ca-certificates python3 python3-pip \
+    pkg-config libaio-dev libssl-dev libnuma-dev uuid-dev \
+    liburing-dev nasm meson ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG SPDK_VERSION=v24.09
+RUN git clone --depth 1 --branch ${SPDK_VERSION} https://github.com/spdk/spdk.git /spdk && \
+    cd /spdk && git submodule update --init --depth 1
+
+WORKDIR /spdk
+RUN ./scripts/pkgdep.sh --rdma || true
+RUN ./configure --without-isal --without-vhost --disable-tests --disable-unit-tests
+RUN make -j$(nproc)
+RUN make install DESTDIR=/spdk-install
+
+# --------------------------------------------------------------------------
+# Stage 2: Rust builder
+# --------------------------------------------------------------------------
+FROM rust:1.82-bookworm AS rust-builder
+
+# Install build dependencies.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libaio-dev libssl-dev libnuma-dev uuid-dev clang \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy SPDK install from previous stage (optional — only for spdk-sys builds).
+COPY --from=spdk-builder /spdk-install /usr/local
+
+# Copy the Rust source.
+COPY dataplane/ ./
+
+# Build in release mode. Without the spdk-sys feature flag, this produces
+# a stub binary useful for integration testing without kernel SPDK support.
+ARG FEATURES=""
+RUN if [ -n "$FEATURES" ]; then \
+        cargo build --release --features "$FEATURES"; \
+    else \
+        cargo build --release; \
+    fi
+
+# --------------------------------------------------------------------------
+# Stage 3: Runtime
+# --------------------------------------------------------------------------
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libaio1 libnuma1 libssl3 uuid-runtime \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=rust-builder /build/target/release/novastor-dataplane /usr/local/bin/novastor-dataplane
+
+ENTRYPOINT ["/usr/local/bin/novastor-dataplane"]
