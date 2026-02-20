@@ -34,15 +34,13 @@ jobs:
           kubectl cluster-info
           kubectl get nodes
 
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-
       - name: Install CRDs
         run: |
-          # Render Helm chart CRDs and apply them
-          helm template novastor deploy/helm/novastor/ \
-            --set crds.install=true \
-            --show-only templates/crds.yaml | kubectl apply -f -
+          # Generate CRDs using controller-gen and install them
+          make manifests
+          for f in config/crd/novastor.io_*.yaml; do
+            kubectl apply -f "$f"
+          done
           # Verify CRDs are installed
           kubectl get crd | grep novastor
 
