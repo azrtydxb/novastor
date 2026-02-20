@@ -19,11 +19,25 @@ type mockLVMStore struct {
 
 // NewMockLVMStore creates a mock LVM store for testing.
 // It uses a temporary directory to simulate LVM volumes.
+// Respects LVM_VG_NAME and LVM_THIN_POOL environment variables
+// for CI configuration, with defaults for local development.
 func newMockLVMStore(t *testing.T) *mockLVMStore {
 	t.Helper()
+
+	// Read environment variables with defaults
+	vgName := os.Getenv("LVM_VG_NAME")
+	if vgName == "" {
+		vgName = "novastor-test"
+	}
+
+	thinPool := os.Getenv("LVM_THIN_POOL")
+	if thinPool == "" {
+		thinPool = "chunks"
+	}
+
 	return &mockLVMStore{
-		vgName:   "novastor-test",
-		thinPool: "chunks",
+		vgName:   vgName,
+		thinPool: thinPool,
 		dataDir:  t.TempDir(),
 	}
 }
