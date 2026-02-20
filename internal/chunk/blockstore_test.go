@@ -389,11 +389,6 @@ func TestBlockStoreMultiDevice(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping multi-device test in short mode")
 	}
-	// TODO: Fix checksum mismatch with multiple devices
-	// The chunk allocation across devices causes data corruption.
-	// Root cause: BlockStore's device selection logic doesn't properly
-	// account for the chunk header when computing device offsets.
-	t.Skip("multi-device test has known bug - checksum mismatch")
 
 	tmpDir := t.TempDir()
 
@@ -471,10 +466,6 @@ func TestBlockStoreRecovery(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping recovery test in short mode")
 	}
-	// TODO: Fix recovery after multi-device write
-	// Same root cause as TestBlockStoreMultiDevice - the metadata
-	// recovery doesn't properly handle the corrupted checksum data.
-	t.Skip("recovery test has known bug - depends on multi-device fix")
 
 	tmpDir := t.TempDir()
 	devicePath := filepath.Join(tmpDir, "device.img")
@@ -559,8 +550,8 @@ func TestBlockStoreOutOfSpace(t *testing.T) {
 	tmpDir := t.TempDir()
 	devicePath := filepath.Join(tmpDir, "device.img")
 
-	// Create a device just large enough for 2 chunks.
-	const deviceSize = dataOffset + 2*ChunkSize + BlockSize
+	// Create a device just large enough for 2 chunks (including per-chunk headers).
+	const deviceSize = dataOffset + 2*(ChunkSize+BlockSize) + BlockSize
 	f, err := os.Create(devicePath)
 	if err != nil {
 		t.Fatalf("creating device file: %v", err)
