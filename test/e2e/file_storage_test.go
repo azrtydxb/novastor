@@ -669,9 +669,8 @@ func TestFileStorage_NFSOperations(t *testing.T) {
 	// Create the filesystem layer (initializes root inode).
 	fs := filer.NewFileSystem(metaAdapter, chunkAdapter)
 
-	// Create the NFS server with a lock manager.
-	locker := filer.NewLockManager()
-	nfsServer := filer.NewNFSServer(fs, locker)
+	// Create the NFS server.
+	nfsServer := filer.NewNFSServer(fs)
 
 	// Start the NFS server on a random port.
 	nfsLis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
