@@ -209,3 +209,44 @@ func (cbd *ChunkBlockDevice) Verify(ctx context.Context) error {
 
 	return nil
 }
+
+// EnsureChunks creates any missing chunks as empty (zeroed) blocks.
+// This is used during volume provisioning when the volume has just been
+// created and chunks don't exist yet.
+func (cbd *ChunkBlockDevice) EnsureChunks(ctx context.Context) error {
+	volMeta, err := cbd.metaClient.GetVolumeMeta(ctx, cbd.volumeID)
+	if err != nil {
+		return fmt.Errorf("getting volume metadata: %w", err)
+	}
+
+	emptyBlock := make([]byte, chunkBlockSize)
+	created := 0
+
+	for _, chunkID := range volMeta.ChunkIDs {
+		exists, err := cbd.chunkStore.Has(ctx, chunk.ChunkID(chunkID))
+		if err != nil {
+			return fmt.Errorf("checking chunk %s: %w", chunkID, err)
+		}
+		if !exists {
+			c := &chunk.Chunk{
+				ID:   chunk.ChunkID(chunkID),
+				Data: emptyBlock,
+			}
+			c.Checksum = c.ComputeChecksum()
+			if err := cbd.chunkStore.Put(ctx, c); err != nil {
+				return fmt.Errorf("creating empty chunk %s: %w", chunkID, err)
+			}
+			created++
+		}
+	}
+
+	if created > 0 {
+		logging.L.Info("chunk block device: created empty chunks for new volume",
+			zap.String("volumeID", cbd.volumeID),
+			zap.Int("created", created),
+			zap.Int("total", len(volMeta.ChunkIDs)),
+		)
+	}
+
+	return nil
+}

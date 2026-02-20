@@ -313,6 +313,50 @@ func (tm *TargetManager) DeleteTarget(volumeID string) error {
 	return nil
 }
 
+// CleanupAll removes all NovaStor nvmet configfs state: port symlinks,
+// subsystems, and the port directory itself. This should be called on agent
+// startup to clean up stale state from a previous pod instance, since the
+// kernel's nvmet configfs persists across pod restarts but the TCP listeners
+// may be bound to dead network namespaces.
+func (tm *TargetManager) CleanupAll() error {
+	portsDir := filepath.Join(tm.basePath, "ports")
+	subsysDir := filepath.Join(tm.basePath, "subsystems")
+
+	// Remove all subsystem symlinks from all ports.
+	portEntries, _ := tm.configFS.ReadDir(portsDir)
+	for _, pe := range portEntries {
+		portSubsysDir := filepath.Join(portsDir, pe.Name(), "subsystems")
+		links, _ := tm.configFS.ReadDir(portSubsysDir)
+		for _, link := range links {
+			_ = tm.configFS.Remove(filepath.Join(portSubsysDir, link.Name()))
+		}
+		// Remove the port directory.
+		_ = tm.configFS.Remove(filepath.Join(portsDir, pe.Name()))
+	}
+
+	// Remove all novastor subsystems.
+	entries, _ := tm.configFS.ReadDir(subsysDir)
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, subsystemPrefix) {
+			continue
+		}
+		subPath := filepath.Join(subsysDir, name)
+		// Disable and remove namespace directories.
+		nsParent := filepath.Join(subPath, "namespaces")
+		nsEntries, _ := tm.configFS.ReadDir(nsParent)
+		for _, ns := range nsEntries {
+			enablePath := filepath.Join(nsParent, ns.Name(), "enable")
+			_ = tm.configFS.WriteFile(enablePath, []byte("0"), 0o644)
+			_ = tm.configFS.Remove(filepath.Join(nsParent, ns.Name()))
+		}
+		_ = tm.configFS.Remove(nsParent)
+		_ = tm.configFS.Remove(subPath)
+	}
+
+	return nil
+}
+
 // ListTargets returns the volume IDs of all active NVMe-oF targets by
 // scanning the subsystems directory for entries with the novastor- prefix.
 func (tm *TargetManager) ListTargets() ([]string, error) {

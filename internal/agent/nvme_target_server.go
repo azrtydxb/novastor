@@ -42,10 +42,19 @@ type NVMeTargetServer struct {
 }
 
 // NewNVMeTargetServer creates an NVMeTargetServer that listens on hostIP.
+// It cleans up any stale nvmet configfs state left over from a previous agent
+// pod instance, since the kernel configfs persists across pod restarts but
+// the TCP listeners may be bound to dead network namespaces.
 func NewNVMeTargetServer(hostIP string, chunkStore chunk.Store, metaClient *metadata.GRPCClient) *NVMeTargetServer {
+	tm := nvmeof.NewTargetManager()
+	if err := tm.CleanupAll(); err != nil {
+		logging.L.Warn("nvme target: failed to clean stale configfs state", zap.Error(err))
+	} else {
+		logging.L.Info("nvme target: cleaned stale configfs state on startup")
+	}
 	return &NVMeTargetServer{
 		hostIP:        hostIP,
-		targetManager: nvmeof.NewTargetManager(),
+		targetManager: tm,
 		chunkStore:    chunkStore,
 		metaClient:    metaClient,
 		activeDevices: make(map[string]*ChunkBlockDevice),
@@ -107,9 +116,9 @@ func (s *NVMeTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	// Create chunk-backed block device.
 	blockDev := NewChunkBlockDevice(volumeID, s.chunkStore, s.metaClient)
 
-	// Verify all chunks are present locally before assembling.
-	if err := blockDev.Verify(ctx); err != nil {
-		return nil, status.Errorf(codes.Internal, "verifying chunks for volume %s: %v", volumeID, err)
+	// Ensure all chunks exist, creating empty blocks for new volumes.
+	if err := blockDev.EnsureChunks(ctx); err != nil {
+		return nil, status.Errorf(codes.Internal, "ensuring chunks for volume %s: %v", volumeID, err)
 	}
 
 	// Assemble chunks into block device and attach loop device.
