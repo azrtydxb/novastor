@@ -114,6 +114,8 @@ func main() {
 	tlsCA := flag.String("tls-ca", "", "Path to CA certificate for mTLS")
 	tlsCert := flag.String("tls-cert", "", "Path to server certificate for mTLS")
 	tlsKey := flag.String("tls-key", "", "Path to server key for mTLS")
+	tlsClientCert := flag.String("tls-client-cert", "", "Path to client certificate for outbound mTLS connections to metadata service")
+	tlsClientKey := flag.String("tls-client-key", "", "Path to client key for outbound mTLS connections to metadata service")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	encryptionEnabled := flag.Bool("encryption-enabled", false, "Enable chunk encryption at rest")
 	encryptionKeyDir := flag.String("encryption-key-dir", "", "Path to directory containing encryption key files (file-based key management)")
@@ -272,11 +274,35 @@ func main() {
 	chunkServer := agent.NewChunkServer(store)
 	chunkServer.Register(srv)
 
+	// Build TLS dial options for outbound metadata connections.
+	var dialOpts []grpc.DialOption
+	clientCertPath := *tlsClientCert
+	clientKeyPath := *tlsClientKey
+	if clientCertPath == "" {
+		clientCertPath = *tlsCert
+	}
+	if clientKeyPath == "" {
+		clientKeyPath = *tlsKey
+	}
+	if *tlsCA != "" && clientCertPath != "" && clientKeyPath != "" {
+		clientRotator := transport.NewCertRotator(clientCertPath, clientKeyPath, *tlsRotationInterval)
+		clientRotator.Start(ctx)
+		clientTLSOpt, clientTLSErr := transport.NewClientTLSWithRotation(transport.TLSConfig{
+			CACertPath: *tlsCA,
+			CertPath:   clientCertPath,
+			KeyPath:    clientKeyPath,
+		}, clientRotator)
+		if clientTLSErr != nil {
+			logging.L.Fatal("failed to configure client TLS for metadata connection", zap.Error(clientTLSErr))
+		}
+		dialOpts = append(dialOpts, clientTLSOpt)
+	}
+
 	// Connect to the metadata service early (needed for NVMe-oF target server).
 	var metaClient *metadata.GRPCClient
 	if *metaAddr != "" {
 		var metaErr error
-		metaClient, metaErr = metadata.Dial(*metaAddr)
+		metaClient, metaErr = metadata.Dial(*metaAddr, dialOpts...)
 		if metaErr != nil {
 			logging.L.Warn("cannot connect to metadata service; some features disabled",
 				zap.String("metaAddr", *metaAddr),
