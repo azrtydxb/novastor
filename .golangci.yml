@@ -20,7 +20,6 @@ linters:
     - noctx
     # Code quality (limited set - noisy ones disabled)
     - misspell
-    - unconvert
     - wastedassign
 
 formatters:
@@ -79,3 +78,5 @@ issues:
         - name: superfluous-else
         - name: unreachable-code
         - name: redefines-builtin-id
+      disable:
+        - exported-type-stutter # Accept package-prefixed type names for clarity
