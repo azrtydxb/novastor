@@ -245,6 +245,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.QuotaReconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageQuota")
+		os.Exit(1)
+	}
+
 	// Set up the recovery subsystem if enabled.
 	if recoveryEnabled {
 		heartbeatTimeout, parseErr := time.ParseDuration(heartbeatTimeoutStr)
