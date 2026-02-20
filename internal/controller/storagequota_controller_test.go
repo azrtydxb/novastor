@@ -13,6 +13,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+// mockQuotaMetadataClient is a test implementation of MetadataClient.
+type mockQuotaMetadataClient struct{}
+
+func (m *mockQuotaMetadataClient) SetQuota(_ context.Context, _ QuotaScopeSpec, _, _ int64, _ int64) error {
+	return nil
+}
+
+func (m *mockQuotaMetadataClient) GetUsage(_ context.Context, _ QuotaScopeSpec) (storageUsed, objectCountUsed int64, err error) {
+	// Return test usage - 5GB used
+	return 5 * 1024 * 1024 * 1024, 100, nil
+}
+
 func TestQuotaReconcile_Initialization(t *testing.T) {
 	// Create a fake client
 	scheme := runtime.NewScheme()
@@ -38,9 +50,10 @@ func TestQuotaReconcile_Initialization(t *testing.T) {
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(quota).WithStatusSubresource(quota).Build()
 
-	// Create reconciler
+	// Create reconciler with mock metadata client
 	r := &QuotaReconciler{
-		Client: fakeClient,
+		Client:         fakeClient,
+		MetadataClient: &mockQuotaMetadataClient{},
 	}
 
 	// Reconcile
@@ -55,8 +68,8 @@ func TestQuotaReconcile_Initialization(t *testing.T) {
 		t.Fatalf("Reconcile failed: %v", err)
 	}
 
-	// Should requeue immediately to sync to metadata service
-	if result.Requeue || result.RequeueAfter > 0 {
+	// Should requeue after a delay to sync to metadata service
+	if result.RequeueAfter > 0 {
 		// Expected for initial sync
 	}
 
@@ -69,17 +82,4 @@ func TestQuotaReconcile_Initialization(t *testing.T) {
 	if updated.Status.Phase == "" {
 		t.Error("status.phase should be initialized")
 	}
-}
-
-// mockQuotaMetadataClient is a test implementation of MetadataClient.
-type mockQuotaMetadataClient struct{}
-
-func (m *mockQuotaMetadataClient) SetQuota(ctx context.Context, scope QuotaScopeSpec, storageHard, storageSoft int64, objectCountHard int64) error {
-	// No-op for tests
-	return nil
-}
-
-func (m *mockQuotaMetadataClient) GetUsage(ctx context.Context, scope QuotaScopeSpec) (storageUsed, objectCountUsed int64, err error) {
-	// Return mock usage - 5GB used
-	return 5 * 1024 * 1024 * 1024, 100, nil
 }

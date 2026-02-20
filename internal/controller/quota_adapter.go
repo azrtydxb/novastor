@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/piwi3910/novastor/internal/metadata"
@@ -99,30 +98,4 @@ func (a *LocalMetadataAdapter) GetUsage(ctx context.Context, scope QuotaScopeSpe
 	}
 
 	return usage.StorageUsed, usage.ObjectCountUsed, nil
-}
-
-// execArgs is a helper for executing generic metadata operations.
-func execArgs[T any](ctx context.Context, client *metadata.GRPCClient, op string, args any) (*T, error) {
-	// This helper would use the gRPC client's internal exec method
-	// For now, we document what's needed
-	_ = ctx
-	_ = client
-	_ = op
-	_ = args
-	var result T
-	return &result, fmt.Errorf("exec: not implemented")
-}
-
-// jsonEncode is a helper for encoding arguments to JSON.
-func jsonEncode(v any) ([]byte, error) {
-	return json.Marshal(v)
-}
-
-// jsonDecode is a helper for decoding results from JSON.
-func jsonDecode[T any](data []byte) (*T, error) {
-	var result T
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
 }
