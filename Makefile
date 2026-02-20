@@ -117,6 +117,35 @@ build-cli: fmt vet ## Build novastorctl CLI tool.
 build-webhook: fmt vet ## Build webhook server binary.
 	go build -o bin/novastor-webhook ./cmd/webhook/
 
+##@ Data Plane (Rust/SPDK)
+
+.PHONY: build-dataplane
+build-dataplane: ## Build the Rust SPDK data-plane binary (stub mode).
+	cd dataplane && cargo build --release
+
+.PHONY: build-dataplane-spdk
+build-dataplane-spdk: ## Build the Rust SPDK data-plane binary (with SPDK).
+	cd dataplane && cargo build --release --features spdk-sys
+
+.PHONY: test-dataplane
+test-dataplane: ## Run data-plane Rust tests.
+	cd dataplane && cargo test
+
+.PHONY: lint-dataplane
+lint-dataplane: ## Run clippy on data-plane.
+	cd dataplane && cargo clippy -- -D warnings
+
+.PHONY: fmt-dataplane
+fmt-dataplane: ## Format data-plane Rust code.
+	cd dataplane && cargo fmt
+
+.PHONY: check-dataplane
+check-dataplane: fmt-dataplane lint-dataplane test-dataplane ## Run all data-plane checks.
+
+.PHONY: clean-dataplane
+clean-dataplane: ## Clean data-plane build artifacts.
+	cd dataplane && cargo clean
+
 ##@ Docker
 
 DOCKER ?= docker
@@ -126,6 +155,10 @@ IMAGE_TAG ?= latest
 .PHONY: docker-build
 docker-build: ## Build all docker images.
 	$(foreach comp,controller agent meta csi filer s3gw scheduler webhook,$(DOCKER) build -t novastor-$(comp):latest -f build/Dockerfile.$(comp) .;)
+
+.PHONY: docker-build-dataplane
+docker-build-dataplane: ## Build the data-plane docker image (stub mode).
+	$(DOCKER) build -t novastor-dataplane:latest -f deploy/docker/Dockerfile.dataplane .
 
 .PHONY: docker-push
 docker-push: ## Push all docker images to the registry.
