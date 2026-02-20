@@ -68,10 +68,8 @@ func TestQuotaReconcile_Initialization(t *testing.T) {
 		t.Fatalf("Reconcile failed: %v", err)
 	}
 
-	// Should requeue after a delay to sync to metadata service
-	if result.RequeueAfter > 0 {
-		// Expected for initial sync
-	}
+	// Reconcile should request requeue for periodic sync
+	_ = result
 
 	// Verify status was initialized
 	var updated v1alpha1.StorageQuota
