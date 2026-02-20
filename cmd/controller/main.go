@@ -213,6 +213,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Create event recorder for policy engine.
+	eventRecorder := mgr.GetEventRecorder("policy-engine")
+
 	// Register controllers.
 	if err := (&controller.StoragePoolReconciler{
 		Client: mgr.GetClient(),
@@ -323,8 +326,8 @@ func main() {
 				poolLookup,
 				nodeChecker,
 				chunkReplicator,
-				nil, // shardReplicator - TODO: implement erasure coding shard replication
-				nil, // eventRecorder - optional
+				nil,           // shardReplicator - TODO: implement erasure coding shard replication
+				eventRecorder, // eventRecorder - now enabled
 				policyScanInterval,
 				policyRepairEnabled,
 			)
