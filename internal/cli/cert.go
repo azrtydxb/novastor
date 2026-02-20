@@ -78,9 +78,16 @@ func runCertBootstrap() error {
 	// Includes common service DNS names for Kubernetes cluster
 	serverDNSNames := []string{
 		"localhost",
+		// Legacy wildcard SANs
 		"*.novacluster.local",
 		"*.novacluster.local.svc",
 		"*.novacluster.local.svc.cluster.local",
+		// Kubernetes service discovery SANs for novastor-system namespace
+		"novastor-meta",
+		"novastor-meta-headless",
+		"novastor-agent",
+		"*.novastor-meta-headless.novastor-system.svc.cluster.local",
+		"*.novastor-system.svc.cluster.local",
 	}
 	serverCertPEM, serverKeyPEM, err := transport.GenerateCert(caCertPEM, caKeyPEM, "novastor-server", true, serverDNSNames)
 	if err != nil {
