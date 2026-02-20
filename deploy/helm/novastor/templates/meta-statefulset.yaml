@@ -99,7 +99,7 @@ spec:
         - name: tls-certs
           secret:
             secretName: {{ include "novastor.tls.volumeName" . }}
-            defaultMode: 0o400
+            defaultMode: 0o444
         {{- end }}
       {{- with .Values.meta.nodeSelector }}
       nodeSelector:

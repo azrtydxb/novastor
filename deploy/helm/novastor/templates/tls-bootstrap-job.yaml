@@ -1,4 +1,4 @@
-{{- if and (include "novastor.tls.enabled" .) (not .Values.global.tls.ca.certPEM) }}
+{{- if and (include "novastor.tls.enabled" .) (not .Values.global.tls.ca.certPEM) (not .Values.global.tls.externalSecret) }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
