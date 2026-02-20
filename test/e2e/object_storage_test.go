@@ -69,7 +69,7 @@ func TestObjectStorage_BucketAndObject(t *testing.T) {
 	chunkStore := agent.NewLocalChunkStore(tc.agentClient)
 
 	// Create the S3 Gateway with real adapters.
-	gateway := s3.NewGateway(metaAdapter, metaAdapter, chunkStore, metaAdapter, testAccessKey, testSecretKey)
+	gateway := s3.NewGateway(metaAdapter, metaAdapter, chunkStore, metaAdapter, nil, testAccessKey, testSecretKey)
 
 	// Start an httptest server with the gateway as handler.
 	srv := httptest.NewServer(gateway)
@@ -244,7 +244,7 @@ func TestObjectStorage_AuthDenied(t *testing.T) {
 	defer agentClient.Close()
 
 	chunkStore := agent.NewLocalChunkStore(agentClient)
-	gateway := s3.NewGateway(metaAdapter, metaAdapter, chunkStore, metaAdapter, testAccessKey, testSecretKey)
+	gateway := s3.NewGateway(metaAdapter, metaAdapter, chunkStore, metaAdapter, nil, testAccessKey, testSecretKey)
 
 	srv := httptest.NewServer(gateway)
 	defer srv.Close()
