@@ -73,7 +73,7 @@ func newTestCluster(t *testing.T) *testCluster {
 	}
 
 	// 4. Allocate random ports for metadata gRPC and chunk gRPC servers.
-	metaLis, err := net.ListenConfig{}.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	metaLis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		tc.Close()
 		t.Fatalf("Failed to listen for metadata server: %v", err)
@@ -81,7 +81,7 @@ func newTestCluster(t *testing.T) *testCluster {
 	metaAddr := metaLis.Addr().String()
 	tc.metaAddr = metaAddr
 
-	chunkLis, err := net.ListenConfig{}.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	chunkLis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		metaLis.Close()
 		tc.Close()
@@ -179,7 +179,7 @@ func waitForLeader(store *metadata.RaftStore, timeout time.Duration) bool {
 // string. The port is released immediately so it can be reused by the caller.
 func allocAddr(t *testing.T) string {
 	t.Helper()
-	l, err := net.ListenConfig{}.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to allocate address: %v", err)
 	}
@@ -191,7 +191,7 @@ func allocAddr(t *testing.T) string {
 // freePort returns an available TCP port on localhost.
 func freePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.ListenConfig{}.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to get free port: %v", err)
 	}
