@@ -1808,16 +1808,28 @@ func TestNFSServer_AllProcedureDispatches(t *testing.T) {
 // truncationTestHandler implements NFSHandler with a real in-memory file
 // that supports truncation for testing.
 type truncationTestHandler struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	files    map[uint64][]byte
+	dirs     map[uint64]*dirMeta
+	symlinks map[uint64]string
 	nextIno  uint64
 	rootMeta *InodeMeta
+}
+
+// dirMeta holds directory metadata for test handler.
+type dirMeta struct {
+	Ino    uint64
+	Parent uint64
+	Name   string
+	Mode   uint32
 }
 
 func newTruncationTestHandler() *truncationTestHandler {
 	now := time.Now().UnixNano()
 	return &truncationTestHandler{
 		files:    make(map[uint64][]byte),
+		dirs:     make(map[uint64]*dirMeta),
+		symlinks: make(map[uint64]string),
 		nextIno:  2,
 		rootMeta: &InodeMeta{Ino: 1, Type: TypeDir, Mode: 0755, LinkCount: 2, ATime: now, MTime: now, CTime: now},
 	}
@@ -1864,8 +1876,28 @@ func (h *truncationTestHandler) Lookup(_ context.Context, parentIno uint64, name
 	return &InodeMeta{Ino: ino, Type: TypeFile, Mode: 0644, Size: int64(len(data)), LinkCount: 1, ATime: now, MTime: now, CTime: now}, nil
 }
 
-func (h *truncationTestHandler) Mkdir(_ context.Context, _ uint64, _ string, _ uint32) (*InodeMeta, error) {
-	return nil, fmt.Errorf("not implemented")
+func (h *truncationTestHandler) Mkdir(_ context.Context, parent uint64, name string, mode uint32) (*InodeMeta, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Check if parent exists (root inode 1 is special case)
+	if parent != 1 {
+		if _, ok := h.files[parent]; !ok {
+			return nil, fmt.Errorf("parent directory does not exist")
+		}
+	}
+
+	ino := h.nextIno
+	h.nextIno++
+	h.dirs[ino] = &dirMeta{
+		Ino:    ino,
+		Parent: parent,
+		Name:   name,
+		Mode:   mode,
+	}
+
+	now := time.Now().UnixNano()
+	return &InodeMeta{Ino: ino, Type: TypeDir, Mode: mode, Size: 0, LinkCount: 2, ATime: now, MTime: now, CTime: now}, nil
 }
 
 func (h *truncationTestHandler) Create(_ context.Context, _ uint64, _ string, _ uint32) (*InodeMeta, error) {
@@ -1945,12 +1977,27 @@ func (h *truncationTestHandler) Rename(_ context.Context, _ uint64, _ string, _ 
 	return nil
 }
 
-func (h *truncationTestHandler) Symlink(_ context.Context, _ uint64, _ string, _ string) (*InodeMeta, error) {
-	return nil, fmt.Errorf("not implemented")
+func (h *truncationTestHandler) Symlink(_ context.Context, _ uint64, _ string, target string) (*InodeMeta, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	ino := h.nextIno
+	h.nextIno++
+	h.symlinks[ino] = target
+
+	now := time.Now().UnixNano()
+	return &InodeMeta{Ino: ino, Type: TypeSymlink, Mode: 0777, Size: int64(len(target)), LinkCount: 1, ATime: now, MTime: now, CTime: now}, nil
 }
 
-func (h *truncationTestHandler) Readlink(_ context.Context, _ uint64) (string, error) {
-	return "", fmt.Errorf("not implemented")
+func (h *truncationTestHandler) Readlink(_ context.Context, ino uint64) (string, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	target, ok := h.symlinks[ino]
+	if !ok {
+		return "", fmt.Errorf("symlink not found")
+	}
+	return target, nil
 }
 
 func (h *truncationTestHandler) Truncate(_ context.Context, ino uint64, size int64) error {
