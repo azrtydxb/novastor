@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/piwi3910/novastor/api/v1alpha1"
 )
@@ -43,6 +44,8 @@ type VolumeMeta struct {
 type ReplicationChecker struct {
 	metaClient  MetadataClient
 	nodeChecker NodeAvailabilityChecker
+	mu          sync.RWMutex
+	pool        *v1alpha1.StoragePool
 }
 
 // NewReplicationChecker creates a new ReplicationChecker.
@@ -55,12 +58,28 @@ func NewReplicationChecker(metaClient MetadataClient, nodeChecker NodeAvailabili
 
 // RequiredReplicas returns the replication factor from the pool spec.
 func (c *ReplicationChecker) RequiredReplicas() int {
-	// This is a placeholder; the actual factor comes from the pool spec passed to CheckChunk.
-	return 3
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.pool == nil || c.pool.Spec.DataProtection.Replication == nil {
+		return 3 // Default fallback
+	}
+
+	factor := c.pool.Spec.DataProtection.Replication.Factor
+	if factor == 0 {
+		return 3 // Default fallback
+	}
+
+	return factor
 }
 
 // CheckChunk verifies that a replicated chunk has the required number of healthy replicas.
 func (c *ReplicationChecker) CheckChunk(ctx context.Context, chunkID string, volume *VolumeMeta, pool *v1alpha1.StoragePool) (*ChunkComplianceResult, error) {
+	// Store pool reference for RequiredReplicas()
+	c.mu.Lock()
+	c.pool = pool
+	c.mu.Unlock()
+
 	if pool.Spec.DataProtection.Mode != "replication" {
 		return nil, fmt.Errorf("pool %s is not in replication mode", pool.Name)
 	}
