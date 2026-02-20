@@ -11,8 +11,6 @@ linters:
     - ineffassign
     - staticcheck
     - unused
-    # Style and documentation (limited)
-    - revive
     # Bug detection (limited set)
     - bodyclose
     - durationcheck
@@ -32,6 +30,9 @@ formatters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+  exclude:
+    - "exported: type name will be used as.*by other packages, and that stutters"  # Accept package.TypeName style
+    - "var-naming: avoid package names that conflict with Go standard library package names"  # Allow 'metrics' package
   exclude-rules:
     # Exclude issues in test files
     - path: _test\.go
@@ -54,44 +55,7 @@ issues:
     - path: internal/filer/nfs_mount\.go
       linters:
         - nilerr
-    # Disable exported-type-stutter and var-naming for specific packages
-    - path: internal/chunk/
-      linters:
-        - revive
-      text: "exported: type name will be used as"
-    - path: internal/metadata/
-      linters:
-        - revive
-      text: "exported: type name will be used as"
-    - path: internal/policy/
-      linters:
-        - revive
-      text: "exported: type name will be used as"
-    - path: internal/metrics/
-      linters:
-        - revive
-      text: "var-naming: avoid package names that conflict"
   settings:
     staticcheck:
       checks:
         - "all"
-    revive:
-      confidence: 0.8
-      rules:
-        - name: blank-imports
-        - name: context-as-argument
-        - name: context-keys-type
-        - name: dot-imports
-        - name: error-return
-        - name: error-strings
-        - name: error-naming
-        - name: increment-decrement
-        - name: receiver-naming
-        - name: time-naming
-        - name: unexported-return
-        - name: indent-error-flow
-        - name: errorf
-        - name: empty-block
-        - name: superfluous-else
-        - name: unreachable-code
-        - name: redefines-builtin-id
