@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/piwi3910/novastor/api/v1alpha1"
 )
@@ -11,6 +12,8 @@ import (
 type ErasureCodingChecker struct {
 	metaClient  MetadataClient
 	nodeChecker NodeAvailabilityChecker
+	mu          sync.RWMutex
+	pool        *v1alpha1.StoragePool
 }
 
 // NewErasureCodingChecker creates a new ErasureCodingChecker.
@@ -23,12 +26,33 @@ func NewErasureCodingChecker(metaClient MetadataClient, nodeChecker NodeAvailabi
 
 // RequiredReplicas returns the total number of shards (data + parity).
 func (c *ErasureCodingChecker) RequiredReplicas() int {
-	// This is a placeholder; the actual shard counts come from the pool spec.
-	return 6 // 4 data + 2 parity default
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.pool == nil || c.pool.Spec.DataProtection.ErasureCoding == nil {
+		return 6 // Default fallback (4 data + 2 parity)
+	}
+
+	ecSpec := c.pool.Spec.DataProtection.ErasureCoding
+	dataShards := ecSpec.DataShards
+	if dataShards == 0 {
+		dataShards = 4 // Default
+	}
+	parityShards := ecSpec.ParityShards
+	if parityShards == 0 {
+		parityShards = 2 // Default
+	}
+
+	return dataShards + parityShards
 }
 
 // CheckChunk verifies that an erasure-coded chunk has sufficient available shards for recovery.
 func (c *ErasureCodingChecker) CheckChunk(ctx context.Context, chunkID string, volume *VolumeMeta, pool *v1alpha1.StoragePool) (*ChunkComplianceResult, error) {
+	// Store pool reference for RequiredReplicas()
+	c.mu.Lock()
+	c.pool = pool
+	c.mu.Unlock()
+
 	if pool.Spec.DataProtection.Mode != "erasureCoding" {
 		return nil, fmt.Errorf("pool %s is not in erasure coding mode", pool.Name)
 	}
