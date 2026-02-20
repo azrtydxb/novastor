@@ -22,6 +22,13 @@ const (
 
 	// dataOffset is where chunk data starts (second 4KB, after metadata).
 	dataOffset = BlockSize
+
+	// chunkHeaderSize is the per-chunk on-disk header: 4 bytes data length + 4 bytes checksum.
+	chunkHeaderSize = 8
+
+	// blocksPerAlloc is the number of 4KB blocks allocated per chunk,
+	// accounting for the on-disk header that precedes the data.
+	blocksPerAlloc = (chunkHeaderSize + ChunkSize + BlockSize - 1) / BlockSize
 )
 
 // BlockStoreConfig holds configuration for the block store backend.
@@ -335,7 +342,7 @@ func (bs *BlockStore) recoverIndex() error {
 		dev.mu.Unlock()
 
 		// Scan for allocated chunks.
-		for blockOffset := uint64(0); blockOffset < bitmap.TotalBlocks(); blockOffset += BlocksPerChunk {
+		for blockOffset := uint64(0); blockOffset < bitmap.TotalBlocks(); blockOffset += blocksPerAlloc {
 			if bitmap.IsSet(blockOffset) {
 				// Try to read the chunk to verify and get its ID.
 				if err := bs.readChunkHeader(devIdx, blockOffset); err != nil {
@@ -345,7 +352,7 @@ func (bs *BlockStore) recoverIndex() error {
 						zap.Error(err),
 					)
 					// Clear the bitmap entry if the chunk is invalid.
-					_ = bitmap.Free(blockOffset, BlocksPerChunk)
+					_ = bitmap.Free(blockOffset, blocksPerAlloc)
 				}
 			}
 		}
@@ -413,7 +420,7 @@ func (bs *BlockStore) readChunkHeader(devIdx int, blockOffset uint64) error {
 	entry := IndexEntry{
 		DeviceIndex: uint16(devIdx),
 		BlockOffset: blockOffset,
-		BlockCount:  BlocksPerChunk,
+		BlockCount:  uint16(blocksPerAlloc),
 		DataLen:     dataLen,
 		Checksum:    checksum,
 	}
@@ -454,7 +461,7 @@ func (bs *BlockStore) Put(_ context.Context, c *Chunk) error {
 		freeBlocks := dev.bitmap.FreeBlocks()
 		dev.mu.Unlock()
 
-		if freeBlocks >= BlocksPerChunk {
+		if freeBlocks >= blocksPerAlloc {
 			targetDev = dev
 			targetDevIdx = i
 			break
@@ -465,25 +472,20 @@ func (bs *BlockStore) Put(_ context.Context, c *Chunk) error {
 		return ErrOutOfSpace
 	}
 
-	// Allocate blocks.
+	// Allocate blocks, prepare buffer, and write atomically under a single lock.
 	targetDev.mu.Lock()
-	blockOffset, err := targetDev.bitmap.Alloc(BlocksPerChunk)
-	targetDev.mu.Unlock()
-
+	blockOffset, err := targetDev.bitmap.Alloc(blocksPerAlloc)
 	if err != nil {
+		targetDev.mu.Unlock()
 		return fmt.Errorf("allocating blocks: %w", err)
 	}
 
-	// Prepare chunk data with length and checksum header.
-	// Format: [4 bytes data length][4 bytes checksum][N bytes data]
-	buf := make([]byte, 8+len(c.Data))
+	buf := make([]byte, chunkHeaderSize+len(c.Data))
 	binary.BigEndian.PutUint32(buf[:4], uint32(len(c.Data)))
 	binary.BigEndian.PutUint32(buf[4:8], c.Checksum)
 	copy(buf[8:], c.Data)
 
-	// Write to device.
 	offset := dataOffset + int64(blockOffset*BlockSize)
-	targetDev.mu.Lock()
 	n, err := targetDev.file.WriteAt(buf, offset)
 	if err == nil && bs.config.AutoSync {
 		_ = targetDev.file.Sync()
@@ -491,16 +493,15 @@ func (bs *BlockStore) Put(_ context.Context, c *Chunk) error {
 	targetDev.mu.Unlock()
 
 	if err != nil {
-		// Free the allocated blocks on error.
 		targetDev.mu.Lock()
-		_ = targetDev.bitmap.Free(blockOffset, BlocksPerChunk)
+		_ = targetDev.bitmap.Free(blockOffset, blocksPerAlloc)
 		targetDev.mu.Unlock()
 		return fmt.Errorf("writing chunk: %w", err)
 	}
 
 	if n != len(buf) {
 		targetDev.mu.Lock()
-		_ = targetDev.bitmap.Free(blockOffset, BlocksPerChunk)
+		_ = targetDev.bitmap.Free(blockOffset, blocksPerAlloc)
 		targetDev.mu.Unlock()
 		return fmt.Errorf("short write: %d < %d", n, len(buf))
 	}
@@ -509,7 +510,7 @@ func (bs *BlockStore) Put(_ context.Context, c *Chunk) error {
 	entry := IndexEntry{
 		DeviceIndex: uint16(targetDevIdx),
 		BlockOffset: blockOffset,
-		BlockCount:  BlocksPerChunk,
+		BlockCount:  uint16(blocksPerAlloc),
 		DataLen:     uint32(len(c.Data)),
 		Checksum:    c.Checksum,
 	}
