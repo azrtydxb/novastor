@@ -674,7 +674,7 @@ func TestFileStorage_NFSOperations(t *testing.T) {
 	nfsServer := filer.NewNFSServer(fs, locker)
 
 	// Start the NFS server on a random port.
-	nfsLis, err := net.ListenConfig{}.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	nfsLis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to listen for NFS server: %v", err)
 	}
@@ -682,7 +682,7 @@ func TestFileStorage_NFSOperations(t *testing.T) {
 	nfsLis.Close() // Close so that NFSServer.Serve can bind it.
 
 	go func() {
-		if err := nfsServer.Serve(ctx, nfsAddr); err != nil {
+		if err := nfsServer.Serve(context.Background(), nfsAddr); err != nil {
 			// Server stopped, expected during cleanup.
 		}
 	}()
