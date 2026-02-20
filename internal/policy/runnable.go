@@ -8,8 +8,9 @@ import (
 	"github.com/piwi3910/novastor/api/v1alpha1"
 	"github.com/piwi3910/novastor/internal/logging"
 	"go.uber.org/zap"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 )
 
 // PolicyEngineRunnable wraps the policy engine and reconciler as a controller-runtime Runnable.
@@ -19,7 +20,7 @@ type PolicyEngineRunnable struct {
 	metrics       *MetricsReporter
 	scanInterval  time.Duration
 	repairEnabled bool
-	eventRecorder record.EventRecorder
+	eventRecorder events.EventRecorder
 }
 
 // NewPolicyEngineRunnable creates a new PolicyEngineRunnable.
@@ -29,7 +30,7 @@ func NewPolicyEngineRunnable(
 	nodeChecker NodeAvailabilityChecker,
 	chunkReplicator ChunkReplicator,
 	shardReplicator ShardReplicator,
-	eventRecorder record.EventRecorder,
+	eventRecorder events.EventRecorder,
 	scanInterval time.Duration,
 	repairEnabled bool,
 ) *PolicyEngineRunnable {
@@ -37,6 +38,7 @@ func NewPolicyEngineRunnable(
 	reconciler := NewReconciler(metaClient, nodeChecker, poolLookup)
 	reconciler.SetChunkReplicator(chunkReplicator)
 	reconciler.SetShardReplicator(shardReplicator)
+	reconciler.SetEventRecorder(eventRecorder)
 
 	return &PolicyEngineRunnable{
 		engine:        engine,
@@ -106,6 +108,7 @@ func (r *PolicyEngineRunnable) runCycle(ctx context.Context, logger *zap.Logger)
 				zap.Int("unavailable", report.UnavailableChunks),
 				zap.Int("corrupted", report.CorruptedChunks),
 			)
+			r.emitComplianceEvent(poolName, report)
 		}
 	}
 
@@ -190,4 +193,20 @@ func (r *PolicyEngineRunnable) RepairStatus() (queueSize int, completed int64, f
 		r.reconciler.CompletedRepairs(),
 		r.reconciler.FailedRepairs(),
 		r.reconciler.lastScanTime
+}
+
+// emitComplianceEvent emits a Kubernetes event for a non-compliant pool.
+func (r *PolicyEngineRunnable) emitComplianceEvent(poolName string, report *PoolComplianceReport) {
+	if r.eventRecorder == nil {
+		return
+	}
+
+	pool := &v1alpha1.StoragePool{}
+	pool.Name = poolName
+	pool.Namespace = "novastor-system" // Default namespace, adjust as needed
+
+	message := fmt.Sprintf("Pool compliance check failed: %d under-replicated, %d unavailable, %d corrupted chunks",
+		report.UnderReplicatedChunks, report.UnavailableChunks, report.CorruptedChunks)
+
+	r.eventRecorder.Eventf(pool, nil, corev1.EventTypeWarning, "ComplianceCheckFailed", "CheckCompliance", message)
 }

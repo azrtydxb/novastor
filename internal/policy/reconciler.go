@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/events"
 
 	"github.com/piwi3910/novastor/api/v1alpha1"
 	"github.com/piwi3910/novastor/internal/logging"
@@ -19,6 +21,7 @@ type Reconciler struct {
 	poolLookup      PoolLookup
 	chunkReplicator ChunkReplicator
 	shardReplicator ShardReplicator
+	eventRecorder   events.EventRecorder
 
 	mu               sync.Mutex
 	maxConcurrent    int
@@ -75,6 +78,13 @@ func (r *Reconciler) SetShardReplicator(replicator ShardReplicator) {
 	r.shardReplicator = replicator
 }
 
+// SetEventRecorder sets the Kubernetes event recorder for emitting events.
+func (r *Reconciler) SetEventRecorder(recorder events.EventRecorder) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.eventRecorder = recorder
+}
+
 // SetMaxConcurrent sets the maximum number of concurrent repair operations.
 func (r *Reconciler) SetMaxConcurrent(n int) {
 	r.mu.Lock()
@@ -128,6 +138,7 @@ func (r *Reconciler) ScanAndEnqueue(ctx context.Context) (*RepairSummary, error)
 				r.repairQueue = append(r.repairQueue, task)
 				r.mu.Unlock()
 
+				r.emitHealingTaskEvent(task)
 				queuedCount++
 			}
 		}
@@ -193,6 +204,7 @@ func (r *Reconciler) ProcessQueue(ctx context.Context) error {
 					zap.String("pool", t.Pool),
 					zap.Error(err),
 				)
+				r.emitRepairFailedEvent(t, err)
 				mu.Lock()
 				failed++
 				r.failedRepairs++
@@ -205,6 +217,7 @@ func (r *Reconciler) ProcessQueue(ctx context.Context) error {
 			r.completedRepairs++
 			mu.Unlock()
 
+			r.emitRepairCompletedEvent(t)
 			logging.L.Debug("repaired chunk",
 				zap.String("chunkID", t.ChunkID),
 				zap.String("pool", t.Pool),
@@ -433,4 +446,62 @@ func (r *Reconciler) LastScanInfo() (lastScan time.Time, duration time.Duration)
 // getPoolLookup returns the pool lookup for use by the policy engine runnable.
 func (r *Reconciler) getPoolLookup() PoolLookup {
 	return r.poolLookup
+}
+
+// emitHealingTaskEvent emits an event when a healing task is created.
+func (r *Reconciler) emitHealingTaskEvent(task RepairTask) {
+	r.mu.Lock()
+	recorder := r.eventRecorder
+	r.mu.Unlock()
+
+	if recorder == nil {
+		return
+	}
+
+	pool := &v1alpha1.StoragePool{}
+	pool.Name = task.Pool
+	pool.Namespace = "novastor-system"
+
+	message := fmt.Sprintf("Healing task created for chunk %s (volume: %s, mode: %s, status: %s)",
+		task.ChunkID, task.VolumeID, task.ProtectionMode, task.Status)
+
+	recorder.Eventf(pool, nil, corev1.EventTypeNormal, "HealingTaskCreated", "CreateHealingTask", message)
+}
+
+// emitRepairCompletedEvent emits an event when a repair completes successfully.
+func (r *Reconciler) emitRepairCompletedEvent(task RepairTask) {
+	r.mu.Lock()
+	recorder := r.eventRecorder
+	r.mu.Unlock()
+
+	if recorder == nil {
+		return
+	}
+
+	pool := &v1alpha1.StoragePool{}
+	pool.Name = task.Pool
+	pool.Namespace = "novastor-system"
+
+	message := fmt.Sprintf("Repair completed for chunk %s (volume: %s)", task.ChunkID, task.VolumeID)
+
+	recorder.Eventf(pool, nil, corev1.EventTypeNormal, "HealingCompleted", "CompleteRepair", message)
+}
+
+// emitRepairFailedEvent emits an event when a repair fails.
+func (r *Reconciler) emitRepairFailedEvent(task RepairTask, err error) {
+	r.mu.Lock()
+	recorder := r.eventRecorder
+	r.mu.Unlock()
+
+	if recorder == nil {
+		return
+	}
+
+	pool := &v1alpha1.StoragePool{}
+	pool.Name = task.Pool
+	pool.Namespace = "novastor-system"
+
+	message := fmt.Sprintf("Repair failed for chunk %s (volume: %s): %v", task.ChunkID, task.VolumeID, err)
+
+	recorder.Eventf(pool, nil, corev1.EventTypeWarning, "HealingFailed", "FailRepair", message)
 }
