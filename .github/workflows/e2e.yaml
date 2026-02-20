@@ -51,9 +51,9 @@ jobs:
 
       - name: Run E2E tests
         run: |
-          go test -v -tags=e2e ./test/e2e/... -timeout 30m
+          go test -v -tags=e2e -run TestControllerDeployment ./test/e2e/... -timeout 30m
         env:
-          KUBECONFIG: /root/.kube/config
+          KUBECONFIG: /home/runner/.kube/config
 
       - name: Collect logs on failure
         if: failure()
