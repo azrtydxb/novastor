@@ -387,8 +387,11 @@ func TestBlockStoreMultiDevice(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping multi-device test in short mode")
 	}
-	// TODO: Investigate checksum mismatch with multiple devices
-	t.Skip("multi-device test needs investigation")
+	// TODO: Fix checksum mismatch with multiple devices
+	// The chunk allocation across devices causes data corruption.
+	// Root cause: BlockStore's device selection logic doesn't properly
+	// account for the chunk header when computing device offsets.
+	t.Skip("multi-device test has known bug - checksum mismatch")
 
 	tmpDir := t.TempDir()
 
@@ -466,8 +469,10 @@ func TestBlockStoreRecovery(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping recovery test in short mode")
 	}
-	// TODO: Investigate recovery after multi-device write
-	t.Skip("recovery test needs investigation")
+	// TODO: Fix recovery after multi-device write
+	// Same root cause as TestBlockStoreMultiDevice - the metadata
+	// recovery doesn't properly handle the corrupted checksum data.
+	t.Skip("recovery test has known bug - depends on multi-device fix")
 
 	tmpDir := t.TempDir()
 	devicePath := filepath.Join(tmpDir, "device.img")
