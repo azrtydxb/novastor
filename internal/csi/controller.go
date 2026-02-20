@@ -6,7 +6,9 @@ package csi
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -89,6 +91,12 @@ type ControllerServer struct {
 	placer      PlacementEngine
 	agentTarget AgentTargetClient
 	quota       QuotaChecker
+
+	// nodeAddrToName maps agent network addresses (ip:port) to Kubernetes node
+	// names. CRUSH placement returns addresses, but PV topology must use K8s
+	// node names to match CSINode topology registration.
+	nodeAddrToName   map[string]string
+	nodeAddrToNameMu sync.RWMutex
 }
 
 // NewControllerServer creates a ControllerServer backed by the given stores.
@@ -112,6 +120,31 @@ func NewControllerServerWithNodeMeta(meta MetadataStore, nodeMeta NodeMetaStore,
 		agentTarget: agentTarget,
 		quota:       quota,
 	}
+}
+
+// UpdateNodeMapping replaces the address-to-node-name mapping used by
+// buildVolumeTopology to translate CRUSH addresses into Kubernetes node names.
+// This is called periodically by the node sync loop in cmd/csi/main.go.
+func (cs *ControllerServer) UpdateNodeMapping(addrToName map[string]string) {
+	cs.nodeAddrToNameMu.Lock()
+	defer cs.nodeAddrToNameMu.Unlock()
+	cs.nodeAddrToName = addrToName
+}
+
+// resolveNodeName returns the Kubernetes node name for a CRUSH node address.
+// Falls back to stripping the port if no mapping exists.
+func (cs *ControllerServer) resolveNodeName(addr string) string {
+	cs.nodeAddrToNameMu.RLock()
+	defer cs.nodeAddrToNameMu.RUnlock()
+	if name, ok := cs.nodeAddrToName[addr]; ok && name != "" {
+		return name
+	}
+	// Fallback: strip port from address.
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
 }
 
 // hasRWXCapability checks whether any of the volume capabilities request
@@ -263,20 +296,24 @@ func filterNodesByTopology(nodeIDs []string, required []*csi.Topology) []string 
 // buildVolumeTopology constructs the topology information for a volume based on
 // the nodes where its chunks are placed. This is returned in CreateVolumeResponse
 // as AccessibleTopology, which informs the scheduler where the volume is reachable.
-func buildVolumeTopology(nodeIDs []string) []*csi.Topology {
+// CRUSH placement returns network addresses (ip:port); this method resolves them
+// to Kubernetes node names via the nodeAddrToName mapping so that PV node
+// affinity matches CSINode topology registration.
+func (cs *ControllerServer) buildVolumeTopology(nodeIDs []string) []*csi.Topology {
 	if len(nodeIDs) == 0 {
 		return nil
 	}
 
-	// Deduplicate node IDs while preserving order.
+	// Deduplicate resolved node names while preserving order.
 	seen := make(map[string]struct{})
 	topologies := make([]*csi.Topology, 0, len(nodeIDs))
-	for _, nodeID := range nodeIDs {
-		if _, ok := seen[nodeID]; !ok {
-			seen[nodeID] = struct{}{}
+	for _, addr := range nodeIDs {
+		nodeName := cs.resolveNodeName(addr)
+		if _, ok := seen[nodeName]; !ok {
+			seen[nodeName] = struct{}{}
 			topologies = append(topologies, &csi.Topology{
 				Segments: map[string]string{
-					TopologyDomain: nodeID,
+					TopologyDomain: nodeName,
 				},
 			})
 		}
@@ -354,13 +391,14 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	// Place chunks across storage nodes using volume name as the key for
 	// deterministic, failure-domain-aware placement (CRUSH).
-	// We need chunkCount * nodesPerChunk placement slots for protection.
-	totalSlots := chunkCount * nodesPerChunk
-	allNodeIDs := cs.placer.PlaceKey(req.GetName(), totalSlots)
-	if len(allNodeIDs) < totalSlots {
+	// We request all available nodes (sorted by CRUSH affinity) and then
+	// verify we have at least nodesPerChunk nodes for data protection.
+	// Chunks are distributed across these nodes round-robin.
+	allNodeIDs := cs.placer.PlaceKey(req.GetName(), nodesPerChunk)
+	if len(allNodeIDs) < nodesPerChunk {
 		return nil, status.Errorf(codes.ResourceExhausted,
-			"not enough storage nodes: need %d for %d chunks with protection factor %d, got %d",
-			totalSlots, chunkCount, nodesPerChunk, len(allNodeIDs))
+			"not enough storage nodes for data protection: need %d, got %d",
+			nodesPerChunk, len(allNodeIDs))
 	}
 
 	// Filter nodes based on topology requirement (if any).
@@ -405,15 +443,15 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	// Write placement maps for each chunk with multiple nodes for protection.
-	// Each chunk is placed on 'nodesPerChunk' consecutive nodes from nodeIDs.
+	// Chunks are distributed across available nodes round-robin. Each chunk is
+	// assigned to 'nodesPerChunk' different nodes, cycling through the available
+	// node list to spread data evenly.
+	numNodes := len(nodeIDs)
 	for i, chunkID := range chunkIDs {
-		// Calculate the slice of nodes for this chunk.
-		startIdx := i * nodesPerChunk
-		endIdx := startIdx + nodesPerChunk
-		if endIdx > len(nodeIDs) {
-			endIdx = len(nodeIDs)
+		chunkNodes := make([]string, nodesPerChunk)
+		for r := range nodesPerChunk {
+			chunkNodes[r] = nodeIDs[(i+r)%numNodes]
 		}
-		chunkNodes := nodeIDs[startIdx:endIdx]
 
 		pm := &metadata.PlacementMap{
 			ChunkID: chunkID,
@@ -430,6 +468,12 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			zap.Int("replicas", nodesPerChunk))
 	}
 
+	// Persist volume metadata before creating NVMe-oF target, because the
+	// agent's CreateTarget verifies volume metadata existence.
+	if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
+		return nil, status.Errorf(codes.Internal, "storing volume metadata: %v", err)
+	}
+
 	// Set volume context for RWX (NFS-backed) volumes.
 	volContext := map[string]string{}
 	if hasRWXCapability(req.GetVolumeCapabilities()) {
@@ -438,38 +482,31 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		volContext["accessMode"] = "RWX"
 	} else if cs.agentTarget != nil {
 		// For RWO block volumes, create an NVMe-oF target on the first placed node.
-		// NOTE: nodeIDs[0] is used as the agent address. The PlacementEngine must
-		//       return network addresses (host:port) that can be used for gRPC calls
-		//       to the agent's NVMeTargetService. If the placement engine returns
-		//       logical node IDs that differ from network addresses, a separate
-		//       nodeID→address mapping mechanism is required.
 		agentAddr := nodeIDs[0]
 		nqn, targetAddr, targetPort, targetErr := cs.agentTarget.CreateTarget(ctx, agentAddr, volumeID, int64(requiredBytes))
 		if targetErr != nil {
+			// Clean up metadata on target creation failure.
+			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
 			return nil, status.Errorf(codes.Internal, "creating NVMe-oF target for volume %s: %v", volumeID, targetErr)
 		}
 		volContext["targetAddress"] = targetAddr
 		volContext["targetPort"] = targetPort
 		volContext["subsystemNQN"] = nqn
 
-		// Persist target fields in volume metadata.
+		// Update volume metadata with target fields.
 		vm.TargetNodeID = nodeIDs[0]
 		vm.TargetAddress = targetAddr
 		vm.TargetPort = targetPort
 		vm.SubsystemNQN = nqn
-	}
-
-	if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
-		// Clean up target if metadata storage fails.
-		if cs.agentTarget != nil && vm.SubsystemNQN != "" {
+		if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
 			_ = cs.agentTarget.DeleteTarget(ctx, nodeIDs[0], volumeID)
+			return nil, status.Errorf(codes.Internal, "updating volume metadata with target info: %v", err)
 		}
-		return nil, status.Errorf(codes.Internal, "storing volume metadata: %v", err)
 	}
 
 	// Build accessible topology from the nodes where chunks are placed.
 	// This informs the Kubernetes scheduler where the volume is reachable.
-	accessibleTopology := buildVolumeTopology(nodeIDs)
+	accessibleTopology := cs.buildVolumeTopology(nodeIDs)
 
 	// Reserve quota for the volume after successful creation.
 	if cs.quota != nil {

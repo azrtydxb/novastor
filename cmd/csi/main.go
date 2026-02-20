@@ -180,8 +180,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Build TLS dial option when TLS flags are provided.
+	// Build TLS dial options when TLS flags are provided.
+	// We create two sets of dial options:
+	//   - dialOpts: for metadata service connections (uses service DNS names)
+	//   - agentDialOpts: for agent connections (uses pod IPs, so we set
+	//     ServerName to match the cert's DNS SAN)
 	var dialOpts []grpc.DialOption
+	var agentDialOpts []grpc.DialOption
 	if *tlsCA != "" && *tlsCert != "" && *tlsKey != "" {
 		rotator := transport.NewCertRotator(*tlsCert, *tlsKey, *tlsRotationInterval)
 		rotator.Start(ctx)
@@ -196,6 +201,19 @@ func main() {
 			log.Fatalf("Failed to configure TLS: %v", tlsErr)
 		}
 		dialOpts = append(dialOpts, tlsOpt)
+
+		// Agent connections use pod IPs which won't match cert DNS SANs.
+		// Override ServerName so TLS verifies against a known DNS SAN.
+		agentTLSOpt, agentTLSErr := transport.NewClientTLSWithRotation(transport.TLSConfig{
+			CACertPath: *tlsCA,
+			CertPath:   *tlsCert,
+			KeyPath:    *tlsKey,
+			ServerName: "novastor-agent",
+		}, rotator)
+		if agentTLSErr != nil {
+			log.Fatalf("Failed to configure agent TLS: %v", agentTLSErr)
+		}
+		agentDialOpts = append(agentDialOpts, agentTLSOpt)
 	}
 
 	// Connect to the metadata service.
@@ -206,7 +224,12 @@ func main() {
 	defer func() { _ = metaClient.Close() }()
 
 	// Build the NodeChunkClient from agent addresses.
-	nodeChunkClient := agent.NewNodeChunkClient(dialOpts...)
+	// Use agentDialOpts for pod IP connections when TLS is enabled.
+	chunkDialOpts := agentDialOpts
+	if len(chunkDialOpts) == 0 {
+		chunkDialOpts = dialOpts
+	}
+	nodeChunkClient := agent.NewNodeChunkClient(chunkDialOpts...)
 	if *agentAddrs != "" {
 		for _, entry := range strings.Split(*agentAddrs, ",") {
 			entry = strings.TrimSpace(entry)
@@ -235,6 +258,10 @@ func main() {
 	// stale entries (dead pods) can be removed on the next sync cycle.
 	knownNodes := make(map[string]struct{})
 	knownNodesMu := sync.Mutex{}
+
+	// controllerRef is set after the ControllerServer is created so that
+	// syncNodes can update the address→node-name mapping for PV topology.
+	var controllerRef *novcsi.ControllerServer
 
 	// nodeTTL is how long a node entry is considered fresh. Agents heartbeat
 	// every 30 seconds; entries older than 3× that are almost certainly stale
@@ -291,6 +318,8 @@ func main() {
 			}
 		}
 		// Add or update newly discovered nodes with full topology info.
+		// Also build address→node-name mapping for PV topology resolution.
+		addrToName := make(map[string]string, len(currentNodes))
 		for addr, n := range currentNodes {
 			weight := 1.0
 			if n.TotalCapacity > 0 {
@@ -304,10 +333,17 @@ func main() {
 				Rack:   n.Rack,
 			})
 			if _, exists := knownNodes[addr]; !exists {
-				log.Printf("Discovered storage node at %s (zone=%s, rack=%s, weight=%.2f)",
-					addr, n.Zone, n.Rack, weight)
+				log.Printf("Discovered storage node at %s (nodeID=%s, zone=%s, rack=%s, weight=%.2f)",
+					addr, n.NodeID, n.Zone, n.Rack, weight)
 				knownNodes[addr] = struct{}{}
 			}
+			addrToName[addr] = n.NodeID
+		}
+
+		// Update the controller's address→node-name mapping so that
+		// buildVolumeTopology produces K8s node names instead of pod IPs.
+		if controllerRef != nil {
+			controllerRef.UpdateNodeMapping(addrToName)
 		}
 	}
 	syncNodes()
@@ -410,10 +446,17 @@ func main() {
 	}
 
 	// Build NVMe target client for controller → agent communication.
-	nvmeTargetClient := novcsi.NewNodeTargetClient(dialOpts...)
+	// Use agentDialOpts which has ServerName override for pod IP connections.
+	targetDialOpts := agentDialOpts
+	if len(targetDialOpts) == 0 {
+		targetDialOpts = dialOpts
+	}
+	nvmeTargetClient := novcsi.NewNodeTargetClient(targetDialOpts...)
 
 	// Build sub-controllers.
 	controller := novcsi.NewControllerServer(metaClient, placer, nvmeTargetClient, nil)
+	controllerRef = controller // Enable syncNodes to update the node name mapping.
+	syncNodes()                // Re-run to populate the mapping now that controllerRef is set.
 	snapAdapter := &snapshotStoreAdapter{client: metaClient}
 	snapshotCtrl := novcsi.NewSnapshotController(snapAdapter)
 	expandCtrl := novcsi.NewExpandController(metaClient, placer)

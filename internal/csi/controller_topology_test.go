@@ -249,7 +249,8 @@ func TestBuildVolumeTopology(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildVolumeTopology(tt.nodes)
+			cs := &ControllerServer{}
+			result := cs.buildVolumeTopology(tt.nodes)
 			if len(result) != tt.expectedLen {
 				t.Errorf("expected %d topologies, got %d", tt.expectedLen, len(result))
 			}
