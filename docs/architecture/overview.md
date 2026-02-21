@@ -21,6 +21,7 @@ graph TB
     subgraph Data Plane
         CE["Chunk Storage Engine<br/>4 MiB Immutable Chunks<br/>CRC-32C Verified"]
         AGENT["Node Agent<br/>DaemonSet<br/>Disk Management"]
+        SPDK["SPDK Data Plane<br/>Rust + NVMe-oF<br/>Kernel Bypass"]
     end
 
     CSI --> META
@@ -32,6 +33,7 @@ graph TB
     CTRL --> META
     META --> PE
     CE --> AGENT
+    AGENT -->|"JSON-RPC"| SPDK
     PE --> AGENT
 
     style CSI fill:#e1f5ff
@@ -42,6 +44,7 @@ graph TB
     style PE fill:#f3e5f5
     style CE fill:#e8f5e9
     style AGENT fill:#fff4e6
+    style SPDK fill:#e8f5e9
 ```
 
 ## Core Principle: Everything is Chunks
