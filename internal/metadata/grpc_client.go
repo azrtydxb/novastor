@@ -566,3 +566,48 @@ func (c *GRPCClient) CleanupExpiredLocks(ctx context.Context) (int, error) {
 	}
 	return result.Cleaned, nil
 }
+
+// ---- Volume ownership operations ----
+
+// SetVolumeOwner stores or updates volume ownership via the remote metadata service.
+func (c *GRPCClient) SetVolumeOwner(ctx context.Context, ownership *VolumeOwnership) error {
+	_, err := c.exec(ctx, "SetVolumeOwner", ownership)
+	return err
+}
+
+// GetVolumeOwner retrieves volume ownership by volume ID.
+func (c *GRPCClient) GetVolumeOwner(ctx context.Context, volumeID string) (*VolumeOwnership, error) {
+	data, err := c.exec(ctx, "GetVolumeOwner", struct {
+		VolumeID string `json:"volume_id"`
+	}{VolumeID: volumeID})
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	var ownership VolumeOwnership
+	if err := json.Unmarshal(data, &ownership); err != nil {
+		return nil, fmt.Errorf("unmarshaling VolumeOwnership: %w", err)
+	}
+	return &ownership, nil
+}
+
+// RequestOwnership attempts to claim volume ownership via the remote metadata service.
+func (c *GRPCClient) RequestOwnership(ctx context.Context, volumeID, requesterAddr string) (bool, uint64, error) {
+	data, err := c.exec(ctx, "RequestOwnership", struct {
+		VolumeID      string `json:"volume_id"`
+		RequesterAddr string `json:"requester_addr"`
+	}{VolumeID: volumeID, RequesterAddr: requesterAddr})
+	if err != nil {
+		return false, 0, err
+	}
+	var result struct {
+		Granted    bool   `json:"granted"`
+		Generation uint64 `json:"generation"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return false, 0, fmt.Errorf("unmarshaling ownership result: %w", err)
+	}
+	return result.Granted, result.Generation, nil
+}
