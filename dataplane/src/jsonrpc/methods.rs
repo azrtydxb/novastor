@@ -1,7 +1,11 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{
+    BlobstoreConfig, LocalBdevConfig, LvolConfig, NvmfInitiatorConfig, NvmfTargetConfig,
+};
 use crate::error::DataPlaneError;
 use crate::spdk::bdev_manager::BdevManager;
 use crate::spdk::nvmf_manager::NvmfManager;
@@ -58,17 +62,10 @@ where
 // Bdev methods
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct AioCreateParams {
-    name: String,
-    filename: String,
-    block_size: u32,
-}
-
-fn bdev_aio_create(p: AioCreateParams) -> Result<serde_json::Value, DataPlaneError> {
+fn bdev_aio_create(p: LocalBdevConfig) -> Result<serde_json::Value, DataPlaneError> {
     let mgr = BDEV_MANAGER.get().ok_or(DataPlaneError::SpdkInit("bdev manager not initialised".into()))?;
-    mgr.create_aio_bdev(&p.name, &p.filename, p.block_size)?;
-    Ok(serde_json::json!({"name": p.name}))
+    let info = mgr.create_aio_bdev(&p)?;
+    Ok(serde_json::json!({"name": info.name}))
 }
 
 #[derive(Deserialize)]
@@ -84,29 +81,16 @@ fn bdev_malloc_create(p: MallocCreateParams) -> Result<serde_json::Value, DataPl
     Ok(serde_json::json!({"name": p.name}))
 }
 
-#[derive(Deserialize)]
-struct LvolStoreCreateParams {
-    bdev_name: String,
-    lvs_name: String,
-}
-
-fn bdev_lvol_create_lvstore(p: LvolStoreCreateParams) -> Result<serde_json::Value, DataPlaneError> {
+fn bdev_lvol_create_lvstore(p: BlobstoreConfig) -> Result<serde_json::Value, DataPlaneError> {
     let mgr = BDEV_MANAGER.get().ok_or(DataPlaneError::SpdkInit("bdev manager not initialised".into()))?;
-    let uuid = mgr.create_lvol_store(&p.bdev_name, &p.lvs_name)?;
-    Ok(serde_json::json!({"uuid": uuid}))
+    let info = mgr.create_lvol_store(&p)?;
+    Ok(serde_json::json!({"uuid": info.name}))
 }
 
-#[derive(Deserialize)]
-struct LvolCreateParams {
-    lvs_name: String,
-    lvol_name: String,
-    size_mb: u64,
-}
-
-fn bdev_lvol_create(p: LvolCreateParams) -> Result<serde_json::Value, DataPlaneError> {
+fn bdev_lvol_create(p: LvolConfig) -> Result<serde_json::Value, DataPlaneError> {
     let mgr = BDEV_MANAGER.get().ok_or(DataPlaneError::SpdkInit("bdev manager not initialised".into()))?;
-    let name = mgr.create_lvol(&p.lvs_name, &p.lvol_name, p.size_mb)?;
-    Ok(serde_json::json!({"name": name}))
+    let info = mgr.create_lvol(&p)?;
+    Ok(serde_json::json!({"name": info.name}))
 }
 
 #[derive(Deserialize)]
@@ -124,18 +108,10 @@ fn bdev_delete(p: BdevDeleteParams) -> Result<serde_json::Value, DataPlaneError>
 // NVMe-oF methods
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct NvmfCreateTargetParams {
-    nqn: String,
-    listen_addr: String,
-    port: u16,
-    bdev_name: String,
-}
-
-fn nvmf_create_target(p: NvmfCreateTargetParams) -> Result<serde_json::Value, DataPlaneError> {
+fn nvmf_create_target(p: NvmfTargetConfig) -> Result<serde_json::Value, DataPlaneError> {
     let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit("nvmf manager not initialised".into()))?;
-    mgr.create_target(&p.nqn, &p.listen_addr, p.port, &p.bdev_name)?;
-    Ok(serde_json::json!({"nqn": p.nqn}))
+    let info = mgr.create_target(&p)?;
+    Ok(serde_json::json!({"nqn": info.nqn}))
 }
 
 #[derive(Deserialize)]
@@ -149,17 +125,10 @@ fn nvmf_delete_target(p: NvmfDeleteTargetParams) -> Result<serde_json::Value, Da
     Ok(serde_json::json!(true))
 }
 
-#[derive(Deserialize)]
-struct NvmfConnectParams {
-    addr: String,
-    port: u16,
-    nqn: String,
-}
-
-fn nvmf_connect_initiator(p: NvmfConnectParams) -> Result<serde_json::Value, DataPlaneError> {
+fn nvmf_connect_initiator(p: NvmfInitiatorConfig) -> Result<serde_json::Value, DataPlaneError> {
     let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit("nvmf manager not initialised".into()))?;
-    let bdev_name = mgr.connect_initiator(&p.addr, p.port, &p.nqn)?;
-    Ok(serde_json::json!({"bdev_name": bdev_name}))
+    let info = mgr.connect_initiator(&p)?;
+    Ok(serde_json::json!({"bdev_name": info.local_bdev_name}))
 }
 
 #[derive(Deserialize)]
@@ -175,16 +144,14 @@ fn nvmf_disconnect_initiator(p: NvmfDisconnectParams) -> Result<serde_json::Valu
 
 #[derive(Deserialize)]
 struct NvmfExportLocalParams {
-    nqn: String,
-    listen_addr: String,
-    port: u16,
     bdev_name: String,
+    volume_id: String,
 }
 
 fn nvmf_export_local(p: NvmfExportLocalParams) -> Result<serde_json::Value, DataPlaneError> {
     let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit("nvmf manager not initialised".into()))?;
-    mgr.export_local(&p.nqn, &p.listen_addr, p.port, &p.bdev_name)?;
-    Ok(serde_json::json!({"nqn": p.nqn}))
+    let info = mgr.export_local(&p.bdev_name, &p.volume_id)?;
+    Ok(serde_json::json!({"nqn": info.nqn}))
 }
 
 // ---------------------------------------------------------------------------
@@ -207,9 +174,6 @@ struct ReplicaTargetParam {
 }
 
 fn replica_bdev_create(p: ReplicaBdevCreateParams) -> Result<serde_json::Value, DataPlaneError> {
-    // Replica bdev creation is a complex operation that connects to all
-    // replica targets and creates a composite bdev. In stub mode we just
-    // record the configuration.
     let _ = &p;
     Ok(serde_json::json!({
         "name": p.name,

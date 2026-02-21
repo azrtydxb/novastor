@@ -1,5 +1,4 @@
 /* SPDK header wrapper for bindgen */
-#ifdef SPDK_SYS
 #include <spdk/stdinc.h>
 #include <spdk/env.h>
 #include <spdk/event.h>
@@ -18,4 +17,3 @@
 #include <spdk/thread.h>
 #include <spdk/log.h>
 #include <spdk/string.h>
-#endif

@@ -121,7 +121,7 @@ dataplane:
   image:
     repository: novastor-dataplane
   reactorMask: "0x1"
-  memSize: 2048
+  memSize: 1024
   resources:
     limits:
       cpu: "2"
