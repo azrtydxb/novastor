@@ -85,6 +85,7 @@ spec:
             - --csi-address=/csi/csi.sock
             - --v=5
             - --feature-gates=Topology=true
+            - --timeout={{ .Values.csi.provisioner.timeout | default "120s" }}
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
