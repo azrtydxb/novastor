@@ -1,51 +1,72 @@
 # Multi-stage build for the NovaStor SPDK data-plane binary.
 #
-# Stage 1: Build SPDK libraries (skipped in stub mode).
-# Stage 2: Build the Rust binary.
+# Stage 1: Build SPDK v26.01 libraries from source.
+# Stage 2: Build the Rust binary with SPDK FFI bindings.
 # Stage 3: Minimal runtime image.
 
 # --------------------------------------------------------------------------
-# Stage 1: SPDK builder (only used when building with SPDK support)
+# Stage 1: SPDK builder
 # --------------------------------------------------------------------------
 FROM ubuntu:22.04 AS spdk-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git ca-certificates python3 python3-pip \
+    build-essential git ca-certificates python3 python3-pip python3-dev \
     pkg-config libaio-dev libssl-dev libnuma-dev uuid-dev \
-    liburing-dev nasm meson ninja-build \
+    liburing-dev meson ninja-build libjson-c-dev libcmocka-dev \
+    libfuse3-dev patchelf unzip curl \
+    autoconf automake libtool libncurses-dev \
+    && pip3 install pyelftools \
     && rm -rf /var/lib/apt/lists/*
 
-ARG SPDK_VERSION=v24.09
+ARG SPDK_VERSION=v26.01
 RUN git clone --depth 1 --branch ${SPDK_VERSION} https://github.com/spdk/spdk.git /spdk && \
     cd /spdk && git submodule update --init --depth 1
 
 WORKDIR /spdk
-RUN ./scripts/pkgdep.sh --rdma || true
-RUN ./configure --without-isal --without-vhost --disable-tests --disable-unit-tests
+RUN ./scripts/pkgdep.sh || true
+RUN ./configure --disable-tests --disable-unit-tests
 RUN make -j$(nproc)
-RUN make install DESTDIR=/spdk-install
+
+# Install to /spdk-out. make install with DESTDIR puts everything under
+# /spdk-out/usr/local/{lib,include,...}. The python target may fail (needs uv),
+# so we also manually copy libs and headers as fallback.
+RUN make install DESTDIR=/spdk-out 2>/dev/null || true && \
+    mkdir -p /spdk-out/usr/local/lib /spdk-out/usr/local/include/spdk && \
+    cp -an build/lib/libspdk_*.a /spdk-out/usr/local/lib/ 2>/dev/null || true && \
+    cp -an build/lib/libspdk_*.so* /spdk-out/usr/local/lib/ 2>/dev/null || true && \
+    cp -an dpdk/build/lib/*.a /spdk-out/usr/local/lib/ 2>/dev/null || true && \
+    cp -an dpdk/build/lib/*.so* /spdk-out/usr/local/lib/ 2>/dev/null || true && \
+    cp -rn include/spdk/* /spdk-out/usr/local/include/spdk/ 2>/dev/null || true && \
+    cp -rn dpdk/build/include/* /spdk-out/usr/local/include/ 2>/dev/null || true && \
+    ls /spdk-out/usr/local/lib/libspdk_nvmf.a && \
+    ls /spdk-out/usr/local/include/spdk/env.h
 
 # --------------------------------------------------------------------------
 # Stage 2: Rust builder
 # --------------------------------------------------------------------------
-FROM rust:1.82-bookworm AS rust-builder
+FROM rust:1.93-bookworm AS rust-builder
 
-# Install build dependencies.
+# Install build dependencies including libclang for bindgen.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libaio-dev libssl-dev libnuma-dev uuid-dev clang \
+    pkg-config libaio-dev libssl-dev libnuma-dev uuid-dev \
+    clang libclang-dev liburing-dev libfuse3-dev libjson-c-dev \
+    libatomic1 gcc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
-# Copy SPDK install from previous stage (optional — only for spdk-sys builds).
-COPY --from=spdk-builder /spdk-install /usr/local
+# Copy SPDK libs and headers from builder stage into standard paths.
+COPY --from=spdk-builder /spdk-out/usr/local/lib/ /usr/local/lib/
+COPY --from=spdk-builder /spdk-out/usr/local/include/ /usr/local/include/
+
+# Refresh the dynamic linker cache.
+RUN ldconfig
 
 # Copy the Rust source.
 COPY dataplane/ ./
 
-# Build in release mode. Without the spdk-sys feature flag, this produces
-# a stub binary useful for integration testing without kernel SPDK support.
-ARG FEATURES=""
+# Build in release mode with full SPDK support.
+ARG FEATURES="spdk-sys"
 RUN if [ -n "$FEATURES" ]; then \
         cargo build --release --features "$FEATURES"; \
     else \
@@ -58,9 +79,20 @@ RUN if [ -n "$FEATURES" ]; then \
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libaio1 libnuma1 libssl3 uuid-runtime \
-    && rm -rf /var/lib/apt/lists/*
+    libaio1 libnuma1 libssl3 openssl uuid-runtime liburing2 libfuse3-3 libjson-c5 \
+    libatomic1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /usr/lib/ssl && ln -sf /etc/ssl/openssl.cnf /usr/lib/ssl/openssl.cnf
 
 COPY --from=rust-builder /build/target/release/novastor-dataplane /usr/local/bin/novastor-dataplane
 
-ENTRYPOINT ["/usr/local/bin/novastor-dataplane"]
+# The statically linked OpenSSL (from Ubuntu 22.04 build stage) hardcodes
+# OPENSSLDIR=/usr/lib/ssl and looks for openssl.cnf there at runtime.
+# Copy the config directly from the build stage to guarantee it exists.
+COPY --from=spdk-builder /usr/lib/ssl/openssl.cnf /usr/lib/ssl/openssl.cnf
+
+# Entrypoint script mounts hugetlbfs inside the container so that
+# DPDK EAL can discover hugepages via /proc/mounts.
+COPY dataplane/entrypoint.sh /usr/local/bin/dataplane-entrypoint.sh
+RUN chmod +x /usr/local/bin/dataplane-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/dataplane-entrypoint.sh"]

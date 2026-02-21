@@ -20,7 +20,7 @@ pub fn run(config: DataPlaneConfig) -> Result<()> {
 
     // Initialise managers and register RPC methods.
     let bdev_mgr = bdev_manager::BdevManager::new();
-    let nvmf_mgr = nvmf_manager::NvmfManager::new();
+    let nvmf_mgr = nvmf_manager::NvmfManager::new(config.listen_port);
     jsonrpc::methods::init_managers(bdev_mgr, nvmf_mgr);
 
     let mut router = Router::new();
