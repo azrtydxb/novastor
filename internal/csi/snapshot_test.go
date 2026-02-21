@@ -67,6 +67,11 @@ func (m *mockSnapshotStore) PutPlacementMap(_ context.Context, _ *metadata.Place
 	return nil
 }
 
+func (m *mockSnapshotStore) GetPlacementMap(_ context.Context, _ string) (*metadata.PlacementMap, error) {
+	// No-op for tests.
+	return nil, fmt.Errorf("placement map not found")
+}
+
 func (m *mockSnapshotStore) DeletePlacementMap(_ context.Context, _ string) error {
 	// No-op for tests.
 	return nil
