@@ -35,6 +35,8 @@ pub fn register_all(router: &mut Router) {
     router.register("nvmf_connect_initiator", wrap(nvmf_connect_initiator));
     router.register("nvmf_disconnect_initiator", wrap(nvmf_disconnect_initiator));
     router.register("nvmf_export_local", wrap(nvmf_export_local));
+    router.register("nvmf_set_ana_state", wrap(nvmf_set_ana_state));
+    router.register("nvmf_get_ana_state", wrap(nvmf_get_ana_state));
     router.register("replica_bdev_create", wrap(replica_bdev_create));
     router.register("replica_bdev_status", wrap(replica_bdev_status));
     router.register("get_version", wrap(get_version));
@@ -111,7 +113,11 @@ fn bdev_delete(p: BdevDeleteParams) -> Result<serde_json::Value, DataPlaneError>
 fn nvmf_create_target(p: NvmfTargetConfig) -> Result<serde_json::Value, DataPlaneError> {
     let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit("nvmf manager not initialised".into()))?;
     let info = mgr.create_target(&p)?;
-    Ok(serde_json::json!({"nqn": info.nqn}))
+    Ok(serde_json::json!({
+        "nqn": info.nqn,
+        "ana_group_id": info.ana_group_id,
+        "ana_state": info.ana_state,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -152,6 +158,33 @@ fn nvmf_export_local(p: NvmfExportLocalParams) -> Result<serde_json::Value, Data
     let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit("nvmf manager not initialised".into()))?;
     let info = mgr.export_local(&p.bdev_name, &p.volume_id)?;
     Ok(serde_json::json!({"nqn": info.nqn}))
+}
+
+#[derive(Deserialize)]
+struct SetAnaStateParams {
+    nqn: String,
+    ana_group_id: u32,
+    ana_state: String,
+}
+
+fn nvmf_set_ana_state(p: SetAnaStateParams) -> Result<serde_json::Value, DataPlaneError> {
+    let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit("nvmf manager not initialised".into()))?;
+    mgr.set_ana_state(&p.nqn, p.ana_group_id, &p.ana_state)?;
+    Ok(serde_json::json!({}))
+}
+
+#[derive(Deserialize)]
+struct GetAnaStateParams {
+    nqn: String,
+}
+
+fn nvmf_get_ana_state(p: GetAnaStateParams) -> Result<serde_json::Value, DataPlaneError> {
+    let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit("nvmf manager not initialised".into()))?;
+    let (ana_group_id, ana_state) = mgr.get_ana_state(&p.nqn)?;
+    Ok(serde_json::json!({
+        "ana_group_id": ana_group_id,
+        "ana_state": ana_state,
+    }))
 }
 
 // ---------------------------------------------------------------------------
