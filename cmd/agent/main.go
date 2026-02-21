@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/piwi3910/novastor/internal/agent"
+	"github.com/piwi3910/novastor/internal/agent/failover"
 	"github.com/piwi3910/novastor/internal/chunk"
 	"github.com/piwi3910/novastor/internal/logging"
 	"github.com/piwi3910/novastor/internal/metadata"
@@ -315,6 +316,16 @@ func main() {
 		}
 	}
 
+	// Compute registrationAddr early so it can be used by both the failover
+	// controller and the node registration goroutine.
+	registrationAddr := *listenAddr
+	if *podIP != "" {
+		_, port, splitErr := net.SplitHostPort(*listenAddr)
+		if splitErr == nil {
+			registrationAddr = net.JoinHostPort(*podIP, port)
+		}
+	}
+
 	// Create and register the NVMe target server when a host IP is provided.
 	if *hostIP != "" {
 		if metaClient == nil {
@@ -343,6 +354,13 @@ func main() {
 			spdkServer := agent.NewSPDKTargetServer(*hostIP, spdkClient, metaClient)
 			spdkServer.Register(srv)
 			logging.L.Info("NVMe-oF target service registered (SPDK)", zap.String("hostIP", *hostIP))
+
+			// Start failover controller for ANA state management.
+			fc := failover.New(*nodeID, registrationAddr, *hostIP, metaClient, spdkClient, logging.L)
+			if err := fc.Start(ctx); err != nil {
+				logging.L.Fatal("failover controller start", zap.Error(err))
+			}
+			defer fc.Stop()
 		} else {
 			// Legacy mode: chunk-backed block devices with loop/nvmet.
 			nvmeServer := agent.NewNVMeTargetServer(*hostIP, store, metaClient)
@@ -369,16 +387,6 @@ func main() {
 	// Register this node with the metadata service.
 	if metaClient != nil {
 		defer metaClient.Close()
-		// Use the pod IP for gRPC registration so that other components
-		// (e.g. the CSI controller) can dial this agent via the pod network.
-		// Fall back to listenAddr when pod-ip is not set.
-		registrationAddr := *listenAddr
-		if *podIP != "" {
-			_, port, splitErr := net.SplitHostPort(*listenAddr)
-			if splitErr == nil {
-				registrationAddr = net.JoinHostPort(*podIP, port)
-			}
-		}
 		go registerNode(ctx, metaClient, *nodeID, registrationAddr, store, *heartbeatInterval)
 	}
 
