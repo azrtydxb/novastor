@@ -148,3 +148,52 @@ func (l *LinuxInitiator) Disconnect(ctx context.Context, nqn string) error {
 	}
 	return nil
 }
+
+// discoverMultipathDevice polls sysfs for a kernel NVMe multipath device
+// matching the given subsystem NQN.
+func discoverMultipathDevice(nqn string) (string, error) {
+	const (
+		pollInterval = 200 * time.Millisecond
+		timeout      = 15 * time.Second
+	)
+	deadline := time.Now().Add(timeout)
+	for {
+		path, err := findMultipathDeviceByNQN(nqn)
+		if err == nil {
+			return path, nil
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("timed out waiting for multipath device with nqn %s", nqn)
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
+// findMultipathDeviceByNQN scans /sys/class/nvme-subsystem for a subsystem
+// whose NQN matches, then returns the multipath namespace block device path.
+func findMultipathDeviceByNQN(nqn string) (string, error) {
+	entries, err := os.ReadDir("/sys/class/nvme-subsystem")
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		subsysnqnPath := filepath.Join("/sys/class/nvme-subsystem", entry.Name(), "subsysnqn")
+		data, err := os.ReadFile(subsysnqnPath)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(data)) != nqn {
+			continue
+		}
+		// Found matching subsystem — find its namespace block device
+		nsEntries, _ := filepath.Glob(filepath.Join("/sys/class/nvme-subsystem", entry.Name(), "nvme*n*"))
+		for _, nsPath := range nsEntries {
+			nsName := filepath.Base(nsPath)
+			devPath := "/dev/" + nsName
+			if _, err := os.Stat(devPath); err == nil {
+				return devPath, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no multipath device found for nqn %s", nqn)
+}
