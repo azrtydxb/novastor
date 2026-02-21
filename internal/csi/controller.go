@@ -79,9 +79,11 @@ type PlacementEngine interface {
 // When nil, the controller skips NVMe-oF target management (backward compatible).
 type AgentTargetClient interface {
 	// CreateTarget creates an NVMe-oF target on the agent and returns connection params.
-	CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64) (subsystemNQN, targetAddress, targetPort string, err error)
+	CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32) (subsystemNQN, targetAddress, targetPort string, err error)
 	// DeleteTarget tears down the NVMe-oF target on the agent.
 	DeleteTarget(ctx context.Context, agentAddr string, volumeID string) error
+	// SetANAState changes the ANA state for a volume's NVMe-oF target on the agent.
+	SetANAState(ctx context.Context, agentAddr string, volumeID string, anaState string, anaGroupID uint32) error
 }
 
 // ControllerServer implements the CSI Controller service.
@@ -488,7 +490,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	} else if cs.agentTarget != nil {
 		// For RWO block volumes, create an NVMe-oF target on the first placed node.
 		agentAddr := nodeIDs[0]
-		nqn, targetAddr, targetPort, targetErr := cs.agentTarget.CreateTarget(ctx, agentAddr, volumeID, int64(requiredBytes))
+		nqn, targetAddr, targetPort, targetErr := cs.agentTarget.CreateTarget(ctx, agentAddr, volumeID, int64(requiredBytes), "", 0)
 		if targetErr != nil {
 			// Clean up metadata on target creation failure.
 			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)

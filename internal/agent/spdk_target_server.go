@@ -117,6 +117,27 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 		zap.String("lvolName", lvolName),
 	)
 
+	// Set ANA state if specified.
+	anaState := req.GetAnaState()
+	anaGroupID := req.GetAnaGroupId()
+	if anaState != "" && anaGroupID > 0 {
+		if err := s.spdkClient.SetANAState(nqn, anaGroupID, anaState); err != nil {
+			logging.L.Warn("spdk target: failed to set ANA state",
+				zap.String("volumeID", volumeID),
+				zap.String("anaState", anaState),
+				zap.Uint32("anaGroupID", anaGroupID),
+				zap.Error(err),
+			)
+			// Non-fatal: target works without ANA.
+		} else {
+			logging.L.Info("spdk target: ANA state set",
+				zap.String("volumeID", volumeID),
+				zap.String("anaState", anaState),
+				zap.Uint32("anaGroupID", anaGroupID),
+			)
+		}
+	}
+
 	return &pb.CreateTargetResponse{
 		SubsystemNqn:  nqn,
 		TargetAddress: s.hostIP,
@@ -156,4 +177,25 @@ func (s *SPDKTargetServer) DeleteTarget(ctx context.Context, req *pb.DeleteTarge
 
 	logging.L.Info("spdk target: target deleted", zap.String("volumeID", volumeID))
 	return &pb.DeleteTargetResponse{}, nil
+}
+
+// SetANAState changes the ANA state for a volume's NVMe-oF target subsystem.
+func (s *SPDKTargetServer) SetANAState(ctx context.Context, req *pb.SetANAStateRequest) (*pb.SetANAStateResponse, error) {
+	volumeID := req.GetVolumeId()
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume_id required")
+	}
+
+	nqn := spdkNQNPrefix + volumeID
+	if err := s.spdkClient.SetANAState(nqn, req.GetAnaGroupId(), req.GetAnaState()); err != nil {
+		return nil, status.Errorf(codes.Internal, "set ANA state for %s: %v", volumeID, err)
+	}
+
+	logging.L.Info("spdk target: ANA state updated",
+		zap.String("volumeID", volumeID),
+		zap.String("anaState", req.GetAnaState()),
+		zap.Uint32("anaGroupID", req.GetAnaGroupId()),
+	)
+
+	return &pb.SetANAStateResponse{}, nil
 }

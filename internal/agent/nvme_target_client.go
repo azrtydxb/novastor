@@ -46,10 +46,12 @@ func (c *NVMeTargetClient) Close() error {
 }
 
 // CreateTarget calls the agent's CreateTarget RPC.
-func (c *NVMeTargetClient) CreateTarget(ctx context.Context, volumeID string, sizeBytes int64) (*NVMeTargetResult, error) {
+func (c *NVMeTargetClient) CreateTarget(ctx context.Context, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32) (*NVMeTargetResult, error) {
 	resp, err := c.client.CreateTarget(ctx, &pb.CreateTargetRequest{
-		VolumeId:  volumeID,
-		SizeBytes: sizeBytes,
+		VolumeId:   volumeID,
+		SizeBytes:  sizeBytes,
+		AnaState:   anaState,
+		AnaGroupId: anaGroupID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("CreateTarget RPC for volume %s: %w", volumeID, err)
@@ -66,6 +68,19 @@ func (c *NVMeTargetClient) DeleteTarget(ctx context.Context, volumeID string) er
 	_, err := c.client.DeleteTarget(ctx, &pb.DeleteTargetRequest{VolumeId: volumeID})
 	if err != nil {
 		return fmt.Errorf("DeleteTarget RPC for volume %s: %w", volumeID, err)
+	}
+	return nil
+}
+
+// SetANAState calls the agent's SetANAState RPC.
+func (c *NVMeTargetClient) SetANAState(ctx context.Context, volumeID, anaState string, anaGroupID uint32) error {
+	_, err := c.client.SetANAState(ctx, &pb.SetANAStateRequest{
+		VolumeId:   volumeID,
+		AnaState:   anaState,
+		AnaGroupId: anaGroupID,
+	})
+	if err != nil {
+		return fmt.Errorf("SetANAState RPC for volume %s: %w", volumeID, err)
 	}
 	return nil
 }
