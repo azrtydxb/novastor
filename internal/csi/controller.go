@@ -5,7 +5,9 @@ package csi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"net"
 	"strconv"
 	"sync"
@@ -43,6 +45,7 @@ type MetadataStore interface {
 	ListVolumesMeta(ctx context.Context) ([]*metadata.VolumeMeta, error)
 	// Placement map methods for recovery management.
 	PutPlacementMap(ctx context.Context, pm *metadata.PlacementMap) error
+	GetPlacementMap(ctx context.Context, chunkID string) (*metadata.PlacementMap, error)
 	DeletePlacementMap(ctx context.Context, chunkID string) error
 }
 
@@ -488,25 +491,83 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		volContext["nfsShare"] = fmt.Sprintf("/exports/%s", volumeID)
 		volContext["accessMode"] = "RWX"
 	} else if cs.agentTarget != nil {
-		// For RWO block volumes, create an NVMe-oF target on the first placed node.
-		agentAddr := nodeIDs[0]
-		nqn, targetAddr, targetPort, targetErr := cs.agentTarget.CreateTarget(ctx, agentAddr, volumeID, int64(requiredBytes), "", 0)
-		if targetErr != nil {
-			// Clean up metadata on target creation failure.
-			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
-			return nil, status.Errorf(codes.Internal, "creating NVMe-oF target for volume %s: %v", volumeID, targetErr)
-		}
-		volContext["targetAddress"] = targetAddr
-		volContext["targetPort"] = targetPort
-		volContext["subsystemNQN"] = nqn
+		// For RWO block volumes, create NVMe-oF targets on ALL replica agents
+		// with ANA states for multipath failover.
+		// Compute ANA group ID from volume ID (consistent across all agents).
+		anaGroupID := crc32.ChecksumIEEE([]byte(volumeID)) & 0xFF
 
-		// Update volume metadata with target fields.
-		vm.TargetNodeID = nodeIDs[0]
-		vm.TargetAddress = targetAddr
-		vm.TargetPort = targetPort
-		vm.SubsystemNQN = nqn
+		// Deduplicate nodeIDs to get unique agents for target creation.
+		// CRUSH placement may assign multiple chunks to the same node.
+		seen := make(map[string]bool)
+		var uniqueNodes []string
+		for _, n := range nodeIDs {
+			if !seen[n] {
+				seen[n] = true
+				uniqueNodes = append(uniqueNodes, n)
+			}
+		}
+
+		type targetResult struct {
+			nqn  string
+			addr string
+			port string
+			err  error
+		}
+		results := make([]targetResult, len(uniqueNodes))
+		g, gCtx := errgroup.WithContext(ctx)
+		for i, nodeAddr := range uniqueNodes {
+			i, nodeAddr := i, nodeAddr
+			anaState := "non_optimized"
+			if i == 0 {
+				anaState = "optimized" // First node in CRUSH order is write-owner
+			}
+			g.Go(func() error {
+				nqn, addr, port, err := cs.agentTarget.CreateTarget(
+					gCtx, nodeAddr, volumeID, int64(requiredBytes), anaState, anaGroupID,
+				)
+				results[i] = targetResult{nqn, addr, port, err}
+				return err
+			})
+		}
+		if err := g.Wait(); err != nil {
+			// Clean up any successfully created targets.
+			for i, r := range results {
+				if r.err == nil {
+					_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
+				}
+			}
+			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
+			return nil, status.Errorf(codes.Internal, "creating NVMe-oF targets for volume %s: %v", volumeID, err)
+		}
+
+		// Build target addresses JSON for volume context.
+		type targetInfo struct {
+			Addr    string `json:"addr"`
+			Port    string `json:"port"`
+			NQN     string `json:"nqn"`
+			IsOwner bool   `json:"is_owner"`
+		}
+		targets := make([]targetInfo, len(results))
+		for i, r := range results {
+			targets[i] = targetInfo{Addr: r.addr, Port: r.port, NQN: r.nqn, IsOwner: i == 0}
+		}
+		targetsJSON, _ := json.Marshal(targets)
+
+		volContext["targetAddresses"] = string(targetsJSON)
+		volContext["writeOwner"] = results[0].addr
+		volContext["subsystemNQN"] = results[0].nqn
+		volContext["targetAddress"] = results[0].addr // Backward compat
+		volContext["targetPort"] = results[0].port    // Backward compat
+
+		// Update volume metadata with primary target fields.
+		vm.TargetNodeID = uniqueNodes[0]
+		vm.TargetAddress = results[0].addr
+		vm.TargetPort = results[0].port
+		vm.SubsystemNQN = results[0].nqn
 		if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
-			_ = cs.agentTarget.DeleteTarget(ctx, nodeIDs[0], volumeID)
+			for i := range uniqueNodes {
+				_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
+			}
 			return nil, status.Errorf(codes.Internal, "updating volume metadata with target info: %v", err)
 		}
 	}
@@ -595,15 +656,32 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	// If the volume has a namespace annotation (stored in volume context), include it.
 	// For now, we only track pool-level quota in volume metadata.
 
-	// Tear down NVMe-oF target before removing metadata (best-effort).
-	// If the target deletion fails (e.g., agent unreachable), we still proceed
+	// Tear down NVMe-oF targets on all agents that may have them (best-effort).
+	// With multi-target provisioning, targets exist on all unique placement nodes.
+	// If target deletion fails (e.g., agent unreachable), we still proceed
 	// with metadata cleanup to avoid blocking volume deletion on retries.
-	if cs.agentTarget != nil && vm.TargetNodeID != "" {
-		if deleteErr := cs.agentTarget.DeleteTarget(ctx, vm.TargetNodeID, volumeID); deleteErr != nil {
-			logging.L.Warn("failed to delete NVMe-oF target (proceeding with metadata cleanup)",
-				zap.String("volumeID", volumeID),
-				zap.String("targetNodeID", vm.TargetNodeID),
-				zap.Error(deleteErr))
+	if cs.agentTarget != nil {
+		// Delete targets on all agents that may have them.
+		// Look up unique nodes from placement maps.
+		targetNodes := make(map[string]bool)
+		if vm.TargetNodeID != "" {
+			targetNodes[vm.TargetNodeID] = true
+		}
+		for _, chunkID := range vm.ChunkIDs {
+			pm, pmErr := cs.meta.GetPlacementMap(ctx, chunkID)
+			if pmErr == nil && pm != nil {
+				for _, n := range pm.Nodes {
+					targetNodes[n] = true
+				}
+			}
+		}
+		for nodeAddr := range targetNodes {
+			if delErr := cs.agentTarget.DeleteTarget(ctx, nodeAddr, volumeID); delErr != nil {
+				logging.L.Warn("failed to delete NVMe-oF target on agent (best-effort cleanup)",
+					zap.String("volumeID", volumeID),
+					zap.String("agentAddr", nodeAddr),
+					zap.Error(delErr))
+			}
 		}
 	}
 

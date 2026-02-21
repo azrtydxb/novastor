@@ -104,6 +104,10 @@ func (a *snapshotStoreAdapter) PutPlacementMap(ctx context.Context, pm *metadata
 	return a.client.PutPlacementMap(ctx, pm)
 }
 
+func (a *snapshotStoreAdapter) GetPlacementMap(ctx context.Context, chunkID string) (*metadata.PlacementMap, error) {
+	return a.client.GetPlacementMap(ctx, chunkID)
+}
+
 func (a *snapshotStoreAdapter) DeletePlacementMap(ctx context.Context, chunkID string) error {
 	return a.client.DeletePlacementMap(ctx, chunkID)
 }
