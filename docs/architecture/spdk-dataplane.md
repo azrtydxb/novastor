@@ -69,7 +69,7 @@ sequenceDiagram
     DP-->>Agent: replica bdev ready
 
     Note over DP: Write path: fan-out to all replicas, ACK on majority
-    Note over DP: Read path: round-robin across healthy replicas
+    Note over DP: Read path: distributed across healthy replicas (configurable policy)
 ```
 
 ## Components
@@ -85,6 +85,38 @@ The data-plane binary runs as a DaemonSet sidecar alongside the Go agent on each
 | **NVMe-oF Manager** | Exposes bdevs as NVMe-oF/TCP targets, connects to remote targets |
 | **Replica Bdev** | Custom bdev that replicates writes with quorum ACK and distributes reads |
 | **JSON-RPC Server** | Unix domain socket server for Go control plane communication |
+
+### Read Scaling Policies
+
+The replica bdev supports three read distribution policies, selected at creation time via the `read_policy` parameter:
+
+| Policy | Description | Best For |
+|---|---|---|
+| `round_robin` | Distributes reads evenly across all healthy replicas | General workloads, maximum aggregate throughput |
+| `local_first` | Prefers the local replica for reads, falls back to round-robin for remote | Latency-sensitive workloads with local replica |
+| `latency_aware` | Weighted round-robin based on per-replica EMA latency | Heterogeneous networks, asymmetric load |
+
+**Latency-aware steering** tracks each replica's average read latency using an exponential moving average (EMA, alpha=0.1). Replicas with lower latency receive proportionally more reads via weighted round-robin. This automatically adapts to load imbalances and network asymmetry.
+
+The agent auto-selects `local_first` when the consuming node has a local replica, and `latency_aware` otherwise.
+
+### I/O Statistics
+
+The `novastor_io_stats` RPC returns per-replica read distribution metrics:
+
+```json
+{
+  "volume_id": "vol-abc",
+  "replicas": [
+    { "addr": "10.42.1.5", "reads_completed": 1500, "read_bytes": 6291456, "avg_read_latency_us": 120 },
+    { "addr": "10.42.2.3", "reads_completed": 1480, "read_bytes": 6209536, "avg_read_latency_us": 135 },
+    { "addr": "10.42.3.7", "reads_completed": 1520, "read_bytes": 6373376, "avg_read_latency_us": 118 }
+  ],
+  "total_read_iops": 4500,
+  "total_write_iops": 1200,
+  "write_quorum_latency_us": 250
+}
+```
 
 ### JSON-RPC Interface
 
@@ -105,7 +137,8 @@ The Go agent communicates with the Rust data-plane over a Unix domain socket at 
 | `nvmf_disconnect_initiator` | Disconnect from a remote target |
 | `nvmf_export_local` | Create loopback NVMe-oF for local consumption |
 | `replica_bdev_create` | Create a replica bdev across targets |
-| `replica_bdev_status` | Query replica health |
+| `replica_bdev_status` | Query replica health and I/O stats |
+| `novastor_io_stats` | Per-replica I/O distribution metrics |
 | `nvmf_set_ana_state` | Set ANA state for an NVMe-oF target |
 | `nvmf_get_ana_state` | Get ANA state for an NVMe-oF target |
 | `replica_bdev_add_replica` | Add replica to running bdev |
