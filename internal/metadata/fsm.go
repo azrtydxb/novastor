@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/proto"
 
+	pb "github.com/piwi3910/novastor/api/proto/metadata"
 	"github.com/piwi3910/novastor/internal/metrics"
 )
 
@@ -105,8 +107,14 @@ func (f *FSM) Apply(log *raft.Log) interface{} {
 	}()
 
 	var op fsmOp
-	if err := json.Unmarshal(log.Data, &op); err != nil {
-		return fmt.Errorf("unmarshaling fsm op: %w", err)
+	var pbOp pb.FsmOp
+	if err := proto.Unmarshal(log.Data, &pbOp); err != nil {
+		// Fall back to JSON for backward compatibility with pre-protobuf log entries.
+		if jsonErr := json.Unmarshal(log.Data, &op); jsonErr != nil {
+			return fmt.Errorf("unmarshaling fsm op: %w", err)
+		}
+	} else {
+		op = fsmOp{Op: pbOp.Op, Bucket: pbOp.Bucket, Key: pbOp.Key, Value: pbOp.Value}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -234,9 +242,30 @@ func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 // Restore restores the FSM state from a snapshot.
 func (f *FSM) Restore(rc io.ReadCloser) error {
 	defer rc.Close()
+	raw, err := io.ReadAll(rc)
+	if err != nil {
+		return fmt.Errorf("reading snapshot: %w", err)
+	}
 	var data map[string]map[string][]byte
-	if err := json.NewDecoder(rc).Decode(&data); err != nil {
-		return fmt.Errorf("decoding snapshot: %w", err)
+	var snap pb.FsmSnapshot
+	if err := proto.Unmarshal(raw, &snap); err != nil {
+		// Fall back to JSON for backward compatibility with pre-protobuf snapshots.
+		if jsonErr := json.Unmarshal(raw, &data); jsonErr != nil {
+			return fmt.Errorf("decoding snapshot: %w (json fallback: %v)", err, jsonErr)
+		}
+	} else {
+		data = make(map[string]map[string][]byte, len(snap.Buckets))
+		for bk, bv := range snap.Buckets {
+			bucket := make(map[string][]byte, len(bv.Entries))
+			for k, v := range bv.Entries {
+				// Copy byte slices to avoid retaining references to the
+				// protobuf unmarshal buffer.
+				val := make([]byte, len(v))
+				copy(val, v)
+				bucket[k] = val
+			}
+			data[bk] = bucket
+		}
 	}
 	f.mu.Lock()
 	f.buckets = data
@@ -246,7 +275,12 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 
 // Persist writes the snapshot data to the sink.
 func (s *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
-	data, err := json.Marshal(s.data)
+	// Convert map[string]map[string][]byte → pb.FsmSnapshot.
+	pbBuckets := make(map[string]*pb.FsmBucket, len(s.data))
+	for bk, bv := range s.data {
+		pbBuckets[bk] = &pb.FsmBucket{Entries: bv}
+	}
+	data, err := proto.Marshal(&pb.FsmSnapshot{Buckets: pbBuckets})
 	if err != nil {
 		sink.Cancel()
 		return fmt.Errorf("marshaling snapshot: %w", err)

@@ -2,12 +2,14 @@ package metadata
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"os"
 	"testing"
 
 	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/piwi3910/novastor/api/proto/metadata"
 )
 
 func newTestBadgerFSM(t *testing.T) (*BadgerFSM, func()) {
@@ -29,7 +31,7 @@ func newTestBadgerFSM(t *testing.T) (*BadgerFSM, func()) {
 
 func applyOp(t *testing.T, f MetadataFSM, op *fsmOp) {
 	t.Helper()
-	data, err := json.Marshal(op)
+	data, err := proto.Marshal(&pb.FsmOp{Op: op.Op, Bucket: op.Bucket, Key: op.Key, Value: op.Value})
 	if err != nil {
 		t.Fatalf("marshal fsmOp: %v", err)
 	}
@@ -244,7 +246,7 @@ func TestBadgerFSM_UnknownOp(t *testing.T) {
 	f, cleanup := newTestBadgerFSM(t)
 	defer cleanup()
 
-	data, _ := json.Marshal(&fsmOp{Op: "invalid", Bucket: "b", Key: "k"})
+	data, _ := proto.Marshal(&pb.FsmOp{Op: "invalid", Bucket: "b", Key: "k"})
 	resp := f.Apply(&raft.Log{Data: data})
 	if resp == nil {
 		t.Fatal("expected error for unknown op")
@@ -258,9 +260,9 @@ func TestBadgerFSM_InvalidLogData(t *testing.T) {
 	f, cleanup := newTestBadgerFSM(t)
 	defer cleanup()
 
-	resp := f.Apply(&raft.Log{Data: []byte("not json")})
+	resp := f.Apply(&raft.Log{Data: []byte("not protobuf")})
 	if resp == nil {
-		t.Fatal("expected error for invalid JSON")
+		t.Fatal("expected error for invalid protobuf")
 	}
 	if _, ok := resp.(error); !ok {
 		t.Fatalf("expected error, got %T", resp)
