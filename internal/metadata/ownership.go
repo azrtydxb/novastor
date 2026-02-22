@@ -10,7 +10,7 @@ import (
 
 const (
 	bucketVolumeOwners = "volume-owners"
-	deadThreshold      = 2 * time.Second
+	deadThreshold      = 5 * time.Second
 )
 
 // VolumeOwnership tracks which agent owns the write path for a volume.

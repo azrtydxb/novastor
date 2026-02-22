@@ -551,7 +551,14 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		for i, r := range results {
 			targets[i] = targetInfo{Addr: r.addr, Port: r.port, NQN: r.nqn, IsOwner: i == 0}
 		}
-		targetsJSON, _ := json.Marshal(targets)
+		targetsJSON, err := json.Marshal(targets)
+		if err != nil {
+			for i := range uniqueNodes {
+				_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
+			}
+			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
+			return nil, status.Errorf(codes.Internal, "marshaling target addresses for volume %s: %v", volumeID, err)
+		}
 
 		volContext["targetAddresses"] = string(targetsJSON)
 		volContext["writeOwner"] = results[0].addr

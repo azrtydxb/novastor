@@ -4,6 +4,7 @@ package spdk
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -35,7 +36,7 @@ func (c *Client) Connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	conn, err := net.Dial("unix", c.socketPath)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "unix", c.socketPath)
 	if err != nil {
 		return fmt.Errorf("connecting to SPDK data-plane at %s: %w", c.socketPath, err)
 	}
