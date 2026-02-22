@@ -77,6 +77,18 @@ func (m *mockSnapshotStore) DeletePlacementMap(_ context.Context, _ string) erro
 	return nil
 }
 
+func (m *mockSnapshotStore) PutShardPlacement(_ context.Context, _ *metadata.ShardPlacement) error {
+	return nil
+}
+
+func (m *mockSnapshotStore) GetShardPlacements(_ context.Context, _ string) ([]*metadata.ShardPlacement, error) {
+	return nil, nil
+}
+
+func (m *mockSnapshotStore) DeleteShardPlacement(_ context.Context, _ string, _ int) error {
+	return nil
+}
+
 func (m *mockSnapshotStore) PutSnapshotMeta(_ context.Context, meta *SnapshotMeta) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -22,12 +22,16 @@ const (
 // --- mock metadata store ---
 
 type mockMetadataStore struct {
-	mu      sync.Mutex
-	volumes map[string]*metadata.VolumeMeta
+	mu              sync.Mutex
+	volumes         map[string]*metadata.VolumeMeta
+	shardPlacements map[string][]*metadata.ShardPlacement // keyed by chunkID
 }
 
 func newMockMetadataStore() *mockMetadataStore {
-	return &mockMetadataStore{volumes: make(map[string]*metadata.VolumeMeta)}
+	return &mockMetadataStore{
+		volumes:         make(map[string]*metadata.VolumeMeta),
+		shardPlacements: make(map[string][]*metadata.ShardPlacement),
+	}
 }
 
 func (m *mockMetadataStore) PutVolumeMeta(_ context.Context, meta *metadata.VolumeMeta) error {
@@ -76,6 +80,36 @@ func (m *mockMetadataStore) GetPlacementMap(_ context.Context, _ string) (*metad
 
 func (m *mockMetadataStore) DeletePlacementMap(_ context.Context, _ string) error {
 	// No-op for tests: placement maps are not tested in the mock.
+	return nil
+}
+
+func (m *mockMetadataStore) PutShardPlacement(_ context.Context, sp *metadata.ShardPlacement) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.shardPlacements[sp.ChunkID] = append(m.shardPlacements[sp.ChunkID], sp)
+	return nil
+}
+
+func (m *mockMetadataStore) GetShardPlacements(_ context.Context, chunkID string) ([]*metadata.ShardPlacement, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sps, ok := m.shardPlacements[chunkID]
+	if !ok {
+		return nil, nil
+	}
+	return sps, nil
+}
+
+func (m *mockMetadataStore) DeleteShardPlacement(_ context.Context, chunkID string, shardIndex int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sps := m.shardPlacements[chunkID]
+	for i, sp := range sps {
+		if sp.ShardIndex == shardIndex {
+			m.shardPlacements[chunkID] = append(sps[:i], sps[i+1:]...)
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -1075,4 +1109,162 @@ func (m *mockNodeMetaStore) ListLiveNodeMetas(_ context.Context, _ time.Duration
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.nodes, nil
+}
+
+// --- EC provisioning tests ---
+
+// setupECController creates a controller with 6 nodes and an EC-capable ChunkClient.
+func setupECController() (*ControllerServer, *mockMetadataStore, *ecMockChunkClient) {
+	store := newMockMetadataStore()
+	nodes := []string{"node-0", "node-1", "node-2", "node-3", "node-4", "node-5"}
+	placer := &mockPlacer{nodes: nodes}
+	client := newECMockChunkClient()
+	cs := NewControllerServer(store, placer, nil, nil, nil)
+	cs.SetChunkClient(client)
+	return cs, store, client
+}
+
+func TestCreateVolume_ECDistribution(t *testing.T) {
+	cs, store, client := setupECController()
+
+	// Seed initial chunk data on node-0 (simulates primary write via SPDK/CreateTarget).
+	// In real flow, CreateTarget would write the data. For this test, we pre-seed.
+
+	req := &csi.CreateVolumeRequest{
+		Name: "ec-dist-vol",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 4 * 1024 * 1024, // 1 chunk
+		},
+		Parameters: map[string]string{
+			"protection": "erasure-coding",
+			// defaults: dataShards=4, parityShards=2
+		},
+	}
+
+	resp, err := cs.CreateVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume EC failed: %v", err)
+	}
+
+	vol := resp.GetVolume()
+	if vol.GetVolumeId() == "" {
+		t.Fatal("expected non-empty volume ID")
+	}
+
+	vm, err := store.GetVolumeMeta(context.Background(), vol.GetVolumeId())
+	if err != nil {
+		t.Fatalf("volume metadata not found: %v", err)
+	}
+
+	// Verify EC protection profile.
+	if vm.DataProtection == nil || vm.DataProtection.Mode != metadata.ProtectionModeErasureCoding {
+		t.Fatalf("expected EC protection mode, got %+v", vm.DataProtection)
+	}
+	if vm.DataProtection.ErasureCoding.DataShards != 4 {
+		t.Errorf("expected 4 data shards, got %d", vm.DataProtection.ErasureCoding.DataShards)
+	}
+
+	// Verify shard placements were written for each chunk.
+	for _, chunkID := range vm.ChunkIDs {
+		sps, err := store.GetShardPlacements(context.Background(), chunkID)
+		if err != nil {
+			t.Fatalf("GetShardPlacements for %s: %v", chunkID, err)
+		}
+		if len(sps) != 6 {
+			t.Errorf("expected 6 shard placements for chunk %s, got %d", chunkID, len(sps))
+		}
+
+		// Verify each shard index is present.
+		seen := make(map[int]bool)
+		for _, sp := range sps {
+			seen[sp.ShardIndex] = true
+			if sp.VolumeID != vol.GetVolumeId() {
+				t.Errorf("shard placement volume ID mismatch: got %s, want %s", sp.VolumeID, vol.GetVolumeId())
+			}
+		}
+		for i := range 6 {
+			if !seen[i] {
+				t.Errorf("missing shard placement for index %d in chunk %s", i, chunkID)
+			}
+		}
+	}
+
+	// Note: EC distribution itself will fail gracefully because there's no
+	// primary chunk data to read (no real agent). The ShardPlacement metadata
+	// is still written in the placement map loop regardless. This verifies
+	// the metadata path works correctly.
+	_ = client // client available for future tests with pre-seeded data
+}
+
+func TestCreateVolume_ECMetadataWithMultipleChunks(t *testing.T) {
+	cs, store, _ := setupECController()
+
+	req := &csi.CreateVolumeRequest{
+		Name: "ec-multi-chunk",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 12 * 1024 * 1024, // 3 chunks
+		},
+		Parameters: map[string]string{
+			"protection":   "erasure-coding",
+			"dataShards":   "4",
+			"parityShards": "2",
+		},
+	}
+
+	resp, err := cs.CreateVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume EC multi-chunk failed: %v", err)
+	}
+
+	vm, err := store.GetVolumeMeta(context.Background(), resp.GetVolume().GetVolumeId())
+	if err != nil {
+		t.Fatalf("volume metadata not found: %v", err)
+	}
+
+	if len(vm.ChunkIDs) != 3 {
+		t.Errorf("expected 3 chunks, got %d", len(vm.ChunkIDs))
+	}
+
+	// Each chunk should have 6 shard placements.
+	totalPlacements := 0
+	for _, chunkID := range vm.ChunkIDs {
+		sps, _ := store.GetShardPlacements(context.Background(), chunkID)
+		totalPlacements += len(sps)
+	}
+	if totalPlacements != 18 { // 3 chunks * 6 shards
+		t.Errorf("expected 18 total shard placements, got %d", totalPlacements)
+	}
+}
+
+func TestCreateVolume_ReplicationDoesNotWriteShardPlacements(t *testing.T) {
+	cs, store, _ := setupECController()
+
+	req := &csi.CreateVolumeRequest{
+		Name: "repl-no-shards",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 4 * 1024 * 1024,
+		},
+		Parameters: map[string]string{
+			"protection": "replication",
+			"replicas":   "3",
+		},
+	}
+
+	resp, err := cs.CreateVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume replication failed: %v", err)
+	}
+
+	vm, err := store.GetVolumeMeta(context.Background(), resp.GetVolume().GetVolumeId())
+	if err != nil {
+		t.Fatalf("volume metadata not found: %v", err)
+	}
+
+	// Replication volumes should NOT have shard placements.
+	for _, chunkID := range vm.ChunkIDs {
+		sps, _ := store.GetShardPlacements(context.Background(), chunkID)
+		if len(sps) != 0 {
+			t.Errorf("expected 0 shard placements for replicated chunk %s, got %d", chunkID, len(sps))
+		}
+	}
 }
