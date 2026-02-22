@@ -12,12 +12,14 @@ type memMeta struct {
 	mu      sync.RWMutex
 	inodes  map[uint64]*InodeMeta
 	dirents map[string]*DirEntry // key: "parentIno/name"
+	nextIno uint64
 }
 
 func newMemMeta() *memMeta {
 	return &memMeta{
 		inodes:  make(map[uint64]*InodeMeta),
 		dirents: make(map[string]*DirEntry),
+		nextIno: 2,
 	}
 }
 
@@ -111,6 +113,14 @@ func (m *memMeta) ListDirectory(_ context.Context, parentIno uint64) ([]*DirEntr
 		}
 	}
 	return result, nil
+}
+
+func (m *memMeta) AllocateIno(_ context.Context) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ino := m.nextIno
+	m.nextIno++
+	return ino, nil
 }
 
 // memChunks is an in-memory implementation of ChunkClient for testing.
@@ -890,5 +900,152 @@ func TestMknod_ReadDirContainsDevices(t *testing.T) {
 	}
 	if types["blockdev"] != TypeBlockDev {
 		t.Error("blockdev not found or wrong type")
+	}
+}
+
+func TestAllocInoPersistent(t *testing.T) {
+	meta := newMemMeta()
+	chunks := newMemChunks()
+	ctx := context.Background()
+
+	// First filesystem instance.
+	fs1 := NewFileSystem(meta, chunks)
+	f1, err := fs1.Create(ctx, RootIno, "a.txt", 0644)
+	if err != nil {
+		t.Fatalf("Create a.txt: %v", err)
+	}
+	f2, err := fs1.Create(ctx, RootIno, "b.txt", 0644)
+	if err != nil {
+		t.Fatalf("Create b.txt: %v", err)
+	}
+	if f1.Ino == f2.Ino {
+		t.Errorf("expected unique inodes, got %d and %d", f1.Ino, f2.Ino)
+	}
+
+	// Simulate restart: create a new FileSystem with the same metadata.
+	fs2 := NewFileSystem(meta, chunks)
+	f3, err := fs2.Create(ctx, RootIno, "c.txt", 0644)
+	if err != nil {
+		t.Fatalf("Create c.txt: %v", err)
+	}
+
+	// f3 must have a unique inode number (no collision with f1 or f2).
+	if f3.Ino == f1.Ino || f3.Ino == f2.Ino {
+		t.Errorf("inode collision after restart: f3.Ino=%d, f1.Ino=%d, f2.Ino=%d", f3.Ino, f1.Ino, f2.Ino)
+	}
+	if f3.Ino <= f2.Ino {
+		t.Errorf("expected f3.Ino > f2.Ino, got %d <= %d", f3.Ino, f2.Ino)
+	}
+}
+
+func TestWriteChunkedPartial(t *testing.T) {
+	fs, _, chunks := setupTestFS()
+	ctx := context.Background()
+
+	file, err := fs.Create(ctx, RootIno, "big.bin", 0644)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Write initial data (16 bytes).
+	initial := []byte("AAAAAAAAAAAAAAAA")
+	_, err = fs.Write(ctx, file.Ino, 0, initial)
+	if err != nil {
+		t.Fatalf("Write initial: %v", err)
+	}
+
+	// Record chunk count before partial write.
+	chunks.mu.Lock()
+	chunkCountBefore := len(chunks.store)
+	chunks.mu.Unlock()
+
+	// Overwrite 1 byte at offset 5.
+	_, err = fs.Write(ctx, file.Ino, 5, []byte("B"))
+	if err != nil {
+		t.Fatalf("Write partial: %v", err)
+	}
+
+	// Read back and verify.
+	data, err := fs.Read(ctx, file.Ino, 0, 16)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	expected := "AAAAABAAAAAAAAAA"
+	if string(data) != expected {
+		t.Errorf("got %q, want %q", data, expected)
+	}
+
+	// Verify only one new chunk was written (not the whole file re-chunked).
+	chunks.mu.Lock()
+	chunkCountAfter := len(chunks.store)
+	chunks.mu.Unlock()
+	if chunkCountAfter != chunkCountBefore+1 {
+		t.Errorf("expected 1 new chunk written, got %d new chunks", chunkCountAfter-chunkCountBefore)
+	}
+
+	// Verify inode size is correct.
+	inode, err := fs.Stat(ctx, file.Ino)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if inode.Size != 16 {
+		t.Errorf("expected size 16, got %d", inode.Size)
+	}
+}
+
+func TestWriteExtendFile(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	file, err := fs.Create(ctx, RootIno, "extend.bin", 0644)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Write 5 bytes.
+	_, err = fs.Write(ctx, file.Ino, 0, []byte("Hello"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// Write 7 bytes starting at offset 5 (extending the file to 12 bytes).
+	_, err = fs.Write(ctx, file.Ino, 5, []byte(", World"))
+	if err != nil {
+		t.Fatalf("Write extend: %v", err)
+	}
+
+	data, err := fs.Read(ctx, file.Ino, 0, 12)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if string(data) != "Hello, World" {
+		t.Errorf("got %q, want %q", data, "Hello, World")
+	}
+
+	inode, err := fs.Stat(ctx, file.Ino)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if inode.Size != 12 {
+		t.Errorf("expected size 12, got %d", inode.Size)
+	}
+}
+
+func TestWriteEmptyData(t *testing.T) {
+	fs, _, _ := setupTestFS()
+	ctx := context.Background()
+
+	file, err := fs.Create(ctx, RootIno, "empty.bin", 0644)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Write zero bytes should be a no-op.
+	n, err := fs.Write(ctx, file.Ino, 0, []byte{})
+	if err != nil {
+		t.Fatalf("Write empty: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 bytes written, got %d", n)
 	}
 }

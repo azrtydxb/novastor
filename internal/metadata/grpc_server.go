@@ -138,6 +138,10 @@ func (s *GRPCServer) Execute(ctx context.Context, req *pb.MetadataRequest) (*pb.
 	case "CleanupExpiredLocks":
 		return s.cleanupExpiredLocks(ctx)
 
+	// ---- Inode counter operations ----
+	case "AllocateIno":
+		return s.allocateIno(ctx)
+
 	// ---- Volume ownership operations ----
 	case "SetVolumeOwner":
 		return s.setVolumeOwner(ctx, req.Payload)
@@ -707,6 +711,18 @@ func (s *GRPCServer) cleanupExpiredLocks(ctx context.Context) (*pb.MetadataRespo
 	return okResp(struct {
 		Cleaned int `json:"cleaned"`
 	}{Cleaned: count})
+}
+
+// ---- Inode counter operations ----
+
+func (s *GRPCServer) allocateIno(ctx context.Context) (*pb.MetadataResponse, error) {
+	ino, err := s.store.AllocateIno(ctx)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(struct {
+		Ino uint64 `json:"ino"`
+	}{Ino: ino})
 }
 
 // ---- Volume ownership operations ----

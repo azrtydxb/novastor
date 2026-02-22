@@ -6,8 +6,9 @@ package filer
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
+
+	"github.com/piwi3910/novastor/internal/chunk"
 )
 
 // InodeType represents the type of a filesystem inode.
@@ -64,6 +65,7 @@ type MetadataClient interface {
 	DeleteDirEntry(ctx context.Context, parentIno uint64, name string) error
 	LookupDirEntry(ctx context.Context, parentIno uint64, name string) (*DirEntry, error)
 	ListDirectory(ctx context.Context, parentIno uint64) ([]*DirEntry, error)
+	AllocateIno(ctx context.Context) (uint64, error)
 }
 
 // ChunkClient defines the interface for reading and writing data chunks.
@@ -75,9 +77,8 @@ type ChunkClient interface {
 // FileSystem provides a POSIX-like virtual filesystem layer on top of metadata
 // and chunk storage.
 type FileSystem struct {
-	meta    MetadataClient
-	chunks  ChunkClient
-	nextIno atomic.Uint64
+	meta   MetadataClient
+	chunks ChunkClient
 }
 
 // RootIno is the inode number reserved for the root directory.
@@ -90,8 +91,6 @@ func NewFileSystem(meta MetadataClient, chunks ChunkClient) *FileSystem {
 		meta:   meta,
 		chunks: chunks,
 	}
-	// Reserve inode 1 for root; next allocatable inode starts at 2.
-	fs.nextIno.Store(2)
 
 	// Initialize root inode if it does not exist.
 	ctx := context.Background()
@@ -115,9 +114,10 @@ func NewFileSystem(meta MetadataClient, chunks ChunkClient) *FileSystem {
 	return fs
 }
 
-// allocIno returns the next available inode number.
-func (fs *FileSystem) allocIno() uint64 {
-	return fs.nextIno.Add(1) - 1
+// allocIno allocates the next available inode number from the metadata store,
+// ensuring persistence across restarts.
+func (fs *FileSystem) allocIno(ctx context.Context) (uint64, error) {
+	return fs.meta.AllocateIno(ctx)
 }
 
 // Stat returns the inode metadata for the given inode number.
@@ -136,7 +136,10 @@ func (fs *FileSystem) Lookup(ctx context.Context, parentIno uint64, name string)
 
 // Mkdir creates a new directory within the specified parent.
 func (fs *FileSystem) Mkdir(ctx context.Context, parentIno uint64, name string, mode uint32) (*InodeMeta, error) {
-	ino := fs.allocIno()
+	ino, err := fs.allocIno(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("allocating inode: %w", err)
+	}
 	now := time.Now().UnixNano()
 
 	meta := &InodeMeta{
@@ -162,7 +165,10 @@ func (fs *FileSystem) Mkdir(ctx context.Context, parentIno uint64, name string, 
 
 // Create creates a new regular file within the specified parent.
 func (fs *FileSystem) Create(ctx context.Context, parentIno uint64, name string, mode uint32) (*InodeMeta, error) {
-	ino := fs.allocIno()
+	ino, err := fs.allocIno(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("allocating inode: %w", err)
+	}
 	now := time.Now().UnixNano()
 
 	meta := &InodeMeta{
@@ -258,9 +264,13 @@ func (fs *FileSystem) Read(ctx context.Context, ino uint64, offset, length int64
 	return fs.chunks.ReadChunks(ctx, inode.ChunkIDs, offset, length)
 }
 
-// Write writes data to a file at the given offset. It reads the existing content,
-// splices in the new data, writes new chunks, and updates the inode metadata.
+// Write writes data to a file at the given offset. It only reads and rewrites
+// the 4MB chunks affected by the write range, avoiding full-file I/O.
 func (fs *FileSystem) Write(ctx context.Context, ino uint64, offset int64, data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+
 	inode, err := fs.meta.GetInode(ctx, ino)
 	if err != nil {
 		return 0, fmt.Errorf("getting inode %d: %w", ino, err)
@@ -269,37 +279,90 @@ func (fs *FileSystem) Write(ctx context.Context, ino uint64, offset int64, data 
 		return 0, fmt.Errorf("inode %d is not a file", ino)
 	}
 
-	// Read existing data if any.
-	var existing []byte
+	chunkSize := int64(chunk.ChunkSize)
+	endOffset := offset + int64(len(data))
+
+	// Determine the new file size.
+	newSize := endOffset
+	if inode.Size > newSize {
+		newSize = inode.Size
+	}
+
+	// Determine which chunks are affected.
+	firstChunk := int(offset / chunkSize)
+	lastChunk := int((endOffset - 1) / chunkSize)
+
+	// Calculate the buffer size: covers the affected chunk range but trimmed
+	// to the actual file extent so we don't store zero-padded full chunks.
+	bufStart := int64(firstChunk) * chunkSize
+	bufEnd := int64(lastChunk+1) * chunkSize
+	// Trim the last chunk to file extent: the buffer should not extend beyond
+	// the new file size or the existing file size (whichever is larger).
+	if bufEnd > newSize {
+		bufEnd = newSize
+	}
+	buf := make([]byte, bufEnd-bufStart)
+
 	if len(inode.ChunkIDs) > 0 {
-		existing, err = fs.chunks.ReadChunks(ctx, inode.ChunkIDs, 0, inode.Size)
-		if err != nil {
-			return 0, fmt.Errorf("reading existing chunks: %w", err)
+		// Only read chunks that already exist within the affected range.
+		existingEnd := lastChunk + 1
+		if existingEnd > len(inode.ChunkIDs) {
+			existingEnd = len(inode.ChunkIDs)
+		}
+
+		if existingEnd > firstChunk && firstChunk < len(inode.ChunkIDs) {
+			readIDs := inode.ChunkIDs[firstChunk:existingEnd]
+			readLen := int64(existingEnd-firstChunk) * chunkSize
+			existingData, readErr := fs.chunks.ReadChunks(ctx, readIDs, 0, readLen)
+			if readErr != nil {
+				return 0, fmt.Errorf("reading affected chunks: %w", readErr)
+			}
+			copy(buf, existingData)
 		}
 	}
 
-	// Calculate the total size after write.
-	endOffset := offset + int64(len(data))
-	newSize := int64(len(existing))
-	if endOffset > newSize {
-		newSize = endOffset
-	}
+	// Overlay the write data at the correct position within the buffer.
+	bufOffset := offset - bufStart
+	copy(buf[bufOffset:], data)
 
-	// Build the new content buffer.
-	buf := make([]byte, newSize)
-	copy(buf, existing)
-	copy(buf[offset:], data)
-
-	// Write new chunks.
-	chunkIDs, err := fs.chunks.WriteChunks(ctx, buf)
+	// Write the affected chunk range as new chunks.
+	newChunkIDs, err := fs.chunks.WriteChunks(ctx, buf)
 	if err != nil {
 		return 0, fmt.Errorf("writing chunks: %w", err)
 	}
 
+	// Build the updated chunk ID list.
+	totalChunks := int((newSize + chunkSize - 1) / chunkSize)
+	updatedChunkIDs := make([]string, totalChunks)
+
+	// Copy existing chunk IDs.
+	for i := 0; i < len(inode.ChunkIDs) && i < totalChunks; i++ {
+		updatedChunkIDs[i] = inode.ChunkIDs[i]
+	}
+
+	// For chunks before firstChunk that don't exist yet (sparse file),
+	// write zero chunks.
+	for i := len(inode.ChunkIDs); i < firstChunk && i < totalChunks; i++ {
+		zeroData := make([]byte, chunkSize)
+		zeroIDs, zErr := fs.chunks.WriteChunks(ctx, zeroData)
+		if zErr != nil {
+			return 0, fmt.Errorf("writing zero chunk for sparse fill: %w", zErr)
+		}
+		updatedChunkIDs[i] = zeroIDs[0]
+	}
+
+	// Replace the affected range with the new chunk IDs.
+	for i, id := range newChunkIDs {
+		idx := firstChunk + i
+		if idx < totalChunks {
+			updatedChunkIDs[idx] = id
+		}
+	}
+
 	// Update inode.
 	now := time.Now().UnixNano()
-	inode.ChunkIDs = chunkIDs
-	inode.Size = int64(len(buf))
+	inode.ChunkIDs = updatedChunkIDs
+	inode.Size = newSize
 	inode.MTime = now
 	inode.CTime = now
 	if err := fs.meta.UpdateInode(ctx, inode); err != nil {
@@ -332,7 +395,10 @@ func (fs *FileSystem) Rename(ctx context.Context, oldParent uint64, oldName stri
 
 // Symlink creates a symbolic link within the specified parent directory.
 func (fs *FileSystem) Symlink(ctx context.Context, parentIno uint64, name, target string) (*InodeMeta, error) {
-	ino := fs.allocIno()
+	ino, err := fs.allocIno(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("allocating inode: %w", err)
+	}
 	now := time.Now().UnixNano()
 
 	meta := &InodeMeta{
@@ -371,7 +437,10 @@ func (fs *FileSystem) Readlink(ctx context.Context, ino uint64) (string, error) 
 
 // Mknod creates a special device file (FIFO, character, or block) within the specified parent.
 func (fs *FileSystem) Mknod(ctx context.Context, parentIno uint64, name string, mode uint32, devType InodeType, major, minor uint32) (*InodeMeta, error) {
-	ino := fs.allocIno()
+	ino, err := fs.allocIno(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("allocating inode: %w", err)
+	}
 	now := time.Now().UnixNano()
 
 	meta := &InodeMeta{

@@ -170,6 +170,15 @@ func main() {
 	var policyRepairEnabled bool
 	var policyRepairConcurrency int
 
+	// Handle subcommands before flag parsing.
+	if len(os.Args) > 1 && os.Args[1] == "tls-bootstrap" {
+		if err := runTLSBootstrap(); err != nil {
+			fmt.Fprintf(os.Stderr, "tls-bootstrap failed: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager.")
