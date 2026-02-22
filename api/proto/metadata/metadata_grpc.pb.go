@@ -11,6 +11,7 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -19,7 +20,52 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MetadataService_Execute_FullMethodName = "/metadata.MetadataService/Execute"
+	MetadataService_PutVolumeMeta_FullMethodName         = "/metadata.MetadataService/PutVolumeMeta"
+	MetadataService_GetVolumeMeta_FullMethodName         = "/metadata.MetadataService/GetVolumeMeta"
+	MetadataService_DeleteVolumeMeta_FullMethodName      = "/metadata.MetadataService/DeleteVolumeMeta"
+	MetadataService_ListVolumesMeta_FullMethodName       = "/metadata.MetadataService/ListVolumesMeta"
+	MetadataService_PutPlacementMap_FullMethodName       = "/metadata.MetadataService/PutPlacementMap"
+	MetadataService_GetPlacementMap_FullMethodName       = "/metadata.MetadataService/GetPlacementMap"
+	MetadataService_DeletePlacementMap_FullMethodName    = "/metadata.MetadataService/DeletePlacementMap"
+	MetadataService_ListPlacementMaps_FullMethodName     = "/metadata.MetadataService/ListPlacementMaps"
+	MetadataService_PutObjectMeta_FullMethodName         = "/metadata.MetadataService/PutObjectMeta"
+	MetadataService_GetObjectMeta_FullMethodName         = "/metadata.MetadataService/GetObjectMeta"
+	MetadataService_DeleteObjectMeta_FullMethodName      = "/metadata.MetadataService/DeleteObjectMeta"
+	MetadataService_ListObjectMetas_FullMethodName       = "/metadata.MetadataService/ListObjectMetas"
+	MetadataService_PutBucketMeta_FullMethodName         = "/metadata.MetadataService/PutBucketMeta"
+	MetadataService_GetBucketMeta_FullMethodName         = "/metadata.MetadataService/GetBucketMeta"
+	MetadataService_DeleteBucketMeta_FullMethodName      = "/metadata.MetadataService/DeleteBucketMeta"
+	MetadataService_ListBucketMetas_FullMethodName       = "/metadata.MetadataService/ListBucketMetas"
+	MetadataService_PutMultipartUpload_FullMethodName    = "/metadata.MetadataService/PutMultipartUpload"
+	MetadataService_GetMultipartUpload_FullMethodName    = "/metadata.MetadataService/GetMultipartUpload"
+	MetadataService_DeleteMultipartUpload_FullMethodName = "/metadata.MetadataService/DeleteMultipartUpload"
+	MetadataService_PutSnapshot_FullMethodName           = "/metadata.MetadataService/PutSnapshot"
+	MetadataService_GetSnapshot_FullMethodName           = "/metadata.MetadataService/GetSnapshot"
+	MetadataService_DeleteSnapshot_FullMethodName        = "/metadata.MetadataService/DeleteSnapshot"
+	MetadataService_ListSnapshots_FullMethodName         = "/metadata.MetadataService/ListSnapshots"
+	MetadataService_CreateInode_FullMethodName           = "/metadata.MetadataService/CreateInode"
+	MetadataService_GetInode_FullMethodName              = "/metadata.MetadataService/GetInode"
+	MetadataService_UpdateInode_FullMethodName           = "/metadata.MetadataService/UpdateInode"
+	MetadataService_DeleteInode_FullMethodName           = "/metadata.MetadataService/DeleteInode"
+	MetadataService_AllocateIno_FullMethodName           = "/metadata.MetadataService/AllocateIno"
+	MetadataService_CreateDirEntry_FullMethodName        = "/metadata.MetadataService/CreateDirEntry"
+	MetadataService_DeleteDirEntry_FullMethodName        = "/metadata.MetadataService/DeleteDirEntry"
+	MetadataService_LookupDirEntry_FullMethodName        = "/metadata.MetadataService/LookupDirEntry"
+	MetadataService_ListDirectory_FullMethodName         = "/metadata.MetadataService/ListDirectory"
+	MetadataService_PutNodeMeta_FullMethodName           = "/metadata.MetadataService/PutNodeMeta"
+	MetadataService_GetNodeMeta_FullMethodName           = "/metadata.MetadataService/GetNodeMeta"
+	MetadataService_DeleteNodeMeta_FullMethodName        = "/metadata.MetadataService/DeleteNodeMeta"
+	MetadataService_ListNodeMetas_FullMethodName         = "/metadata.MetadataService/ListNodeMetas"
+	MetadataService_AcquireLock_FullMethodName           = "/metadata.MetadataService/AcquireLock"
+	MetadataService_RenewLock_FullMethodName             = "/metadata.MetadataService/RenewLock"
+	MetadataService_ReleaseLock_FullMethodName           = "/metadata.MetadataService/ReleaseLock"
+	MetadataService_TestLock_FullMethodName              = "/metadata.MetadataService/TestLock"
+	MetadataService_GetLock_FullMethodName               = "/metadata.MetadataService/GetLock"
+	MetadataService_ListLocks_FullMethodName             = "/metadata.MetadataService/ListLocks"
+	MetadataService_CleanupExpiredLocks_FullMethodName   = "/metadata.MetadataService/CleanupExpiredLocks"
+	MetadataService_SetVolumeOwner_FullMethodName        = "/metadata.MetadataService/SetVolumeOwner"
+	MetadataService_GetVolumeOwner_FullMethodName        = "/metadata.MetadataService/GetVolumeOwner"
+	MetadataService_RequestOwnership_FullMethodName      = "/metadata.MetadataService/RequestOwnership"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -27,15 +73,65 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // MetadataService provides gRPC access to the NovaStor metadata store.
-// It uses a generic request/response envelope that carries JSON-encoded
-// domain objects as opaque payloads. This avoids duplicating the rich Go
-// type definitions in protobuf and keeps the wire protocol simple.
+// All operations use typed protobuf RPCs with domain-specific messages.
 type MetadataServiceClient interface {
-	// Execute performs a single metadata operation identified by the
-	// operation field in MetadataRequest. The payload carries
-	// JSON-encoded arguments; the response payload carries the
-	// JSON-encoded result.
-	Execute(ctx context.Context, in *MetadataRequest, opts ...grpc.CallOption) (*MetadataResponse, error)
+	// ---- Volume operations ----
+	PutVolumeMeta(ctx context.Context, in *PutVolumeMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetVolumeMeta(ctx context.Context, in *GetVolumeMetaRequest, opts ...grpc.CallOption) (*GetVolumeMetaResponse, error)
+	DeleteVolumeMeta(ctx context.Context, in *DeleteVolumeMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ListVolumesMeta(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListVolumesMetaResponse, error)
+	// ---- Placement operations ----
+	PutPlacementMap(ctx context.Context, in *PutPlacementMapRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetPlacementMap(ctx context.Context, in *GetPlacementMapRequest, opts ...grpc.CallOption) (*GetPlacementMapResponse, error)
+	DeletePlacementMap(ctx context.Context, in *DeletePlacementMapRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ListPlacementMaps(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListPlacementMapsResponse, error)
+	// ---- Object operations ----
+	PutObjectMeta(ctx context.Context, in *PutObjectMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetObjectMeta(ctx context.Context, in *GetObjectMetaRequest, opts ...grpc.CallOption) (*GetObjectMetaResponse, error)
+	DeleteObjectMeta(ctx context.Context, in *DeleteObjectMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ListObjectMetas(ctx context.Context, in *ListObjectMetasRequest, opts ...grpc.CallOption) (*ListObjectMetasResponse, error)
+	// ---- Bucket operations ----
+	PutBucketMeta(ctx context.Context, in *PutBucketMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetBucketMeta(ctx context.Context, in *GetBucketMetaRequest, opts ...grpc.CallOption) (*GetBucketMetaResponse, error)
+	DeleteBucketMeta(ctx context.Context, in *DeleteBucketMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ListBucketMetas(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListBucketMetasResponse, error)
+	// ---- Multipart operations ----
+	PutMultipartUpload(ctx context.Context, in *PutMultipartUploadRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetMultipartUpload(ctx context.Context, in *GetMultipartUploadRequest, opts ...grpc.CallOption) (*GetMultipartUploadResponse, error)
+	DeleteMultipartUpload(ctx context.Context, in *DeleteMultipartUploadRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// ---- Snapshot operations ----
+	PutSnapshot(ctx context.Context, in *PutSnapshotRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetSnapshot(ctx context.Context, in *GetSnapshotRequest, opts ...grpc.CallOption) (*GetSnapshotResponse, error)
+	DeleteSnapshot(ctx context.Context, in *DeleteSnapshotRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ListSnapshots(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListSnapshotsResponse, error)
+	// ---- Inode operations ----
+	CreateInode(ctx context.Context, in *CreateInodeRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetInode(ctx context.Context, in *GetInodeRequest, opts ...grpc.CallOption) (*GetInodeResponse, error)
+	UpdateInode(ctx context.Context, in *UpdateInodeRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	DeleteInode(ctx context.Context, in *DeleteInodeRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	AllocateIno(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*AllocateInoResponse, error)
+	// ---- Directory entry operations ----
+	CreateDirEntry(ctx context.Context, in *CreateDirEntryRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	DeleteDirEntry(ctx context.Context, in *DeleteDirEntryRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	LookupDirEntry(ctx context.Context, in *LookupDirEntryRequest, opts ...grpc.CallOption) (*LookupDirEntryResponse, error)
+	ListDirectory(ctx context.Context, in *ListDirectoryRequest, opts ...grpc.CallOption) (*ListDirectoryResponse, error)
+	// ---- Node operations ----
+	PutNodeMeta(ctx context.Context, in *PutNodeMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetNodeMeta(ctx context.Context, in *GetNodeMetaRequest, opts ...grpc.CallOption) (*GetNodeMetaResponse, error)
+	DeleteNodeMeta(ctx context.Context, in *DeleteNodeMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ListNodeMetas(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListNodeMetasResponse, error)
+	// ---- Lock operations ----
+	AcquireLock(ctx context.Context, in *AcquireLockRequest, opts ...grpc.CallOption) (*AcquireLockResponse, error)
+	RenewLock(ctx context.Context, in *RenewLockRequest, opts ...grpc.CallOption) (*RenewLockResponse, error)
+	ReleaseLock(ctx context.Context, in *ReleaseLockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	TestLock(ctx context.Context, in *TestLockRequest, opts ...grpc.CallOption) (*TestLockResponse, error)
+	GetLock(ctx context.Context, in *GetLockRequest, opts ...grpc.CallOption) (*GetLockResponse, error)
+	ListLocks(ctx context.Context, in *ListLocksRequest, opts ...grpc.CallOption) (*ListLocksResponse, error)
+	CleanupExpiredLocks(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*CleanupExpiredLocksResponse, error)
+	// ---- Volume ownership operations ----
+	SetVolumeOwner(ctx context.Context, in *SetVolumeOwnerRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetVolumeOwner(ctx context.Context, in *GetVolumeOwnerRequest, opts ...grpc.CallOption) (*GetVolumeOwnerResponse, error)
+	RequestOwnership(ctx context.Context, in *RequestOwnershipRequest, opts ...grpc.CallOption) (*RequestOwnershipResponse, error)
 }
 
 type metadataServiceClient struct {
@@ -46,10 +142,460 @@ func NewMetadataServiceClient(cc grpc.ClientConnInterface) MetadataServiceClient
 	return &metadataServiceClient{cc}
 }
 
-func (c *metadataServiceClient) Execute(ctx context.Context, in *MetadataRequest, opts ...grpc.CallOption) (*MetadataResponse, error) {
+func (c *metadataServiceClient) PutVolumeMeta(ctx context.Context, in *PutVolumeMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MetadataResponse)
-	err := c.cc.Invoke(ctx, MetadataService_Execute_FullMethodName, in, out, cOpts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_PutVolumeMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetVolumeMeta(ctx context.Context, in *GetVolumeMetaRequest, opts ...grpc.CallOption) (*GetVolumeMetaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetVolumeMetaResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetVolumeMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteVolumeMeta(ctx context.Context, in *DeleteVolumeMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteVolumeMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListVolumesMeta(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListVolumesMetaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListVolumesMetaResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListVolumesMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) PutPlacementMap(ctx context.Context, in *PutPlacementMapRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_PutPlacementMap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetPlacementMap(ctx context.Context, in *GetPlacementMapRequest, opts ...grpc.CallOption) (*GetPlacementMapResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPlacementMapResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetPlacementMap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeletePlacementMap(ctx context.Context, in *DeletePlacementMapRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeletePlacementMap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListPlacementMaps(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListPlacementMapsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPlacementMapsResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListPlacementMaps_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) PutObjectMeta(ctx context.Context, in *PutObjectMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_PutObjectMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetObjectMeta(ctx context.Context, in *GetObjectMetaRequest, opts ...grpc.CallOption) (*GetObjectMetaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetObjectMetaResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetObjectMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteObjectMeta(ctx context.Context, in *DeleteObjectMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteObjectMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListObjectMetas(ctx context.Context, in *ListObjectMetasRequest, opts ...grpc.CallOption) (*ListObjectMetasResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListObjectMetasResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListObjectMetas_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) PutBucketMeta(ctx context.Context, in *PutBucketMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_PutBucketMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetBucketMeta(ctx context.Context, in *GetBucketMetaRequest, opts ...grpc.CallOption) (*GetBucketMetaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBucketMetaResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetBucketMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteBucketMeta(ctx context.Context, in *DeleteBucketMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteBucketMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListBucketMetas(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListBucketMetasResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListBucketMetasResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListBucketMetas_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) PutMultipartUpload(ctx context.Context, in *PutMultipartUploadRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_PutMultipartUpload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetMultipartUpload(ctx context.Context, in *GetMultipartUploadRequest, opts ...grpc.CallOption) (*GetMultipartUploadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMultipartUploadResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetMultipartUpload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteMultipartUpload(ctx context.Context, in *DeleteMultipartUploadRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteMultipartUpload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) PutSnapshot(ctx context.Context, in *PutSnapshotRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_PutSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetSnapshot(ctx context.Context, in *GetSnapshotRequest, opts ...grpc.CallOption) (*GetSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSnapshotResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteSnapshot(ctx context.Context, in *DeleteSnapshotRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListSnapshots(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListSnapshotsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSnapshotsResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListSnapshots_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) CreateInode(ctx context.Context, in *CreateInodeRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_CreateInode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetInode(ctx context.Context, in *GetInodeRequest, opts ...grpc.CallOption) (*GetInodeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetInodeResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetInode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) UpdateInode(ctx context.Context, in *UpdateInodeRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_UpdateInode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteInode(ctx context.Context, in *DeleteInodeRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteInode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) AllocateIno(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*AllocateInoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AllocateInoResponse)
+	err := c.cc.Invoke(ctx, MetadataService_AllocateIno_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) CreateDirEntry(ctx context.Context, in *CreateDirEntryRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_CreateDirEntry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteDirEntry(ctx context.Context, in *DeleteDirEntryRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteDirEntry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) LookupDirEntry(ctx context.Context, in *LookupDirEntryRequest, opts ...grpc.CallOption) (*LookupDirEntryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LookupDirEntryResponse)
+	err := c.cc.Invoke(ctx, MetadataService_LookupDirEntry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListDirectory(ctx context.Context, in *ListDirectoryRequest, opts ...grpc.CallOption) (*ListDirectoryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDirectoryResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListDirectory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) PutNodeMeta(ctx context.Context, in *PutNodeMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_PutNodeMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetNodeMeta(ctx context.Context, in *GetNodeMetaRequest, opts ...grpc.CallOption) (*GetNodeMetaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetNodeMetaResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetNodeMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteNodeMeta(ctx context.Context, in *DeleteNodeMetaRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteNodeMeta_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListNodeMetas(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListNodeMetasResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListNodeMetasResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListNodeMetas_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) AcquireLock(ctx context.Context, in *AcquireLockRequest, opts ...grpc.CallOption) (*AcquireLockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcquireLockResponse)
+	err := c.cc.Invoke(ctx, MetadataService_AcquireLock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) RenewLock(ctx context.Context, in *RenewLockRequest, opts ...grpc.CallOption) (*RenewLockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenewLockResponse)
+	err := c.cc.Invoke(ctx, MetadataService_RenewLock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ReleaseLock(ctx context.Context, in *ReleaseLockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_ReleaseLock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) TestLock(ctx context.Context, in *TestLockRequest, opts ...grpc.CallOption) (*TestLockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TestLockResponse)
+	err := c.cc.Invoke(ctx, MetadataService_TestLock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetLock(ctx context.Context, in *GetLockRequest, opts ...grpc.CallOption) (*GetLockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetLockResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetLock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListLocks(ctx context.Context, in *ListLocksRequest, opts ...grpc.CallOption) (*ListLocksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListLocksResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListLocks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) CleanupExpiredLocks(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*CleanupExpiredLocksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CleanupExpiredLocksResponse)
+	err := c.cc.Invoke(ctx, MetadataService_CleanupExpiredLocks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) SetVolumeOwner(ctx context.Context, in *SetVolumeOwnerRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_SetVolumeOwner_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetVolumeOwner(ctx context.Context, in *GetVolumeOwnerRequest, opts ...grpc.CallOption) (*GetVolumeOwnerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetVolumeOwnerResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetVolumeOwner_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) RequestOwnership(ctx context.Context, in *RequestOwnershipRequest, opts ...grpc.CallOption) (*RequestOwnershipResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestOwnershipResponse)
+	err := c.cc.Invoke(ctx, MetadataService_RequestOwnership_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -61,15 +607,65 @@ func (c *metadataServiceClient) Execute(ctx context.Context, in *MetadataRequest
 // for forward compatibility.
 //
 // MetadataService provides gRPC access to the NovaStor metadata store.
-// It uses a generic request/response envelope that carries JSON-encoded
-// domain objects as opaque payloads. This avoids duplicating the rich Go
-// type definitions in protobuf and keeps the wire protocol simple.
+// All operations use typed protobuf RPCs with domain-specific messages.
 type MetadataServiceServer interface {
-	// Execute performs a single metadata operation identified by the
-	// operation field in MetadataRequest. The payload carries
-	// JSON-encoded arguments; the response payload carries the
-	// JSON-encoded result.
-	Execute(context.Context, *MetadataRequest) (*MetadataResponse, error)
+	// ---- Volume operations ----
+	PutVolumeMeta(context.Context, *PutVolumeMetaRequest) (*emptypb.Empty, error)
+	GetVolumeMeta(context.Context, *GetVolumeMetaRequest) (*GetVolumeMetaResponse, error)
+	DeleteVolumeMeta(context.Context, *DeleteVolumeMetaRequest) (*emptypb.Empty, error)
+	ListVolumesMeta(context.Context, *emptypb.Empty) (*ListVolumesMetaResponse, error)
+	// ---- Placement operations ----
+	PutPlacementMap(context.Context, *PutPlacementMapRequest) (*emptypb.Empty, error)
+	GetPlacementMap(context.Context, *GetPlacementMapRequest) (*GetPlacementMapResponse, error)
+	DeletePlacementMap(context.Context, *DeletePlacementMapRequest) (*emptypb.Empty, error)
+	ListPlacementMaps(context.Context, *emptypb.Empty) (*ListPlacementMapsResponse, error)
+	// ---- Object operations ----
+	PutObjectMeta(context.Context, *PutObjectMetaRequest) (*emptypb.Empty, error)
+	GetObjectMeta(context.Context, *GetObjectMetaRequest) (*GetObjectMetaResponse, error)
+	DeleteObjectMeta(context.Context, *DeleteObjectMetaRequest) (*emptypb.Empty, error)
+	ListObjectMetas(context.Context, *ListObjectMetasRequest) (*ListObjectMetasResponse, error)
+	// ---- Bucket operations ----
+	PutBucketMeta(context.Context, *PutBucketMetaRequest) (*emptypb.Empty, error)
+	GetBucketMeta(context.Context, *GetBucketMetaRequest) (*GetBucketMetaResponse, error)
+	DeleteBucketMeta(context.Context, *DeleteBucketMetaRequest) (*emptypb.Empty, error)
+	ListBucketMetas(context.Context, *emptypb.Empty) (*ListBucketMetasResponse, error)
+	// ---- Multipart operations ----
+	PutMultipartUpload(context.Context, *PutMultipartUploadRequest) (*emptypb.Empty, error)
+	GetMultipartUpload(context.Context, *GetMultipartUploadRequest) (*GetMultipartUploadResponse, error)
+	DeleteMultipartUpload(context.Context, *DeleteMultipartUploadRequest) (*emptypb.Empty, error)
+	// ---- Snapshot operations ----
+	PutSnapshot(context.Context, *PutSnapshotRequest) (*emptypb.Empty, error)
+	GetSnapshot(context.Context, *GetSnapshotRequest) (*GetSnapshotResponse, error)
+	DeleteSnapshot(context.Context, *DeleteSnapshotRequest) (*emptypb.Empty, error)
+	ListSnapshots(context.Context, *emptypb.Empty) (*ListSnapshotsResponse, error)
+	// ---- Inode operations ----
+	CreateInode(context.Context, *CreateInodeRequest) (*emptypb.Empty, error)
+	GetInode(context.Context, *GetInodeRequest) (*GetInodeResponse, error)
+	UpdateInode(context.Context, *UpdateInodeRequest) (*emptypb.Empty, error)
+	DeleteInode(context.Context, *DeleteInodeRequest) (*emptypb.Empty, error)
+	AllocateIno(context.Context, *emptypb.Empty) (*AllocateInoResponse, error)
+	// ---- Directory entry operations ----
+	CreateDirEntry(context.Context, *CreateDirEntryRequest) (*emptypb.Empty, error)
+	DeleteDirEntry(context.Context, *DeleteDirEntryRequest) (*emptypb.Empty, error)
+	LookupDirEntry(context.Context, *LookupDirEntryRequest) (*LookupDirEntryResponse, error)
+	ListDirectory(context.Context, *ListDirectoryRequest) (*ListDirectoryResponse, error)
+	// ---- Node operations ----
+	PutNodeMeta(context.Context, *PutNodeMetaRequest) (*emptypb.Empty, error)
+	GetNodeMeta(context.Context, *GetNodeMetaRequest) (*GetNodeMetaResponse, error)
+	DeleteNodeMeta(context.Context, *DeleteNodeMetaRequest) (*emptypb.Empty, error)
+	ListNodeMetas(context.Context, *emptypb.Empty) (*ListNodeMetasResponse, error)
+	// ---- Lock operations ----
+	AcquireLock(context.Context, *AcquireLockRequest) (*AcquireLockResponse, error)
+	RenewLock(context.Context, *RenewLockRequest) (*RenewLockResponse, error)
+	ReleaseLock(context.Context, *ReleaseLockRequest) (*emptypb.Empty, error)
+	TestLock(context.Context, *TestLockRequest) (*TestLockResponse, error)
+	GetLock(context.Context, *GetLockRequest) (*GetLockResponse, error)
+	ListLocks(context.Context, *ListLocksRequest) (*ListLocksResponse, error)
+	CleanupExpiredLocks(context.Context, *emptypb.Empty) (*CleanupExpiredLocksResponse, error)
+	// ---- Volume ownership operations ----
+	SetVolumeOwner(context.Context, *SetVolumeOwnerRequest) (*emptypb.Empty, error)
+	GetVolumeOwner(context.Context, *GetVolumeOwnerRequest) (*GetVolumeOwnerResponse, error)
+	RequestOwnership(context.Context, *RequestOwnershipRequest) (*RequestOwnershipResponse, error)
 	mustEmbedUnimplementedMetadataServiceServer()
 }
 
@@ -80,8 +676,143 @@ type MetadataServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedMetadataServiceServer struct{}
 
-func (UnimplementedMetadataServiceServer) Execute(context.Context, *MetadataRequest) (*MetadataResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Execute not implemented")
+func (UnimplementedMetadataServiceServer) PutVolumeMeta(context.Context, *PutVolumeMetaRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutVolumeMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetVolumeMeta(context.Context, *GetVolumeMetaRequest) (*GetVolumeMetaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetVolumeMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteVolumeMeta(context.Context, *DeleteVolumeMetaRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteVolumeMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListVolumesMeta(context.Context, *emptypb.Empty) (*ListVolumesMetaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListVolumesMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) PutPlacementMap(context.Context, *PutPlacementMapRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutPlacementMap not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetPlacementMap(context.Context, *GetPlacementMapRequest) (*GetPlacementMapResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPlacementMap not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeletePlacementMap(context.Context, *DeletePlacementMapRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeletePlacementMap not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListPlacementMaps(context.Context, *emptypb.Empty) (*ListPlacementMapsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPlacementMaps not implemented")
+}
+func (UnimplementedMetadataServiceServer) PutObjectMeta(context.Context, *PutObjectMetaRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutObjectMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetObjectMeta(context.Context, *GetObjectMetaRequest) (*GetObjectMetaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetObjectMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteObjectMeta(context.Context, *DeleteObjectMetaRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteObjectMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListObjectMetas(context.Context, *ListObjectMetasRequest) (*ListObjectMetasResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListObjectMetas not implemented")
+}
+func (UnimplementedMetadataServiceServer) PutBucketMeta(context.Context, *PutBucketMetaRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutBucketMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetBucketMeta(context.Context, *GetBucketMetaRequest) (*GetBucketMetaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBucketMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteBucketMeta(context.Context, *DeleteBucketMetaRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteBucketMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListBucketMetas(context.Context, *emptypb.Empty) (*ListBucketMetasResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListBucketMetas not implemented")
+}
+func (UnimplementedMetadataServiceServer) PutMultipartUpload(context.Context, *PutMultipartUploadRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutMultipartUpload not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetMultipartUpload(context.Context, *GetMultipartUploadRequest) (*GetMultipartUploadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetMultipartUpload not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteMultipartUpload(context.Context, *DeleteMultipartUploadRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteMultipartUpload not implemented")
+}
+func (UnimplementedMetadataServiceServer) PutSnapshot(context.Context, *PutSnapshotRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutSnapshot not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetSnapshot(context.Context, *GetSnapshotRequest) (*GetSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSnapshot not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteSnapshot(context.Context, *DeleteSnapshotRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteSnapshot not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListSnapshots(context.Context, *emptypb.Empty) (*ListSnapshotsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListSnapshots not implemented")
+}
+func (UnimplementedMetadataServiceServer) CreateInode(context.Context, *CreateInodeRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateInode not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetInode(context.Context, *GetInodeRequest) (*GetInodeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetInode not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpdateInode(context.Context, *UpdateInodeRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateInode not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteInode(context.Context, *DeleteInodeRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteInode not implemented")
+}
+func (UnimplementedMetadataServiceServer) AllocateIno(context.Context, *emptypb.Empty) (*AllocateInoResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AllocateIno not implemented")
+}
+func (UnimplementedMetadataServiceServer) CreateDirEntry(context.Context, *CreateDirEntryRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateDirEntry not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteDirEntry(context.Context, *DeleteDirEntryRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteDirEntry not implemented")
+}
+func (UnimplementedMetadataServiceServer) LookupDirEntry(context.Context, *LookupDirEntryRequest) (*LookupDirEntryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LookupDirEntry not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListDirectory(context.Context, *ListDirectoryRequest) (*ListDirectoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListDirectory not implemented")
+}
+func (UnimplementedMetadataServiceServer) PutNodeMeta(context.Context, *PutNodeMetaRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutNodeMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetNodeMeta(context.Context, *GetNodeMetaRequest) (*GetNodeMetaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNodeMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteNodeMeta(context.Context, *DeleteNodeMetaRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteNodeMeta not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListNodeMetas(context.Context, *emptypb.Empty) (*ListNodeMetasResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListNodeMetas not implemented")
+}
+func (UnimplementedMetadataServiceServer) AcquireLock(context.Context, *AcquireLockRequest) (*AcquireLockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AcquireLock not implemented")
+}
+func (UnimplementedMetadataServiceServer) RenewLock(context.Context, *RenewLockRequest) (*RenewLockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RenewLock not implemented")
+}
+func (UnimplementedMetadataServiceServer) ReleaseLock(context.Context, *ReleaseLockRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReleaseLock not implemented")
+}
+func (UnimplementedMetadataServiceServer) TestLock(context.Context, *TestLockRequest) (*TestLockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TestLock not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetLock(context.Context, *GetLockRequest) (*GetLockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetLock not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListLocks(context.Context, *ListLocksRequest) (*ListLocksResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListLocks not implemented")
+}
+func (UnimplementedMetadataServiceServer) CleanupExpiredLocks(context.Context, *emptypb.Empty) (*CleanupExpiredLocksResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CleanupExpiredLocks not implemented")
+}
+func (UnimplementedMetadataServiceServer) SetVolumeOwner(context.Context, *SetVolumeOwnerRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetVolumeOwner not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetVolumeOwner(context.Context, *GetVolumeOwnerRequest) (*GetVolumeOwnerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetVolumeOwner not implemented")
+}
+func (UnimplementedMetadataServiceServer) RequestOwnership(context.Context, *RequestOwnershipRequest) (*RequestOwnershipResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RequestOwnership not implemented")
 }
 func (UnimplementedMetadataServiceServer) mustEmbedUnimplementedMetadataServiceServer() {}
 func (UnimplementedMetadataServiceServer) testEmbeddedByValue()                         {}
@@ -104,20 +835,830 @@ func RegisterMetadataServiceServer(s grpc.ServiceRegistrar, srv MetadataServiceS
 	s.RegisterService(&MetadataService_ServiceDesc, srv)
 }
 
-func _MetadataService_Execute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MetadataRequest)
+func _MetadataService_PutVolumeMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutVolumeMetaRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MetadataServiceServer).Execute(ctx, in)
+		return srv.(MetadataServiceServer).PutVolumeMeta(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: MetadataService_Execute_FullMethodName,
+		FullMethod: MetadataService_PutVolumeMeta_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataServiceServer).Execute(ctx, req.(*MetadataRequest))
+		return srv.(MetadataServiceServer).PutVolumeMeta(ctx, req.(*PutVolumeMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetVolumeMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVolumeMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetVolumeMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetVolumeMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetVolumeMeta(ctx, req.(*GetVolumeMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteVolumeMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteVolumeMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteVolumeMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteVolumeMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteVolumeMeta(ctx, req.(*DeleteVolumeMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListVolumesMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListVolumesMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListVolumesMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListVolumesMeta(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_PutPlacementMap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutPlacementMapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).PutPlacementMap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_PutPlacementMap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).PutPlacementMap(ctx, req.(*PutPlacementMapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetPlacementMap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPlacementMapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetPlacementMap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetPlacementMap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetPlacementMap(ctx, req.(*GetPlacementMapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeletePlacementMap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeletePlacementMapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeletePlacementMap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeletePlacementMap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeletePlacementMap(ctx, req.(*DeletePlacementMapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListPlacementMaps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListPlacementMaps(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListPlacementMaps_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListPlacementMaps(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_PutObjectMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutObjectMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).PutObjectMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_PutObjectMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).PutObjectMeta(ctx, req.(*PutObjectMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetObjectMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetObjectMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetObjectMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetObjectMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetObjectMeta(ctx, req.(*GetObjectMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteObjectMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteObjectMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteObjectMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteObjectMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteObjectMeta(ctx, req.(*DeleteObjectMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListObjectMetas_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListObjectMetasRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListObjectMetas(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListObjectMetas_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListObjectMetas(ctx, req.(*ListObjectMetasRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_PutBucketMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutBucketMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).PutBucketMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_PutBucketMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).PutBucketMeta(ctx, req.(*PutBucketMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetBucketMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBucketMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetBucketMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetBucketMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetBucketMeta(ctx, req.(*GetBucketMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteBucketMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteBucketMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteBucketMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteBucketMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteBucketMeta(ctx, req.(*DeleteBucketMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListBucketMetas_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListBucketMetas(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListBucketMetas_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListBucketMetas(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_PutMultipartUpload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutMultipartUploadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).PutMultipartUpload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_PutMultipartUpload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).PutMultipartUpload(ctx, req.(*PutMultipartUploadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetMultipartUpload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMultipartUploadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetMultipartUpload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetMultipartUpload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetMultipartUpload(ctx, req.(*GetMultipartUploadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteMultipartUpload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteMultipartUploadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteMultipartUpload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteMultipartUpload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteMultipartUpload(ctx, req.(*DeleteMultipartUploadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_PutSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).PutSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_PutSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).PutSnapshot(ctx, req.(*PutSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetSnapshot(ctx, req.(*GetSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteSnapshot(ctx, req.(*DeleteSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListSnapshots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListSnapshots(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListSnapshots_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListSnapshots(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_CreateInode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateInodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).CreateInode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_CreateInode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).CreateInode(ctx, req.(*CreateInodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetInode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetInodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetInode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetInode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetInode(ctx, req.(*GetInodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_UpdateInode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateInodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpdateInode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpdateInode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpdateInode(ctx, req.(*UpdateInodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteInode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteInodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteInode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteInode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteInode(ctx, req.(*DeleteInodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_AllocateIno_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).AllocateIno(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_AllocateIno_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).AllocateIno(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_CreateDirEntry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateDirEntryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).CreateDirEntry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_CreateDirEntry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).CreateDirEntry(ctx, req.(*CreateDirEntryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteDirEntry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteDirEntryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteDirEntry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteDirEntry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteDirEntry(ctx, req.(*DeleteDirEntryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_LookupDirEntry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LookupDirEntryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).LookupDirEntry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_LookupDirEntry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).LookupDirEntry(ctx, req.(*LookupDirEntryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListDirectory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDirectoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListDirectory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListDirectory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListDirectory(ctx, req.(*ListDirectoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_PutNodeMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutNodeMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).PutNodeMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_PutNodeMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).PutNodeMeta(ctx, req.(*PutNodeMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetNodeMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNodeMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetNodeMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetNodeMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetNodeMeta(ctx, req.(*GetNodeMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteNodeMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteNodeMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteNodeMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteNodeMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteNodeMeta(ctx, req.(*DeleteNodeMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListNodeMetas_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListNodeMetas(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListNodeMetas_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListNodeMetas(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_AcquireLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquireLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).AcquireLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_AcquireLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).AcquireLock(ctx, req.(*AcquireLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_RenewLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).RenewLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_RenewLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).RenewLock(ctx, req.(*RenewLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ReleaseLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ReleaseLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ReleaseLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ReleaseLock(ctx, req.(*ReleaseLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_TestLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TestLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).TestLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_TestLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).TestLock(ctx, req.(*TestLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetLock(ctx, req.(*GetLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListLocks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListLocksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListLocks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListLocks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListLocks(ctx, req.(*ListLocksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_CleanupExpiredLocks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).CleanupExpiredLocks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_CleanupExpiredLocks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).CleanupExpiredLocks(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_SetVolumeOwner_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetVolumeOwnerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).SetVolumeOwner(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_SetVolumeOwner_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).SetVolumeOwner(ctx, req.(*SetVolumeOwnerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetVolumeOwner_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVolumeOwnerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetVolumeOwner(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetVolumeOwner_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetVolumeOwner(ctx, req.(*GetVolumeOwnerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_RequestOwnership_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestOwnershipRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).RequestOwnership(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_RequestOwnership_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).RequestOwnership(ctx, req.(*RequestOwnershipRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -130,8 +1671,188 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*MetadataServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Execute",
-			Handler:    _MetadataService_Execute_Handler,
+			MethodName: "PutVolumeMeta",
+			Handler:    _MetadataService_PutVolumeMeta_Handler,
+		},
+		{
+			MethodName: "GetVolumeMeta",
+			Handler:    _MetadataService_GetVolumeMeta_Handler,
+		},
+		{
+			MethodName: "DeleteVolumeMeta",
+			Handler:    _MetadataService_DeleteVolumeMeta_Handler,
+		},
+		{
+			MethodName: "ListVolumesMeta",
+			Handler:    _MetadataService_ListVolumesMeta_Handler,
+		},
+		{
+			MethodName: "PutPlacementMap",
+			Handler:    _MetadataService_PutPlacementMap_Handler,
+		},
+		{
+			MethodName: "GetPlacementMap",
+			Handler:    _MetadataService_GetPlacementMap_Handler,
+		},
+		{
+			MethodName: "DeletePlacementMap",
+			Handler:    _MetadataService_DeletePlacementMap_Handler,
+		},
+		{
+			MethodName: "ListPlacementMaps",
+			Handler:    _MetadataService_ListPlacementMaps_Handler,
+		},
+		{
+			MethodName: "PutObjectMeta",
+			Handler:    _MetadataService_PutObjectMeta_Handler,
+		},
+		{
+			MethodName: "GetObjectMeta",
+			Handler:    _MetadataService_GetObjectMeta_Handler,
+		},
+		{
+			MethodName: "DeleteObjectMeta",
+			Handler:    _MetadataService_DeleteObjectMeta_Handler,
+		},
+		{
+			MethodName: "ListObjectMetas",
+			Handler:    _MetadataService_ListObjectMetas_Handler,
+		},
+		{
+			MethodName: "PutBucketMeta",
+			Handler:    _MetadataService_PutBucketMeta_Handler,
+		},
+		{
+			MethodName: "GetBucketMeta",
+			Handler:    _MetadataService_GetBucketMeta_Handler,
+		},
+		{
+			MethodName: "DeleteBucketMeta",
+			Handler:    _MetadataService_DeleteBucketMeta_Handler,
+		},
+		{
+			MethodName: "ListBucketMetas",
+			Handler:    _MetadataService_ListBucketMetas_Handler,
+		},
+		{
+			MethodName: "PutMultipartUpload",
+			Handler:    _MetadataService_PutMultipartUpload_Handler,
+		},
+		{
+			MethodName: "GetMultipartUpload",
+			Handler:    _MetadataService_GetMultipartUpload_Handler,
+		},
+		{
+			MethodName: "DeleteMultipartUpload",
+			Handler:    _MetadataService_DeleteMultipartUpload_Handler,
+		},
+		{
+			MethodName: "PutSnapshot",
+			Handler:    _MetadataService_PutSnapshot_Handler,
+		},
+		{
+			MethodName: "GetSnapshot",
+			Handler:    _MetadataService_GetSnapshot_Handler,
+		},
+		{
+			MethodName: "DeleteSnapshot",
+			Handler:    _MetadataService_DeleteSnapshot_Handler,
+		},
+		{
+			MethodName: "ListSnapshots",
+			Handler:    _MetadataService_ListSnapshots_Handler,
+		},
+		{
+			MethodName: "CreateInode",
+			Handler:    _MetadataService_CreateInode_Handler,
+		},
+		{
+			MethodName: "GetInode",
+			Handler:    _MetadataService_GetInode_Handler,
+		},
+		{
+			MethodName: "UpdateInode",
+			Handler:    _MetadataService_UpdateInode_Handler,
+		},
+		{
+			MethodName: "DeleteInode",
+			Handler:    _MetadataService_DeleteInode_Handler,
+		},
+		{
+			MethodName: "AllocateIno",
+			Handler:    _MetadataService_AllocateIno_Handler,
+		},
+		{
+			MethodName: "CreateDirEntry",
+			Handler:    _MetadataService_CreateDirEntry_Handler,
+		},
+		{
+			MethodName: "DeleteDirEntry",
+			Handler:    _MetadataService_DeleteDirEntry_Handler,
+		},
+		{
+			MethodName: "LookupDirEntry",
+			Handler:    _MetadataService_LookupDirEntry_Handler,
+		},
+		{
+			MethodName: "ListDirectory",
+			Handler:    _MetadataService_ListDirectory_Handler,
+		},
+		{
+			MethodName: "PutNodeMeta",
+			Handler:    _MetadataService_PutNodeMeta_Handler,
+		},
+		{
+			MethodName: "GetNodeMeta",
+			Handler:    _MetadataService_GetNodeMeta_Handler,
+		},
+		{
+			MethodName: "DeleteNodeMeta",
+			Handler:    _MetadataService_DeleteNodeMeta_Handler,
+		},
+		{
+			MethodName: "ListNodeMetas",
+			Handler:    _MetadataService_ListNodeMetas_Handler,
+		},
+		{
+			MethodName: "AcquireLock",
+			Handler:    _MetadataService_AcquireLock_Handler,
+		},
+		{
+			MethodName: "RenewLock",
+			Handler:    _MetadataService_RenewLock_Handler,
+		},
+		{
+			MethodName: "ReleaseLock",
+			Handler:    _MetadataService_ReleaseLock_Handler,
+		},
+		{
+			MethodName: "TestLock",
+			Handler:    _MetadataService_TestLock_Handler,
+		},
+		{
+			MethodName: "GetLock",
+			Handler:    _MetadataService_GetLock_Handler,
+		},
+		{
+			MethodName: "ListLocks",
+			Handler:    _MetadataService_ListLocks_Handler,
+		},
+		{
+			MethodName: "CleanupExpiredLocks",
+			Handler:    _MetadataService_CleanupExpiredLocks_Handler,
+		},
+		{
+			MethodName: "SetVolumeOwner",
+			Handler:    _MetadataService_SetVolumeOwner_Handler,
+		},
+		{
+			MethodName: "GetVolumeOwner",
+			Handler:    _MetadataService_GetVolumeOwner_Handler,
+		},
+		{
+			MethodName: "RequestOwnership",
+			Handler:    _MetadataService_RequestOwnership_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

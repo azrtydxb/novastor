@@ -13,7 +13,9 @@ import (
 
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
+	"google.golang.org/protobuf/proto"
 
+	pb "github.com/piwi3910/novastor/api/proto/metadata"
 	"github.com/piwi3910/novastor/internal/metrics"
 )
 
@@ -282,7 +284,7 @@ func (s *RaftStore) Close() error {
 }
 
 func (s *RaftStore) apply(op *fsmOp) error {
-	data, err := json.Marshal(op)
+	data, err := proto.Marshal(&pb.FsmOp{Op: op.Op, Bucket: op.Bucket, Key: op.Key, Value: op.Value})
 	if err != nil {
 		return fmt.Errorf("marshaling operation: %w", err)
 	}
@@ -302,7 +304,7 @@ func (s *RaftStore) apply(op *fsmOp) error {
 // and any error. This is used for operations like AllocateIno that need to
 // return a value from the FSM.
 func (s *RaftStore) applyWithResponse(op *fsmOp) (interface{}, error) {
-	data, err := json.Marshal(op)
+	data, err := proto.Marshal(&pb.FsmOp{Op: op.Op, Bucket: op.Bucket, Key: op.Key, Value: op.Value})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling operation: %w", err)
 	}

@@ -9,7 +9,9 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/proto"
 
+	pb "github.com/piwi3910/novastor/api/proto/metadata"
 	"github.com/piwi3910/novastor/internal/metrics"
 )
 
@@ -54,8 +56,14 @@ func (f *BadgerFSM) Apply(log *raft.Log) interface{} {
 	}()
 
 	var op fsmOp
-	if err := json.Unmarshal(log.Data, &op); err != nil {
-		return fmt.Errorf("unmarshaling fsm op: %w", err)
+	var pbOp pb.FsmOp
+	if err := proto.Unmarshal(log.Data, &pbOp); err != nil {
+		// Fall back to JSON for backward compatibility with pre-protobuf log entries.
+		if jsonErr := json.Unmarshal(log.Data, &op); jsonErr != nil {
+			return fmt.Errorf("unmarshaling fsm op: %w", err)
+		}
+	} else {
+		op = fsmOp{Op: pbOp.Op, Bucket: pbOp.Bucket, Key: pbOp.Key, Value: pbOp.Value}
 	}
 
 	switch op.Op {
@@ -270,12 +278,20 @@ func (f *BadgerFSM) Restore(rc io.ReadCloser) error {
 		if _, err := io.ReadFull(rc, entryBuf); err != nil {
 			return fmt.Errorf("reading entry data: %w", err)
 		}
-		var entry badgerSnapshotEntry
-		if err := json.Unmarshal(entryBuf, &entry); err != nil {
-			return fmt.Errorf("unmarshaling snapshot entry: %w", err)
+		var key, value []byte
+		var pbEntry pb.BadgerSnapshotEntry
+		if err := proto.Unmarshal(entryBuf, &pbEntry); err != nil {
+			// Fall back to JSON for backward compatibility with pre-protobuf snapshots.
+			var jsonEntry badgerSnapshotEntry
+			if jsonErr := json.Unmarshal(entryBuf, &jsonEntry); jsonErr != nil {
+				return fmt.Errorf("unmarshaling snapshot entry: %w (json fallback: %v)", err, jsonErr)
+			}
+			key, value = jsonEntry.Key, jsonEntry.Value
+		} else {
+			key, value = pbEntry.Key, pbEntry.Value
 		}
 		if err := f.db.Update(func(txn *badger.Txn) error {
-			return txn.Set(entry.Key, entry.Value)
+			return txn.Set(key, value)
 		}); err != nil {
 			return fmt.Errorf("restoring entry: %w", err)
 		}
@@ -294,10 +310,10 @@ type badgerFSMSnapshot struct {
 }
 
 // Persist writes all snapshot entries to the sink using a length-prefixed
-// binary format: [4-byte big-endian length][JSON-encoded entry] per record.
+// binary format: [4-byte big-endian length][protobuf-encoded entry] per record.
 func (s *badgerFSMSnapshot) Persist(sink raft.SnapshotSink) error {
 	for _, entry := range s.entries {
-		data, err := json.Marshal(entry)
+		data, err := proto.Marshal(&pb.BadgerSnapshotEntry{Key: entry.Key, Value: entry.Value})
 		if err != nil {
 			sink.Cancel()
 			return fmt.Errorf("marshaling snapshot entry: %w", err)
