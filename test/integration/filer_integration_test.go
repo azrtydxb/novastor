@@ -31,7 +31,7 @@ func setupFilerWithDeps(t *testing.T) *filer.FileSystem {
 		t.Fatalf("NewLocalStore failed: %v", err)
 	}
 
-	chunkLis, err := net.ListenConfig{}.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	chunkLis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to listen for chunk server: %v", err)
 	}
