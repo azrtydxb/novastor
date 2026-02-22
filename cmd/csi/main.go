@@ -112,6 +112,18 @@ func (a *snapshotStoreAdapter) DeletePlacementMap(ctx context.Context, chunkID s
 	return a.client.DeletePlacementMap(ctx, chunkID)
 }
 
+func (a *snapshotStoreAdapter) PutShardPlacement(ctx context.Context, sp *metadata.ShardPlacement) error {
+	return a.client.PutShardPlacement(ctx, sp)
+}
+
+func (a *snapshotStoreAdapter) GetShardPlacements(ctx context.Context, chunkID string) ([]*metadata.ShardPlacement, error) {
+	return a.client.GetShardPlacements(ctx, chunkID)
+}
+
+func (a *snapshotStoreAdapter) DeleteShardPlacement(ctx context.Context, chunkID string, shardIndex int) error {
+	return a.client.DeleteShardPlacement(ctx, chunkID, shardIndex)
+}
+
 func (a *snapshotStoreAdapter) PutSnapshotMeta(ctx context.Context, meta *novcsi.SnapshotMeta) error {
 	return a.client.PutSnapshot(ctx, &metadata.SnapshotMeta{
 		SnapshotID:     meta.SnapshotID,

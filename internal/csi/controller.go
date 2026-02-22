@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/piwi3910/novastor/internal/chunk"
 	"github.com/piwi3910/novastor/internal/logging"
 	"github.com/piwi3910/novastor/internal/metadata"
 	"github.com/piwi3910/novastor/internal/metrics"
@@ -47,6 +48,10 @@ type MetadataStore interface {
 	PutPlacementMap(ctx context.Context, pm *metadata.PlacementMap) error
 	GetPlacementMap(ctx context.Context, chunkID string) (*metadata.PlacementMap, error)
 	DeletePlacementMap(ctx context.Context, chunkID string) error
+	// Shard placement methods for erasure coding.
+	PutShardPlacement(ctx context.Context, sp *metadata.ShardPlacement) error
+	GetShardPlacements(ctx context.Context, chunkID string) ([]*metadata.ShardPlacement, error)
+	DeleteShardPlacement(ctx context.Context, chunkID string, shardIndex int) error
 }
 
 // QuotaChecker defines the interface for checking storage quotas.
@@ -98,6 +103,8 @@ type ControllerServer struct {
 	agentTarget     AgentTargetClient
 	quota           QuotaChecker
 	chunkReplicator ChunkReplicator
+	ecDistributor   *ECDistributor
+	ecReader        *ECReader
 
 	// nodeAddrToName maps agent network addresses (ip:port) to Kubernetes node
 	// names. CRUSH placement returns addresses, but PV topology must use K8s
@@ -130,6 +137,15 @@ func NewControllerServerWithNodeMeta(meta MetadataStore, nodeMeta NodeMetaStore,
 		quota:           quota,
 		chunkReplicator: replicator,
 	}
+}
+
+// SetChunkClient configures erasure coding support by wiring in a ChunkClient.
+// When set, EC volumes will encode/distribute shards during CreateVolume and
+// support EC-aware reads via ReadChunkEC. This is optional — if not called,
+// EC metadata is still written but shard distribution is skipped.
+func (cs *ControllerServer) SetChunkClient(client ChunkClient) {
+	cs.ecDistributor = NewECDistributor(client, cs.meta)
+	cs.ecReader = NewECReader(client)
 }
 
 // UpdateNodeMapping replaces the address-to-node-name mapping used by
@@ -471,6 +487,21 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			return nil, status.Errorf(codes.Internal, "writing placement map for chunk %s: %v", chunkID, err)
 		}
 
+		// For EC volumes, also write per-shard placement entries.
+		if protParams.IsErasureCoding() {
+			for r, node := range chunkNodes {
+				sp := &metadata.ShardPlacement{
+					ChunkID:    chunkID,
+					VolumeID:   volumeID,
+					ShardIndex: r,
+					NodeID:     node,
+				}
+				if err := cs.meta.PutShardPlacement(ctx, sp); err != nil {
+					return nil, status.Errorf(codes.Internal, "writing shard placement for chunk %s shard %d: %v", chunkID, r, err)
+				}
+			}
+		}
+
 		logging.L.Debug("placed chunk with protection",
 			zap.String("volumeID", volumeID),
 			zap.String("chunkID", chunkID),
@@ -579,13 +610,38 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 	}
 
-	// Replicate chunks to other placement nodes for data protection.
+	// Distribute data protection: EC shard encoding or chunk replication.
 	// After CreateTarget writes all chunks on the primary node (nodeIDs[0]),
-	// we copy each chunk to the remaining nodes in its placement map.
-	// Replication failure is logged but does NOT fail CreateVolume — the volume
+	// we either EC-encode and distribute shards, or replicate whole chunks.
+	// Failure is logged but does NOT fail CreateVolume — the volume
 	// is usable with data on the primary. The policy engine's periodic scan
-	// will repair any missing replicas.
-	if cs.chunkReplicator != nil && nodesPerChunk > 1 {
+	// will repair any missing shards/replicas.
+	if protParams.IsErasureCoding() && cs.ecDistributor != nil {
+		ec, ecErr := chunk.NewErasureCoder(protCfg.dataShards, protCfg.parityShards)
+		if ecErr != nil {
+			logging.L.Error("failed to create erasure coder (volume usable but not EC-encoded)",
+				zap.String("volumeID", volumeID),
+				zap.Error(ecErr))
+		} else {
+			g, gCtx := errgroup.WithContext(ctx)
+			g.SetLimit(8)
+			for i, chunkID := range chunkIDs {
+				shardNodes := make([]string, nodesPerChunk)
+				for r := range nodesPerChunk {
+					shardNodes[r] = nodeIDs[(i+r)%numNodes]
+				}
+				cid, nodes := chunkID, shardNodes
+				g.Go(func() error {
+					return cs.ecDistributor.DistributeChunk(gCtx, ec, cid, nodeIDs[0], nodes, volumeID)
+				})
+			}
+			if err := g.Wait(); err != nil {
+				logging.L.Error("EC shard distribution failed (volume usable but under-protected)",
+					zap.String("volumeID", volumeID),
+					zap.Error(err))
+			}
+		}
+	} else if cs.chunkReplicator != nil && nodesPerChunk > 1 {
 		primaryAddr := nodeIDs[0]
 		g, gCtx := errgroup.WithContext(ctx)
 		g.SetLimit(8) // Limit concurrent replication goroutines.
@@ -969,4 +1025,45 @@ func (cs *ControllerServer) ControllerGetCapabilities(_ context.Context, _ *csi.
 	return &csi.ControllerGetCapabilitiesResponse{
 		Capabilities: capabilities,
 	}, nil
+}
+
+// ReadChunkEC reconstructs a chunk from its erasure-coded shards.
+// It reads the PlacementMap for the chunk, retrieves the volume's EC config,
+// and uses ECReader to reconstruct from available shards.
+// This is intended for use by file (NFS/FUSE) and object (S3) gateways.
+func (cs *ControllerServer) ReadChunkEC(ctx context.Context, chunkID string) ([]byte, error) {
+	if cs.ecReader == nil {
+		return nil, fmt.Errorf("EC reader not configured")
+	}
+
+	// Get placement map for this chunk.
+	pm, err := cs.meta.GetPlacementMap(ctx, chunkID)
+	if err != nil {
+		return nil, fmt.Errorf("getting placement map for chunk %s: %w", chunkID, err)
+	}
+
+	// Determine EC config from shard count.
+	// Look up shard placements to find the volume ID, then get the volume's protection config.
+	sps, err := cs.meta.GetShardPlacements(ctx, chunkID)
+	if err != nil || len(sps) == 0 {
+		return nil, fmt.Errorf("getting shard placements for chunk %s: no EC shards found", chunkID)
+	}
+
+	vm, err := cs.meta.GetVolumeMeta(ctx, sps[0].VolumeID)
+	if err != nil {
+		return nil, fmt.Errorf("getting volume metadata for %s: %w", sps[0].VolumeID, err)
+	}
+
+	if vm.ProtectionProfile == nil || vm.ProtectionProfile.Mode != metadata.ProtectionModeErasureCoding ||
+		vm.ProtectionProfile.ErasureCoding == nil {
+		return nil, fmt.Errorf("volume %s is not erasure-coded", vm.VolumeID)
+	}
+
+	ecCfg := vm.ProtectionProfile.ErasureCoding
+	ec, err := chunk.NewErasureCoder(ecCfg.DataShards, ecCfg.ParityShards)
+	if err != nil {
+		return nil, fmt.Errorf("creating erasure coder: %w", err)
+	}
+
+	return cs.ecReader.ReadChunk(ctx, ec, chunkID, pm.Nodes)
 }

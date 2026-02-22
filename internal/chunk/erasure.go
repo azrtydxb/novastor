@@ -4,9 +4,46 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/klauspost/reedsolomon"
 )
+
+const shardSeparator = ":shard:"
+
+// ShardID returns the chunk ID for a specific shard of an erasure-coded chunk.
+// Format: "{chunkID}:shard:{index}"
+func ShardID(chunkID string, shardIndex int) ChunkID {
+	return ChunkID(fmt.Sprintf("%s%s%d", chunkID, shardSeparator, shardIndex))
+}
+
+// ParseShardID extracts the original chunk ID and shard index from a shard ID.
+// Returns an error if the ID is not a valid shard ID.
+func ParseShardID(id ChunkID) (chunkID string, shardIndex int, err error) {
+	s := string(id)
+	idx := strings.LastIndex(s, shardSeparator)
+	if idx < 0 {
+		return "", 0, fmt.Errorf("not a shard ID: missing %q separator", shardSeparator)
+	}
+	chunkID = s[:idx]
+	if chunkID == "" {
+		return "", 0, fmt.Errorf("not a shard ID: empty chunk ID")
+	}
+	shardIndex, err = strconv.Atoi(s[idx+len(shardSeparator):])
+	if err != nil {
+		return "", 0, fmt.Errorf("not a shard ID: invalid shard index: %w", err)
+	}
+	if shardIndex < 0 {
+		return "", 0, fmt.Errorf("not a shard ID: negative shard index %d", shardIndex)
+	}
+	return chunkID, shardIndex, nil
+}
+
+// IsShardID returns true if the given ID is a shard ID (contains the :shard: separator).
+func IsShardID(id ChunkID) bool {
+	return strings.Contains(string(id), shardSeparator)
+}
 
 // ErasureCoder provides Reed-Solomon erasure coding for chunk protection.
 // It encodes data into data+parity shards and can reconstruct from missing shards.

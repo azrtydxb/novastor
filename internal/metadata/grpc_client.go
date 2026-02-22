@@ -142,6 +142,26 @@ func (c *GRPCClient) DeletePlacementMap(ctx context.Context, chunkID string) err
 	return err
 }
 
+// ---- Shard placement operations ----
+
+// PutShardPlacement stores a shard placement entry via the remote metadata service.
+// TODO: Wire to gRPC MetadataService when ShardPlacement RPCs are added.
+func (c *GRPCClient) PutShardPlacement(_ context.Context, _ *ShardPlacement) error {
+	return fmt.Errorf("shard placement gRPC not yet implemented")
+}
+
+// GetShardPlacements retrieves all shard placements for a chunk.
+// TODO: Wire to gRPC MetadataService when ShardPlacement RPCs are added.
+func (c *GRPCClient) GetShardPlacements(_ context.Context, _ string) ([]*ShardPlacement, error) {
+	return nil, fmt.Errorf("shard placement gRPC not yet implemented")
+}
+
+// DeleteShardPlacement removes a shard placement entry.
+// TODO: Wire to gRPC MetadataService when ShardPlacement RPCs are added.
+func (c *GRPCClient) DeleteShardPlacement(_ context.Context, _ string, _ int) error {
+	return fmt.Errorf("shard placement gRPC not yet implemented")
+}
+
 // ---- Object operations ----
 
 // PutObjectMeta stores object metadata via the remote metadata service.
