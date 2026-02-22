@@ -46,6 +46,9 @@ func TestBlockStorage_ProvisionWriteReadDelete(t *testing.T) {
 				},
 			},
 		},
+		Parameters: map[string]string{
+			"replicas": "1", // Single-node test cluster
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateVolume failed: %v", err)

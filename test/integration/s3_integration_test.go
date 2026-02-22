@@ -72,7 +72,7 @@ func setupS3Gateway(t *testing.T) *httptest.Server {
 	chunkStore := agent.NewLocalChunkStore(agentClient)
 
 	// Create S3 gateway.
-	gw := s3gw.NewGateway(metaAdapter, metaAdapter, chunkStore, metaAdapter, testAccessKey, testSecretKey)
+	gw := s3gw.NewGateway(metaAdapter, metaAdapter, chunkStore, metaAdapter, nil, testAccessKey, testSecretKey)
 
 	// Create httptest server.
 	ts := httptest.NewServer(gw)

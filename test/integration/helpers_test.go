@@ -15,7 +15,7 @@ import (
 // string. The port is released immediately so it can be reused by the caller.
 func allocAddr(t *testing.T) string {
 	t.Helper()
-	l, err := net.ListenConfig{}.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to allocate address: %v", err)
 	}
