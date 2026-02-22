@@ -92,6 +92,7 @@ pub enum ReadPolicy {
     #[default]
     RoundRobin,
     LocalFirst { local_address: String },
+    LatencyAware,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

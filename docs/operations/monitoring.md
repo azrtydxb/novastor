@@ -325,3 +325,30 @@ groups:
           summary: "NovaStor agent is down"
           description: "Agent on {{ $labels.instance }} has been unreachable for over 2 minutes."
 ```
+
+## Data Plane I/O Statistics
+
+The SPDK data plane exposes per-volume I/O statistics via the `novastor_io_stats` JSON-RPC method. These metrics are useful for monitoring read distribution across replicas and identifying performance bottlenecks.
+
+### Key Metrics
+
+| Metric | Description |
+|---|---|
+| `reads_completed` (per replica) | Total read I/Os completed by each replica |
+| `read_bytes` (per replica) | Total bytes read from each replica |
+| `avg_read_latency_us` (per replica) | Exponential moving average of read latency in microseconds |
+| `total_read_iops` | Aggregate read I/O count across all replicas |
+| `total_write_iops` | Aggregate write I/O count across all replicas |
+| `write_quorum_latency_us` | Average write quorum completion latency in microseconds |
+
+### Verifying Read Distribution
+
+Use the `novastor_io_stats` RPC to verify reads are evenly distributed:
+
+```bash
+# Via kubectl exec to the dataplane pod
+kubectl exec -n novastor-system <dataplane-pod> -- \
+  /usr/local/bin/novastor-dataplane --rpc-call novastor_io_stats '{"volume_id":"<vol>"}'
+```
+
+For a 3-replica volume with `round_robin` or `latency_aware` policy, `reads_completed` should be roughly balanced across replicas. For `local_first`, the local replica will have significantly higher `reads_completed`.

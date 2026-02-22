@@ -50,6 +50,7 @@ pub fn register_all(router: &mut Router) {
     router.register("replica_bdev_status", wrap(handle_replica_status));
     router.register("replica_bdev_add_replica", wrap(handle_replica_add));
     router.register("replica_bdev_remove_replica", wrap(handle_replica_remove));
+    router.register("novastor_io_stats", wrap(handle_io_stats));
     router.register("get_version", wrap(get_version));
 }
 
@@ -226,6 +227,7 @@ fn replica_bdev_create(p: ReplicaBdevCreateParams) -> Result<serde_json::Value, 
                 .unwrap_or_default();
             ReadPolicy::LocalFirst { local_address: local_addr }
         }
+        Some("latency_aware") => ReadPolicy::LatencyAware,
         _ => ReadPolicy::RoundRobin,
     };
 
@@ -340,6 +342,8 @@ fn handle_replica_status(p: ReplicaStatusParams) -> Result<serde_json::Value, Da
             "writes_completed": r.writes_completed,
             "read_errors": r.read_errors,
             "write_errors": r.write_errors,
+            "read_bytes": r.read_bytes,
+            "avg_read_latency_us": r.avg_read_latency_us,
         })
     }).collect();
 
@@ -348,6 +352,45 @@ fn handle_replica_status(p: ReplicaStatusParams) -> Result<serde_json::Value, Da
         "replicas": replica_infos,
         "write_quorum": status.write_quorum,
         "healthy_count": status.healthy_count,
+        "total_read_iops": status.total_read_iops,
+        "total_write_iops": status.total_write_iops,
+        "write_quorum_latency_us": status.write_quorum_latency_us,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// I/O statistics
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct IoStatsParams {
+    volume_id: String,
+}
+
+fn handle_io_stats(p: IoStatsParams) -> Result<serde_json::Value, DataPlaneError> {
+    let registry = replica_bdevs().lock().unwrap();
+    let bdev = registry.get(&p.volume_id).ok_or_else(|| {
+        DataPlaneError::ReplicaError(format!("replica bdev {} not found", p.volume_id))
+    })?.clone();
+    drop(registry);
+
+    let stats = bdev.io_stats();
+    let replica_stats: Vec<serde_json::Value> = stats.replicas.iter().map(|r| {
+        serde_json::json!({
+            "addr": r.address,
+            "port": r.port,
+            "reads_completed": r.reads_completed,
+            "read_bytes": r.read_bytes,
+            "avg_read_latency_us": r.avg_read_latency_us,
+        })
+    }).collect();
+
+    Ok(serde_json::json!({
+        "volume_id": stats.volume_id,
+        "replicas": replica_stats,
+        "total_read_iops": stats.total_read_iops,
+        "total_write_iops": stats.total_write_iops,
+        "write_quorum_latency_us": stats.write_quorum_latency_us,
     }))
 }
 
