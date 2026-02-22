@@ -245,21 +245,44 @@ type ReplicaTarget struct {
 
 // ReplicaBdevStatus represents the status of a replica bdev.
 type ReplicaBdevStatus struct {
-	VolumeID     string              `json:"volume_id"`
-	Replicas     []ReplicaStatusInfo `json:"replicas"`
-	WriteQuorum  uint32              `json:"write_quorum"`
-	HealthyCount uint32              `json:"healthy_count"`
+	VolumeID             string              `json:"volume_id"`
+	Replicas             []ReplicaStatusInfo `json:"replicas"`
+	WriteQuorum          uint32              `json:"write_quorum"`
+	HealthyCount         uint32              `json:"healthy_count"`
+	TotalReadIOPS        uint64              `json:"total_read_iops"`
+	TotalWriteIOPS       uint64              `json:"total_write_iops"`
+	WriteQuorumLatencyUs uint64              `json:"write_quorum_latency_us"`
 }
 
 // ReplicaStatusInfo describes the state and I/O statistics of a single replica.
 type ReplicaStatusInfo struct {
-	Address         string `json:"address"`
-	Port            uint16 `json:"port"`
-	State           string `json:"state"`
-	ReadsCompleted  uint64 `json:"reads_completed"`
-	WritesCompleted uint64 `json:"writes_completed"`
-	ReadErrors      uint64 `json:"read_errors"`
-	WriteErrors     uint64 `json:"write_errors"`
+	Address          string `json:"address"`
+	Port             uint16 `json:"port"`
+	State            string `json:"state"`
+	ReadsCompleted   uint64 `json:"reads_completed"`
+	WritesCompleted  uint64 `json:"writes_completed"`
+	ReadErrors       uint64 `json:"read_errors"`
+	WriteErrors      uint64 `json:"write_errors"`
+	ReadBytes        uint64 `json:"read_bytes"`
+	AvgReadLatencyUs uint64 `json:"avg_read_latency_us"`
+}
+
+// IOStats represents per-volume I/O statistics from the data-plane.
+type IOStats struct {
+	VolumeID             string           `json:"volume_id"`
+	Replicas             []ReplicaIOStats `json:"replicas"`
+	TotalReadIOPS        uint64           `json:"total_read_iops"`
+	TotalWriteIOPS       uint64           `json:"total_write_iops"`
+	WriteQuorumLatencyUs uint64           `json:"write_quorum_latency_us"`
+}
+
+// ReplicaIOStats describes per-replica I/O distribution metrics.
+type ReplicaIOStats struct {
+	Addr             string `json:"addr"`
+	Port             uint16 `json:"port"`
+	ReadsCompleted   uint64 `json:"reads_completed"`
+	ReadBytes        uint64 `json:"read_bytes"`
+	AvgReadLatencyUs uint64 `json:"avg_read_latency_us"`
 }
 
 // CreateReplicaBdev creates a composite bdev that replicates writes across targets.
@@ -325,6 +348,15 @@ func (c *Client) RemoveReplica(bdevName, targetAddr string) error {
 func (c *Client) GetReplicaBdevStatus(bdevName string) (*ReplicaBdevStatus, error) {
 	var result ReplicaBdevStatus
 	if err := c.call("replica_bdev_status", map[string]interface{}{"volume_id": bdevName}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetIOStats returns per-volume I/O statistics including per-replica read distribution.
+func (c *Client) GetIOStats(volumeID string) (*IOStats, error) {
+	var result IOStats
+	if err := c.call("novastor_io_stats", map[string]interface{}{"volume_id": volumeID}, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
