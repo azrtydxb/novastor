@@ -138,6 +138,6 @@ func lockTypeFromProto(t pb.LockType) LockType {
 	case pb.LockType_LOCK_TYPE_WRITE:
 		return LockWrite
 	default:
-		return LockRead // Default to read lock for unspecified.
+		return LockWrite // Default to exclusive lock for safety when type is unspecified.
 	}
 }

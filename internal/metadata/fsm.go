@@ -258,7 +258,11 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 		for bk, bv := range snap.Buckets {
 			bucket := make(map[string][]byte, len(bv.Entries))
 			for k, v := range bv.Entries {
-				bucket[k] = v
+				// Copy byte slices to avoid retaining references to the
+				// protobuf unmarshal buffer.
+				val := make([]byte, len(v))
+				copy(val, v)
+				bucket[k] = val
 			}
 			data[bk] = bucket
 		}
