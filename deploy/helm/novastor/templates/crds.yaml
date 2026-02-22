@@ -740,7 +740,7 @@ spec:
                     - name
                   properties:
                     kind:
-                      description: Kind is the scope type: Namespace, StoragePool, Bucket, or Volume.
+                      description: "Kind is the scope type: Namespace, StoragePool, Bucket, or Volume."
                       type: string
                       enum:
                         - Namespace
@@ -748,7 +748,7 @@ spec:
                         - Bucket
                         - Volume
                     name:
-                      description: Name identifies the scope target. For Namespace: the namespace name, For StoragePool: the pool name, For Bucket: the bucket name, For Volume: the volume ID
+                      description: "Name identifies the scope target. For Namespace: the namespace name, For StoragePool: the pool name, For Bucket: the bucket name, For Volume: the volume ID"
                       type: string
                 storage:
                   description: Storage defines storage limits.

@@ -15,12 +15,12 @@ import (
 )
 
 const (
-	failoverNamespace   = "novastor-system"
+	failoverNamespace    = "novastor-system"
 	failoverStorageClass = "novastor-block-replicated"
-	failoverPVCName     = "e2e-failover-pvc"
-	failoverPodName     = "e2e-failover-fio"
-	failoverTimeout     = 5 * time.Minute
-	pollInterval        = 5 * time.Second
+	failoverPVCName      = "e2e-failover-pvc"
+	failoverPodName      = "e2e-failover-fio"
+	failoverTimeout      = 5 * time.Minute
+	pollInterval         = 5 * time.Second
 )
 
 // kubectl executes a kubectl command and returns the combined output.
