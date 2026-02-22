@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/piwi3910/novastor/api/proto/metadata"
 )
 
 // mockLockStore is a minimal lock store implementation for testing.
@@ -21,7 +24,7 @@ func newMockLockStore() *mockLockStore {
 }
 
 func (m *mockLockStore) applyOp(op *fsmOp) error {
-	data, err := json.Marshal(op)
+	data, err := proto.Marshal(&pb.FsmOp{Op: op.Op, Bucket: op.Bucket, Key: op.Key, Value: op.Value})
 	if err != nil {
 		return err
 	}

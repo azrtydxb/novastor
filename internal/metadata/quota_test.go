@@ -7,12 +7,15 @@ import (
 	"github.com/hashicorp/raft"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/piwi3910/novastor/api/proto/metadata"
 )
 
 // Test helper that applies an FSM operation
 func applyFSMOp(t *testing.T, fsm *FSM, op string, bucket, key string, value []byte) {
 	t.Helper()
-	opData, err := json.Marshal(&fsmOp{Op: op, Bucket: bucket, Key: key, Value: value})
+	opData, err := proto.Marshal(&pb.FsmOp{Op: op, Bucket: bucket, Key: key, Value: value})
 	require.NoError(t, err)
 	result := fsm.Apply(&raft.Log{Data: opData})
 	// FSM.Apply returns nil on success or an error

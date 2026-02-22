@@ -34,8 +34,8 @@ manifests: controller-gen ## Generate CRD manifests.
 
 .PHONY: generate-proto
 generate-proto: protoc-gen-go protoc-gen-go-grpc ## Generate Go code from protobuf definitions.
-	PATH=$(LOCALBIN):$$PATH protoc --go_out=. --go_opt=paths=import \
-		--go-grpc_out=. --go-grpc_opt=paths=import \
+	PATH=$(LOCALBIN):$$PATH protoc --go_out=. --go_opt=paths=source_relative \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 		--proto_path=. \
 		api/proto/chunk/chunk.proto \
 		api/proto/metadata/metadata.proto \

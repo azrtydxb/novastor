@@ -6,13 +6,16 @@ import (
 	"testing"
 
 	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/piwi3910/novastor/api/proto/metadata"
 )
 
 // applyToFSM is a test helper that marshals an fsmOp and applies it to the FSM
 // via a synthetic raft.Log, returning any error from Apply.
 func applyToFSM(t *testing.T, f MetadataFSM, op *fsmOp) {
 	t.Helper()
-	data, err := json.Marshal(op)
+	data, err := proto.Marshal(&pb.FsmOp{Op: op.Op, Bucket: op.Bucket, Key: op.Key, Value: op.Value})
 	if err != nil {
 		t.Fatalf("marshal fsmOp: %v", err)
 	}

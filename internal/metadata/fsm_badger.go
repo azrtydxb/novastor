@@ -9,7 +9,9 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/proto"
 
+	pb "github.com/piwi3910/novastor/api/proto/metadata"
 	"github.com/piwi3910/novastor/internal/metrics"
 )
 
@@ -53,10 +55,11 @@ func (f *BadgerFSM) Apply(log *raft.Log) interface{} {
 		metrics.RaftApplyLatency.Observe(time.Since(start).Seconds())
 	}()
 
-	var op fsmOp
-	if err := json.Unmarshal(log.Data, &op); err != nil {
+	var pbOp pb.FsmOp
+	if err := proto.Unmarshal(log.Data, &pbOp); err != nil {
 		return fmt.Errorf("unmarshaling fsm op: %w", err)
 	}
+	op := fsmOp{Op: pbOp.Op, Bucket: pbOp.Bucket, Key: pbOp.Key, Value: pbOp.Value}
 
 	switch op.Op {
 	case opPut:
@@ -270,8 +273,8 @@ func (f *BadgerFSM) Restore(rc io.ReadCloser) error {
 		if _, err := io.ReadFull(rc, entryBuf); err != nil {
 			return fmt.Errorf("reading entry data: %w", err)
 		}
-		var entry badgerSnapshotEntry
-		if err := json.Unmarshal(entryBuf, &entry); err != nil {
+		var entry pb.BadgerSnapshotEntry
+		if err := proto.Unmarshal(entryBuf, &entry); err != nil {
 			return fmt.Errorf("unmarshaling snapshot entry: %w", err)
 		}
 		if err := f.db.Update(func(txn *badger.Txn) error {
@@ -294,10 +297,10 @@ type badgerFSMSnapshot struct {
 }
 
 // Persist writes all snapshot entries to the sink using a length-prefixed
-// binary format: [4-byte big-endian length][JSON-encoded entry] per record.
+// binary format: [4-byte big-endian length][protobuf-encoded entry] per record.
 func (s *badgerFSMSnapshot) Persist(sink raft.SnapshotSink) error {
 	for _, entry := range s.entries {
-		data, err := json.Marshal(entry)
+		data, err := proto.Marshal(&pb.BadgerSnapshotEntry{Key: entry.Key, Value: entry.Value})
 		if err != nil {
 			sink.Cancel()
 			return fmt.Errorf("marshaling snapshot entry: %w", err)

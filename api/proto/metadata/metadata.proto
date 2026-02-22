@@ -4,36 +4,592 @@ package metadata;
 
 option go_package = "github.com/piwi3910/novastor/api/proto/metadata";
 
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+
 // MetadataService provides gRPC access to the NovaStor metadata store.
-// It uses a generic request/response envelope that carries JSON-encoded
-// domain objects as opaque payloads. This avoids duplicating the rich Go
-// type definitions in protobuf and keeps the wire protocol simple.
+// All operations use typed protobuf RPCs with domain-specific messages.
 service MetadataService {
-  // Execute performs a single metadata operation identified by the
-  // operation field in MetadataRequest. The payload carries
-  // JSON-encoded arguments; the response payload carries the
-  // JSON-encoded result.
-  rpc Execute(MetadataRequest) returns (MetadataResponse);
+  // ---- Volume operations ----
+  rpc PutVolumeMeta(PutVolumeMetaRequest)       returns (google.protobuf.Empty);
+  rpc GetVolumeMeta(GetVolumeMetaRequest)       returns (GetVolumeMetaResponse);
+  rpc DeleteVolumeMeta(DeleteVolumeMetaRequest) returns (google.protobuf.Empty);
+  rpc ListVolumesMeta(google.protobuf.Empty)    returns (ListVolumesMetaResponse);
+
+  // ---- Placement operations ----
+  rpc PutPlacementMap(PutPlacementMapRequest)       returns (google.protobuf.Empty);
+  rpc GetPlacementMap(GetPlacementMapRequest)       returns (GetPlacementMapResponse);
+  rpc DeletePlacementMap(DeletePlacementMapRequest) returns (google.protobuf.Empty);
+  rpc ListPlacementMaps(google.protobuf.Empty)      returns (ListPlacementMapsResponse);
+
+  // ---- Object operations ----
+  rpc PutObjectMeta(PutObjectMetaRequest)       returns (google.protobuf.Empty);
+  rpc GetObjectMeta(GetObjectMetaRequest)       returns (GetObjectMetaResponse);
+  rpc DeleteObjectMeta(DeleteObjectMetaRequest) returns (google.protobuf.Empty);
+  rpc ListObjectMetas(ListObjectMetasRequest)   returns (ListObjectMetasResponse);
+
+  // ---- Bucket operations ----
+  rpc PutBucketMeta(PutBucketMetaRequest)       returns (google.protobuf.Empty);
+  rpc GetBucketMeta(GetBucketMetaRequest)       returns (GetBucketMetaResponse);
+  rpc DeleteBucketMeta(DeleteBucketMetaRequest) returns (google.protobuf.Empty);
+  rpc ListBucketMetas(google.protobuf.Empty)    returns (ListBucketMetasResponse);
+
+  // ---- Multipart operations ----
+  rpc PutMultipartUpload(PutMultipartUploadRequest)       returns (google.protobuf.Empty);
+  rpc GetMultipartUpload(GetMultipartUploadRequest)       returns (GetMultipartUploadResponse);
+  rpc DeleteMultipartUpload(DeleteMultipartUploadRequest) returns (google.protobuf.Empty);
+
+  // ---- Snapshot operations ----
+  rpc PutSnapshot(PutSnapshotRequest)       returns (google.protobuf.Empty);
+  rpc GetSnapshot(GetSnapshotRequest)       returns (GetSnapshotResponse);
+  rpc DeleteSnapshot(DeleteSnapshotRequest) returns (google.protobuf.Empty);
+  rpc ListSnapshots(google.protobuf.Empty)  returns (ListSnapshotsResponse);
+
+  // ---- Inode operations ----
+  rpc CreateInode(CreateInodeRequest) returns (google.protobuf.Empty);
+  rpc GetInode(GetInodeRequest)       returns (GetInodeResponse);
+  rpc UpdateInode(UpdateInodeRequest) returns (google.protobuf.Empty);
+  rpc DeleteInode(DeleteInodeRequest) returns (google.protobuf.Empty);
+  rpc AllocateIno(google.protobuf.Empty) returns (AllocateInoResponse);
+
+  // ---- Directory entry operations ----
+  rpc CreateDirEntry(CreateDirEntryRequest)   returns (google.protobuf.Empty);
+  rpc DeleteDirEntry(DeleteDirEntryRequest)   returns (google.protobuf.Empty);
+  rpc LookupDirEntry(LookupDirEntryRequest)   returns (LookupDirEntryResponse);
+  rpc ListDirectory(ListDirectoryRequest)     returns (ListDirectoryResponse);
+
+  // ---- Node operations ----
+  rpc PutNodeMeta(PutNodeMetaRequest)       returns (google.protobuf.Empty);
+  rpc GetNodeMeta(GetNodeMetaRequest)       returns (GetNodeMetaResponse);
+  rpc DeleteNodeMeta(DeleteNodeMetaRequest) returns (google.protobuf.Empty);
+  rpc ListNodeMetas(google.protobuf.Empty)  returns (ListNodeMetasResponse);
+
+  // ---- Lock operations ----
+  rpc AcquireLock(AcquireLockRequest)                returns (AcquireLockResponse);
+  rpc RenewLock(RenewLockRequest)                    returns (RenewLockResponse);
+  rpc ReleaseLock(ReleaseLockRequest)                returns (google.protobuf.Empty);
+  rpc TestLock(TestLockRequest)                      returns (TestLockResponse);
+  rpc GetLock(GetLockRequest)                        returns (GetLockResponse);
+  rpc ListLocks(ListLocksRequest)                    returns (ListLocksResponse);
+  rpc CleanupExpiredLocks(google.protobuf.Empty)     returns (CleanupExpiredLocksResponse);
+
+  // ---- Volume ownership operations ----
+  rpc SetVolumeOwner(SetVolumeOwnerRequest)       returns (google.protobuf.Empty);
+  rpc GetVolumeOwner(GetVolumeOwnerRequest)       returns (GetVolumeOwnerResponse);
+  rpc RequestOwnership(RequestOwnershipRequest)   returns (RequestOwnershipResponse);
 }
 
-// MetadataRequest is the envelope sent by clients for every metadata
-// operation.
-message MetadataRequest {
-  // operation is the method name, e.g. "PutVolumeMeta",
-  // "GetObjectMeta", "ListDirectory", etc.
-  string operation = 1;
+// ============================================================================
+// Enums
+// ============================================================================
 
-  // payload is the JSON-encoded argument(s) for the operation.
-  bytes payload = 2;
+enum InodeType {
+  INODE_TYPE_UNSPECIFIED = 0;
+  INODE_TYPE_FILE        = 1;
+  INODE_TYPE_DIR         = 2;
+  INODE_TYPE_SYMLINK     = 3;
 }
 
-// MetadataResponse is the envelope returned by the server.
-message MetadataResponse {
-  // payload is the JSON-encoded result of the operation (may be empty
-  // for void operations that only return an error).
-  bytes payload = 1;
+enum LockType {
+  LOCK_TYPE_UNSPECIFIED = 0;
+  LOCK_TYPE_READ        = 1;
+  LOCK_TYPE_WRITE       = 2;
+}
 
-  // error is non-empty when the operation failed. Clients should check
-  // this field before attempting to unmarshal payload.
-  string error = 2;
+enum ProtectionMode {
+  PROTECTION_MODE_UNSPECIFIED    = 0;
+  PROTECTION_MODE_REPLICATION    = 1;
+  PROTECTION_MODE_ERASURE_CODING = 2;
+}
+
+enum ComplianceState {
+  COMPLIANCE_STATE_UNSPECIFIED    = 0;
+  COMPLIANCE_STATE_UNKNOWN        = 1;
+  COMPLIANCE_STATE_COMPLIANT      = 2;
+  COMPLIANCE_STATE_DEGRADED       = 3;
+  COMPLIANCE_STATE_NON_COMPLIANT  = 4;
+}
+
+// ============================================================================
+// Domain messages
+// ============================================================================
+
+message VolumeMeta {
+  string   volume_id       = 1;
+  string   pool            = 2;
+  uint64   size_bytes      = 3;
+  repeated string chunk_ids = 4;
+
+  DataProtectionConfig data_protection     = 5;
+  string               target_node_id      = 6;
+  string               target_address      = 7;
+  string               target_port         = 8;
+  string               subsystem_nqn       = 9;
+  ProtectionProfile    protection_profile  = 10;
+  ComplianceInfo       compliance_info     = 11;
+}
+
+message PlacementMap {
+  string          chunk_id = 1;
+  repeated string nodes    = 2;
+}
+
+message NodeMeta {
+  string node_id            = 1;
+  string address            = 2;
+  int32  disk_count         = 3;
+  int64  total_capacity     = 4;
+  int64  available_capacity = 5;
+  string zone               = 6;
+  string rack               = 7;
+  int64  last_heartbeat     = 8;
+  string status             = 9;
+}
+
+message InodeMeta {
+  uint64            ino        = 1;
+  InodeType         type       = 2;
+  int64             size       = 3;
+  uint32            mode       = 4;
+  uint32            uid        = 5;
+  uint32            gid        = 6;
+  uint32            link_count = 7;
+  repeated string   chunk_ids  = 8;
+  string            target     = 9;
+  map<string, string> xattrs   = 10;
+  int64             atime      = 11;
+  int64             mtime      = 12;
+  int64             ctime      = 13;
+}
+
+message DirEntry {
+  string    name = 1;
+  uint64    ino  = 2;
+  InodeType type = 3;
+}
+
+message ObjectMeta {
+  string              bucket       = 1;
+  string              key          = 2;
+  int64               size         = 3;
+  string              etag         = 4;
+  string              content_type = 5;
+  map<string, string> user_meta    = 6;
+  repeated string     chunk_ids    = 7;
+  string              version_id   = 8;
+  int64               mod_time     = 9;
+}
+
+message BucketMeta {
+  string name          = 1;
+  int64  creation_date = 2;
+  string versioning    = 3;
+  string owner         = 4;
+  int64  max_size      = 5;
+}
+
+message MultipartUpload {
+  string                upload_id     = 1;
+  string                bucket        = 2;
+  string                key           = 3;
+  repeated MultipartPart parts        = 4;
+  int64                 creation_date = 5;
+}
+
+message MultipartPart {
+  int32           part_number = 1;
+  int64           size        = 2;
+  string          etag        = 3;
+  repeated string chunk_ids   = 4;
+}
+
+message SnapshotMeta {
+  string          snapshot_id      = 1;
+  string          source_volume_id = 2;
+  uint64          size_bytes       = 3;
+  repeated string chunk_ids        = 4;
+  int64           creation_time    = 5;
+  bool            ready_to_use     = 6;
+}
+
+message ProtectionProfile {
+  ProtectionMode       mode           = 1;
+  ReplicationProfile   replication    = 2;
+  ErasureCodingProfile erasure_coding = 3;
+}
+
+message ReplicationProfile {
+  int32 factor       = 1;
+  int32 write_quorum = 2;
+}
+
+message ErasureCodingProfile {
+  int32 data_shards   = 1;
+  int32 parity_shards = 2;
+}
+
+message ComplianceInfo {
+  ComplianceState state              = 1;
+  int64           last_check_time    = 2;
+  int32           available_replicas = 3;
+  int32           required_replicas  = 4;
+  string          reason             = 5;
+}
+
+message DataProtectionConfig {
+  ProtectionMode       mode           = 1;
+  ReplicationProfile   replication    = 2;
+  ErasureCodingProfile erasure_coding = 3;
+}
+
+message LockLease {
+  string   lease_id   = 1;
+  string   owner      = 2;
+  string   volume_id  = 3;
+  uint64   ino        = 4;
+  int64    start      = 5;
+  int64    end        = 6;
+  LockType type       = 7;
+  int64    expires_at = 8;
+  string   filer_id   = 9;
+}
+
+message VolumeOwnership {
+  string volume_id   = 1;
+  string owner_addr  = 2;
+  int64  owner_since = 3;
+  uint64 generation  = 4;
+}
+
+// ============================================================================
+// Request / Response wrappers
+// ============================================================================
+
+// ---- Volume ----
+
+message PutVolumeMetaRequest {
+  VolumeMeta meta = 1;
+}
+
+message GetVolumeMetaRequest {
+  string volume_id = 1;
+}
+
+message GetVolumeMetaResponse {
+  VolumeMeta meta = 1;
+}
+
+message DeleteVolumeMetaRequest {
+  string volume_id = 1;
+}
+
+message ListVolumesMetaResponse {
+  repeated VolumeMeta metas = 1;
+}
+
+// ---- Placement ----
+
+message PutPlacementMapRequest {
+  PlacementMap placement_map = 1;
+}
+
+message GetPlacementMapRequest {
+  string chunk_id = 1;
+}
+
+message GetPlacementMapResponse {
+  PlacementMap placement_map = 1;
+}
+
+message DeletePlacementMapRequest {
+  string chunk_id = 1;
+}
+
+message ListPlacementMapsResponse {
+  repeated PlacementMap placement_maps = 1;
+}
+
+// ---- Object ----
+
+message PutObjectMetaRequest {
+  ObjectMeta meta = 1;
+}
+
+message GetObjectMetaRequest {
+  string bucket = 1;
+  string key    = 2;
+}
+
+message GetObjectMetaResponse {
+  ObjectMeta meta = 1;
+}
+
+message DeleteObjectMetaRequest {
+  string bucket = 1;
+  string key    = 2;
+}
+
+message ListObjectMetasRequest {
+  string bucket = 1;
+  string prefix = 2;
+}
+
+message ListObjectMetasResponse {
+  repeated ObjectMeta metas = 1;
+}
+
+// ---- Bucket ----
+
+message PutBucketMetaRequest {
+  BucketMeta meta = 1;
+}
+
+message GetBucketMetaRequest {
+  string name = 1;
+}
+
+message GetBucketMetaResponse {
+  BucketMeta meta = 1;
+}
+
+message DeleteBucketMetaRequest {
+  string name = 1;
+}
+
+message ListBucketMetasResponse {
+  repeated BucketMeta metas = 1;
+}
+
+// ---- Multipart ----
+
+message PutMultipartUploadRequest {
+  MultipartUpload upload = 1;
+}
+
+message GetMultipartUploadRequest {
+  string upload_id = 1;
+}
+
+message GetMultipartUploadResponse {
+  MultipartUpload upload = 1;
+}
+
+message DeleteMultipartUploadRequest {
+  string upload_id = 1;
+}
+
+// ---- Snapshot ----
+
+message PutSnapshotRequest {
+  SnapshotMeta meta = 1;
+}
+
+message GetSnapshotRequest {
+  string snapshot_id = 1;
+}
+
+message GetSnapshotResponse {
+  SnapshotMeta meta = 1;
+}
+
+message DeleteSnapshotRequest {
+  string snapshot_id = 1;
+}
+
+message ListSnapshotsResponse {
+  repeated SnapshotMeta metas = 1;
+}
+
+// ---- Inode ----
+
+message CreateInodeRequest {
+  InodeMeta meta = 1;
+}
+
+message GetInodeRequest {
+  uint64 ino = 1;
+}
+
+message GetInodeResponse {
+  InodeMeta meta = 1;
+}
+
+message UpdateInodeRequest {
+  InodeMeta meta = 1;
+}
+
+message DeleteInodeRequest {
+  uint64 ino = 1;
+}
+
+message AllocateInoResponse {
+  uint64 ino = 1;
+}
+
+// ---- Directory entry ----
+
+message CreateDirEntryRequest {
+  uint64   parent_ino = 1;
+  DirEntry entry      = 2;
+}
+
+message DeleteDirEntryRequest {
+  uint64 parent_ino = 1;
+  string name       = 2;
+}
+
+message LookupDirEntryRequest {
+  uint64 parent_ino = 1;
+  string name       = 2;
+}
+
+message LookupDirEntryResponse {
+  DirEntry entry = 1;
+}
+
+message ListDirectoryRequest {
+  uint64 parent_ino = 1;
+}
+
+message ListDirectoryResponse {
+  repeated DirEntry entries = 1;
+}
+
+// ---- Node ----
+
+message PutNodeMetaRequest {
+  NodeMeta meta = 1;
+}
+
+message GetNodeMetaRequest {
+  string node_id = 1;
+}
+
+message GetNodeMetaResponse {
+  NodeMeta meta = 1;
+}
+
+message DeleteNodeMetaRequest {
+  string node_id = 1;
+}
+
+message ListNodeMetasResponse {
+  repeated NodeMeta metas = 1;
+}
+
+// ---- Lock ----
+
+message AcquireLockRequest {
+  string                    owner     = 1;
+  string                    volume_id = 2;
+  uint64                    ino       = 3;
+  int64                     start     = 4;
+  int64                     end       = 5;
+  LockType                  type      = 6;
+  google.protobuf.Duration  ttl       = 7;
+  string                    filer_id  = 8;
+}
+
+message AcquireLockResponse {
+  string lease_id          = 1;
+  int64  expires_at        = 2;
+  string conflicting_owner = 3;
+}
+
+message RenewLockRequest {
+  string                   lease_id = 1;
+  google.protobuf.Duration ttl      = 2;
+}
+
+message RenewLockResponse {
+  LockLease lease = 1;
+}
+
+message ReleaseLockRequest {
+  string lease_id = 1;
+  string owner    = 2;
+}
+
+message TestLockRequest {
+  string   volume_id = 1;
+  uint64   ino       = 2;
+  int64    start     = 3;
+  int64    end       = 4;
+  LockType type      = 5;
+}
+
+message TestLockResponse {
+  LockLease conflicting_lock = 1;
+}
+
+message GetLockRequest {
+  string lease_id = 1;
+}
+
+message GetLockResponse {
+  LockLease lease = 1;
+}
+
+message ListLocksRequest {
+  string volume_id = 1;
+}
+
+message ListLocksResponse {
+  repeated LockLease locks = 1;
+}
+
+message CleanupExpiredLocksResponse {
+  int32 cleaned = 1;
+}
+
+// ---- Volume ownership ----
+
+message SetVolumeOwnerRequest {
+  VolumeOwnership ownership = 1;
+}
+
+message GetVolumeOwnerRequest {
+  string volume_id = 1;
+}
+
+message GetVolumeOwnerResponse {
+  VolumeOwnership ownership = 1;
+}
+
+message RequestOwnershipRequest {
+  string volume_id      = 1;
+  string requester_addr = 2;
+}
+
+message RequestOwnershipResponse {
+  bool   granted    = 1;
+  uint64 generation = 2;
+}
+
+// ---- FSM internal serialization messages ----
+// These messages are NOT used in RPCs. They define the binary format for
+// Raft log entries and FSM snapshots, replacing the former JSON encoding.
+
+// FsmOp is the Raft log entry format applied by the FSM.
+message FsmOp {
+  string op = 1;
+  string bucket = 2;
+  string key = 3;
+  bytes value = 4;
+}
+
+// FsmSnapshot is the in-memory FSM snapshot format.
+message FsmSnapshot {
+  map<string, FsmBucket> buckets = 1;
+}
+
+// FsmBucket holds all key-value entries within a single logical bucket.
+message FsmBucket {
+  map<string, bytes> entries = 1;
+}
+
+// BadgerSnapshotEntry is a single key-value pair in the BadgerFSM snapshot stream.
+message BadgerSnapshotEntry {
+  bytes key = 1;
+  bytes value = 2;
 }
