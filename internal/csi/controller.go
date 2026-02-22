@@ -616,7 +616,10 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// Failure is logged but does NOT fail CreateVolume — the volume
 	// is usable with data on the primary. The policy engine's periodic scan
 	// will repair any missing shards/replicas.
-	if protParams.IsErasureCoding() && cs.ecDistributor != nil {
+	if protParams.IsErasureCoding() && cs.ecDistributor == nil {
+		logging.L.Warn("erasure coding requested but EC distributor is not configured; skipping EC distribution",
+			zap.String("volumeID", volumeID))
+	} else if protParams.IsErasureCoding() && cs.ecDistributor != nil {
 		ec, ecErr := chunk.NewErasureCoder(protCfg.dataShards, protCfg.parityShards)
 		if ecErr != nil {
 			logging.L.Error("failed to create erasure coder (volume usable but not EC-encoded)",
@@ -1030,7 +1033,11 @@ func (cs *ControllerServer) ControllerGetCapabilities(_ context.Context, _ *csi.
 // ReadChunkEC reconstructs a chunk from its erasure-coded shards.
 // It reads the PlacementMap for the chunk, retrieves the volume's EC config,
 // and uses ECReader to reconstruct from available shards.
-// This is intended for use by file (NFS/FUSE) and object (S3) gateways.
+//
+// NOTE: This is not a CSI RPC method. It is a controller-local helper that happens
+// to live on ControllerServer and is intended to be invoked by co-located file
+// (NFS/FUSE) and object (S3) gateway components running in the same process.
+// It performs data-plane reads but does not alter CSI controller semantics.
 func (cs *ControllerServer) ReadChunkEC(ctx context.Context, chunkID string) ([]byte, error) {
 	if cs.ecReader == nil {
 		return nil, fmt.Errorf("EC reader not configured")
@@ -1054,12 +1061,12 @@ func (cs *ControllerServer) ReadChunkEC(ctx context.Context, chunkID string) ([]
 		return nil, fmt.Errorf("getting volume metadata for %s: %w", sps[0].VolumeID, err)
 	}
 
-	if vm.ProtectionProfile == nil || vm.ProtectionProfile.Mode != metadata.ProtectionModeErasureCoding ||
-		vm.ProtectionProfile.ErasureCoding == nil {
+	if vm.DataProtection == nil || vm.DataProtection.Mode != metadata.ProtectionModeErasureCoding ||
+		vm.DataProtection.ErasureCoding == nil {
 		return nil, fmt.Errorf("volume %s is not erasure-coded", vm.VolumeID)
 	}
 
-	ecCfg := vm.ProtectionProfile.ErasureCoding
+	ecCfg := vm.DataProtection.ErasureCoding
 	ec, err := chunk.NewErasureCoder(ecCfg.DataShards, ecCfg.ParityShards)
 	if err != nil {
 		return nil, fmt.Errorf("creating erasure coder: %w", err)

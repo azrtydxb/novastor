@@ -14,7 +14,12 @@ const shardSeparator = ":shard:"
 
 // ShardID returns the chunk ID for a specific shard of an erasure-coded chunk.
 // Format: "{chunkID}:shard:{index}"
+// Panics if chunkID contains the ":shard:" separator (which would make
+// ParseShardID ambiguous).
 func ShardID(chunkID string, shardIndex int) ChunkID {
+	if strings.Contains(chunkID, shardSeparator) {
+		panic(fmt.Sprintf("chunk ID %q contains shard separator %q", chunkID, shardSeparator))
+	}
 	return ChunkID(fmt.Sprintf("%s%s%d", chunkID, shardSeparator, shardIndex))
 }
 
