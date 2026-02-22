@@ -5,7 +5,7 @@ use crate::config::{ReadPolicy, ReplicaBdevConfig, ReplicaTarget};
 use crate::error::{DataPlaneError, Result};
 use log::{debug, info, warn};
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,11 +68,24 @@ impl Replica {
         self.state.store(ReplicaState::Healthy as u8, Ordering::Release);
         info!("replica {} marked healthy", self.target.address);
     }
+
+    /// Returns a snapshot of this replica's status information.
+    pub fn status_info(&self) -> ReplicaStatusInfo {
+        ReplicaStatusInfo {
+            address: self.target.address.clone(),
+            port: self.target.port,
+            state: ReplicaState::from(self.state.load(Ordering::Acquire)),
+            reads_completed: self.stats.reads_completed.load(Ordering::Relaxed),
+            writes_completed: self.stats.writes_completed.load(Ordering::Relaxed),
+            read_errors: self.stats.read_errors.load(Ordering::Relaxed),
+            write_errors: self.stats.write_errors.load(Ordering::Relaxed),
+        }
+    }
 }
 
 pub struct ReplicaBdev {
     pub volume_id: String,
-    pub replicas: Vec<Arc<Replica>>,
+    pub replicas: RwLock<Vec<Arc<Replica>>>,
     pub write_quorum: u32,
     pub read_policy: ReadPolicy,
     read_index: AtomicU32,
@@ -94,7 +107,7 @@ impl ReplicaBdev {
 
         Self {
             volume_id: config.volume_id,
-            replicas,
+            replicas: RwLock::new(replicas),
             write_quorum: config.write_quorum,
             read_policy: config.read_policy,
             read_index: AtomicU32::new(0),
@@ -103,7 +116,8 @@ impl ReplicaBdev {
     }
 
     pub fn healthy_replicas(&self) -> Vec<Arc<Replica>> {
-        self.replicas.iter().filter(|r| r.is_healthy()).cloned().collect()
+        let replicas = self.replicas.read().unwrap();
+        replicas.iter().filter(|r| r.is_healthy()).cloned().collect()
     }
 
     pub fn select_read_replica(&self) -> Result<Arc<Replica>> {
@@ -154,18 +168,58 @@ impl ReplicaBdev {
     }
 
     pub fn replica_status(&self) -> Vec<ReplicaStatusInfo> {
-        self.replicas
-            .iter()
-            .map(|r| ReplicaStatusInfo {
-                address: r.target.address.clone(),
-                port: r.target.port,
-                state: ReplicaState::from(r.state.load(Ordering::Acquire)),
-                reads_completed: r.stats.reads_completed.load(Ordering::Relaxed),
-                writes_completed: r.stats.writes_completed.load(Ordering::Relaxed),
-                read_errors: r.stats.read_errors.load(Ordering::Relaxed),
-                write_errors: r.stats.write_errors.load(Ordering::Relaxed),
-            })
-            .collect()
+        let replicas = self.replicas.read().unwrap();
+        replicas.iter().map(|r| r.status_info()).collect()
+    }
+
+    /// Add a new replica to this bdev at runtime.
+    pub fn add_replica(&self, target: ReplicaTarget) -> Result<()> {
+        let mut replicas = self.replicas.write().unwrap();
+        // Check for duplicate address
+        if replicas.iter().any(|r| r.target.address == target.address && r.target.port == target.port) {
+            return Err(DataPlaneError::ReplicaError(format!(
+                "replica {}:{} already exists",
+                target.address, target.port,
+            )));
+        }
+        let idx = replicas.len();
+        let bdev_name = format!("nvme_{}_{}_n1", self.volume_id, idx);
+        info!("adding replica {}:{} as {}", target.address, target.port, bdev_name);
+        replicas.push(Arc::new(Replica::new(target, bdev_name)));
+        Ok(())
+    }
+
+    /// Remove a replica by address. Fails if it would remove the last replica.
+    pub fn remove_replica(&self, addr: &str) -> Result<()> {
+        let mut replicas = self.replicas.write().unwrap();
+        if replicas.len() <= 1 {
+            return Err(DataPlaneError::ReplicaError(
+                "cannot remove last replica".to_string(),
+            ));
+        }
+        let before = replicas.len();
+        replicas.retain(|r| r.target.address != addr);
+        if replicas.len() == before {
+            return Err(DataPlaneError::ReplicaError(format!(
+                "replica with address {} not found",
+                addr,
+            )));
+        }
+        info!("removed replica at {}", addr);
+        Ok(())
+    }
+
+    /// Returns full status information for this replica bdev.
+    pub fn full_status(&self) -> ReplicaBdevStatus {
+        let replicas = self.replicas.read().unwrap();
+        let replica_infos: Vec<ReplicaStatusInfo> = replicas.iter().map(|r| r.status_info()).collect();
+        let healthy_count = replicas.iter().filter(|r| r.is_healthy()).count() as u32;
+        ReplicaBdevStatus {
+            volume_id: self.volume_id.clone(),
+            replicas: replica_infos,
+            write_quorum: self.write_quorum,
+            healthy_count,
+        }
     }
 }
 
@@ -178,4 +232,136 @@ pub struct ReplicaStatusInfo {
     pub writes_completed: u32,
     pub read_errors: u32,
     pub write_errors: u32,
+}
+
+/// Full status report for a ReplicaBdev.
+#[derive(Debug, Clone)]
+pub struct ReplicaBdevStatus {
+    pub volume_id: String,
+    pub replicas: Vec<ReplicaStatusInfo>,
+    pub write_quorum: u32,
+    pub healthy_count: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_targets() -> Vec<ReplicaTarget> {
+        vec![
+            ReplicaTarget {
+                address: "10.0.0.1".into(),
+                port: 4420,
+                nqn: "nqn-1".into(),
+            },
+            ReplicaTarget {
+                address: "10.0.0.2".into(),
+                port: 4420,
+                nqn: "nqn-2".into(),
+            },
+        ]
+    }
+
+    fn make_bdev(targets: Vec<ReplicaTarget>) -> ReplicaBdev {
+        let config = ReplicaBdevConfig {
+            volume_id: "test-vol".into(),
+            replicas: targets,
+            write_quorum: 1,
+            read_policy: ReadPolicy::RoundRobin,
+        };
+        ReplicaBdev::new(config)
+    }
+
+    #[test]
+    fn test_add_replica() {
+        let bdev = make_bdev(test_targets());
+        assert_eq!(bdev.replicas.read().unwrap().len(), 2);
+
+        let new_target = ReplicaTarget {
+            address: "10.0.0.3".into(),
+            port: 4420,
+            nqn: "nqn-3".into(),
+        };
+        bdev.add_replica(new_target).unwrap();
+        assert_eq!(bdev.replicas.read().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_add_duplicate_replica_fails() {
+        let bdev = make_bdev(test_targets());
+        let dup_target = ReplicaTarget {
+            address: "10.0.0.1".into(),
+            port: 4420,
+            nqn: "nqn-dup".into(),
+        };
+        let result = bdev.add_replica(dup_target);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_remove_replica() {
+        let bdev = make_bdev(test_targets());
+        assert_eq!(bdev.replicas.read().unwrap().len(), 2);
+
+        bdev.remove_replica("10.0.0.1").unwrap();
+        assert_eq!(bdev.replicas.read().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_remove_last_replica_fails() {
+        let single_target = vec![ReplicaTarget {
+            address: "10.0.0.1".into(),
+            port: 4420,
+            nqn: "nqn-1".into(),
+        }];
+        let bdev = make_bdev(single_target);
+        let result = bdev.remove_replica("10.0.0.1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_remove_nonexistent_replica_fails() {
+        let bdev = make_bdev(test_targets());
+        let result = bdev.remove_replica("10.0.0.99");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_full_status() {
+        let bdev = make_bdev(test_targets());
+        let status = bdev.full_status();
+        assert_eq!(status.volume_id, "test-vol");
+        assert_eq!(status.replicas.len(), 2);
+        assert_eq!(status.write_quorum, 1);
+        assert_eq!(status.healthy_count, 2);
+
+        // Mark one replica degraded and verify count changes
+        {
+            let replicas = bdev.replicas.read().unwrap();
+            replicas[0].mark_degraded();
+        }
+        let status = bdev.full_status();
+        assert_eq!(status.healthy_count, 1);
+        assert_eq!(status.replicas[0].state, ReplicaState::Degraded);
+        assert_eq!(status.replicas[1].state, ReplicaState::Healthy);
+    }
+
+    #[test]
+    fn test_replica_status_info() {
+        let target = ReplicaTarget {
+            address: "10.0.0.1".into(),
+            port: 4420,
+            nqn: "nqn-1".into(),
+        };
+        let replica = Replica::new(target, "test-bdev".into());
+        replica.stats.reads_completed.store(5, Ordering::Relaxed);
+        replica.stats.writes_completed.store(3, Ordering::Relaxed);
+
+        let info = replica.status_info();
+        assert_eq!(info.address, "10.0.0.1");
+        assert_eq!(info.port, 4420);
+        assert_eq!(info.state, ReplicaState::Healthy);
+        assert_eq!(info.reads_completed, 5);
+        assert_eq!(info.writes_completed, 3);
+    }
 }

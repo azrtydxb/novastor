@@ -67,6 +67,7 @@ spec:
             - --node-id=$(NODE_NAME)
             - --host-ip=$(HOST_IP)
             - --pod-ip=$(POD_IP)
+            - --heartbeat-interval={{ .Values.agent.heartbeatInterval }}
             {{- if .Values.dataplane.enabled }}
             - --data-plane=spdk
             - --spdk-socket=/var/tmp/novastor-spdk.sock

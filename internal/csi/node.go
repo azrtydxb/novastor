@@ -4,6 +4,7 @@ package csi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -153,45 +154,99 @@ func (ns *NodeService) NodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	targetPort := volCtx["targetPort"]
 	subsystemNQN := volCtx["subsystemNQN"]
 
-	if ns.initiator != nil && targetAddr != "" && subsystemNQN != "" {
-		if targetPort == "" {
-			targetPort = "4420" // Default NVMe-oF port
+	targetAddressesJSON := volCtx["targetAddresses"]
+	var devicePath string
+
+	if targetAddressesJSON != "" && ns.initiator != nil {
+		// Multi-path attachment: connect to all replica targets.
+		var targets []TargetInfo
+		if err := json.Unmarshal([]byte(targetAddressesJSON), &targets); err != nil {
+			return nil, status.Errorf(codes.Internal, "parse target addresses: %v", err)
 		}
-		devicePath, err := ns.initiator.Connect(ctx, targetAddr, targetPort, subsystemNQN)
+
+		if spdkInit, ok := ns.initiator.(*SPDKInitiator); ok {
+			var err error
+			devicePath, err = spdkInit.ConnectMultipath(ctx, targets)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "connect NVMe-oF multipath: %v", err)
+			}
+		} else {
+			// Fallback: connect to owner target only
+			owner := targets[0]
+			for _, t := range targets {
+				if t.IsOwner {
+					owner = t
+					break
+				}
+			}
+			var err error
+			devicePath, err = ns.initiator.Connect(ctx, owner.Addr, owner.Port, owner.NQN)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "connect NVMe-oF target: %v", err)
+			}
+		}
+
+		logging.L.Info("NodeStageVolume: connected NVMe-oF multipath",
+			zap.String("devicePath", devicePath),
+			zap.String("volumeID", req.GetVolumeId()),
+			zap.Int("pathCount", len(targets)))
+
+		// Write multipath marker with full targets JSON for disconnect on unstage.
+		mpMarkerPath := filepath.Join(stagingPath, "nvme-multipath")
+		if err := os.WriteFile(mpMarkerPath, []byte(targetAddressesJSON), 0600); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to write multipath marker: %v", err)
+		}
+	} else if ns.initiator != nil && targetAddr != "" && subsystemNQN != "" {
+		// Single-target attachment (backward compat).
+		if targetPort == "" {
+			targetPort = "4420"
+		}
+		var err error
+		devicePath, err = ns.initiator.Connect(ctx, targetAddr, targetPort, subsystemNQN)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to connect NVMe-oF target: %v", err)
 		}
-		logging.L.Info("NodeStageVolume: connected NVMe-oF device", zap.String("devicePath", devicePath), zap.String("volumeID", req.GetVolumeId()))
+		logging.L.Info("NodeStageVolume: connected NVMe-oF device",
+			zap.String("devicePath", devicePath),
+			zap.String("volumeID", req.GetVolumeId()))
+	}
 
+	if devicePath != "" {
 		// Format the device with ext4 if it has no filesystem yet.
 		formatted, fmtErr := ns.formatter.IsFormatted(ctx, devicePath)
 		if fmtErr != nil {
-			_ = ns.initiator.Disconnect(ctx, subsystemNQN)
 			return nil, status.Errorf(codes.Internal, "checking filesystem on %s: %v", devicePath, fmtErr)
 		}
 		if !formatted {
-			logging.L.Info("NodeStageVolume: formatting device", zap.String("devicePath", devicePath), zap.String("volumeID", req.GetVolumeId()))
+			logging.L.Info("NodeStageVolume: formatting device",
+				zap.String("devicePath", devicePath),
+				zap.String("volumeID", req.GetVolumeId()))
 			if fmtErr := ns.formatter.Format(ctx, devicePath, "ext4"); fmtErr != nil {
-				_ = ns.initiator.Disconnect(ctx, subsystemNQN)
 				return nil, status.Errorf(codes.Internal, "formatting %s as ext4: %v", devicePath, fmtErr)
 			}
 		}
 
 		// Mount the formatted device to the staging path.
 		if mountErr := ns.formatter.Mount(ctx, devicePath, stagingPath, "ext4"); mountErr != nil {
-			_ = ns.initiator.Disconnect(ctx, subsystemNQN)
 			return nil, status.Errorf(codes.Internal, "mounting %s to %s: %v", devicePath, stagingPath, mountErr)
 		}
-		logging.L.Info("NodeStageVolume: mounted device", zap.String("devicePath", devicePath), zap.String("stagingPath", stagingPath), zap.String("volumeID", req.GetVolumeId()))
+		logging.L.Info("NodeStageVolume: mounted device",
+			zap.String("devicePath", devicePath),
+			zap.String("stagingPath", stagingPath),
+			zap.String("volumeID", req.GetVolumeId()))
 
 		// Write device path marker so NodeUnstageVolume knows what to disconnect.
-		markerPath := filepath.Join(stagingPath, "nvme-device")
-		if err := os.WriteFile(markerPath, []byte(subsystemNQN), 0600); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to write device marker: %v", err)
+		// For single path, store the NQN. For multipath, the nvme-multipath marker is already written.
+		if targetAddressesJSON == "" {
+			markerPath := filepath.Join(stagingPath, "nvme-device")
+			if err := os.WriteFile(markerPath, []byte(subsystemNQN), 0600); err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to write device marker: %v", err)
+			}
 		}
 	} else {
-		logging.L.Info("NodeStageVolume: staging volume (no NVMe-oF initiator)", zap.String("volumeID", req.GetVolumeId()), zap.String("stagingPath", stagingPath))
-		// Write a simple marker to indicate the volume is staged.
+		logging.L.Info("NodeStageVolume: staging volume (no NVMe-oF initiator)",
+			zap.String("volumeID", req.GetVolumeId()),
+			zap.String("stagingPath", stagingPath))
 		markerPath := filepath.Join(stagingPath, "staged")
 		if err := os.WriteFile(markerPath, []byte(req.GetVolumeId()), 0600); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to write staging marker: %v", err)
@@ -212,9 +267,36 @@ func (ns *NodeService) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 
 	stagingPath := req.GetStagingTargetPath()
 
-	// Check for NVMe-oF marker and disconnect if present.
+	// Check for multipath marker first.
+	mpMarkerPath := filepath.Join(stagingPath, "nvme-multipath")
 	markerPath := filepath.Join(stagingPath, "nvme-device")
-	if nqnBytes, err := os.ReadFile(markerPath); err == nil && ns.initiator != nil {
+	if mpData, err := os.ReadFile(mpMarkerPath); err == nil && ns.initiator != nil {
+		// Unmount first.
+		if umountErr := ns.formatter.Unmount(ctx, stagingPath); umountErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to unmount staging path %s: %v", stagingPath, umountErr)
+		}
+
+		var targets []TargetInfo
+		if err := json.Unmarshal(mpData, &targets); err == nil {
+			if spdkInit, ok := ns.initiator.(*SPDKInitiator); ok {
+				if disconnErr := spdkInit.DisconnectMultipath(ctx, targets); disconnErr != nil {
+					logging.L.Warn("failed to disconnect multipath targets",
+						zap.String("volumeID", req.GetVolumeId()),
+						zap.Error(disconnErr))
+				}
+			} else {
+				// Fallback: disconnect the owner target only
+				for _, t := range targets {
+					if t.IsOwner {
+						_ = ns.initiator.Disconnect(ctx, t.NQN)
+						break
+					}
+				}
+			}
+		}
+		logging.L.Info("NodeUnstageVolume: disconnected NVMe-oF multipath",
+			zap.String("volumeID", req.GetVolumeId()))
+	} else if nqnBytes, readErr := os.ReadFile(markerPath); readErr == nil && ns.initiator != nil {
 		nqn := string(nqnBytes)
 
 		// Unmount the staging path before disconnecting the NVMe device.

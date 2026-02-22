@@ -1,10 +1,12 @@
-use std::sync::OnceLock;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
+use crate::bdev::replica::ReplicaBdev;
 use crate::config::{
     BlobstoreConfig, LocalBdevConfig, LvolConfig, NvmfInitiatorConfig, NvmfTargetConfig,
+    ReadPolicy, ReplicaBdevConfig, ReplicaTarget,
 };
 use crate::error::DataPlaneError;
 use crate::spdk::bdev_manager::BdevManager;
@@ -16,6 +18,13 @@ static BDEV_MANAGER: OnceLock<BdevManager> = OnceLock::new();
 
 /// Global NVMe-oF manager, initialised once during startup.
 static NVMF_MANAGER: OnceLock<NvmfManager> = OnceLock::new();
+
+/// Global registry of replica bdevs, keyed by volume ID.
+static REPLICA_BDEVS: OnceLock<Mutex<HashMap<String, Arc<ReplicaBdev>>>> = OnceLock::new();
+
+fn replica_bdevs() -> &'static Mutex<HashMap<String, Arc<ReplicaBdev>>> {
+    REPLICA_BDEVS.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Initialise the global managers. Must be called before serving requests.
 pub fn init_managers(bdev: BdevManager, nvmf: NvmfManager) {
@@ -35,8 +44,12 @@ pub fn register_all(router: &mut Router) {
     router.register("nvmf_connect_initiator", wrap(nvmf_connect_initiator));
     router.register("nvmf_disconnect_initiator", wrap(nvmf_disconnect_initiator));
     router.register("nvmf_export_local", wrap(nvmf_export_local));
+    router.register("nvmf_set_ana_state", wrap(nvmf_set_ana_state));
+    router.register("nvmf_get_ana_state", wrap(nvmf_get_ana_state));
     router.register("replica_bdev_create", wrap(replica_bdev_create));
-    router.register("replica_bdev_status", wrap(replica_bdev_status));
+    router.register("replica_bdev_status", wrap(handle_replica_status));
+    router.register("replica_bdev_add_replica", wrap(handle_replica_add));
+    router.register("replica_bdev_remove_replica", wrap(handle_replica_remove));
     router.register("get_version", wrap(get_version));
 }
 
@@ -111,7 +124,11 @@ fn bdev_delete(p: BdevDeleteParams) -> Result<serde_json::Value, DataPlaneError>
 fn nvmf_create_target(p: NvmfTargetConfig) -> Result<serde_json::Value, DataPlaneError> {
     let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit("nvmf manager not initialised".into()))?;
     let info = mgr.create_target(&p)?;
-    Ok(serde_json::json!({"nqn": info.nqn}))
+    Ok(serde_json::json!({
+        "nqn": info.nqn,
+        "ana_group_id": info.ana_group_id,
+        "ana_state": info.ana_state,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -154,6 +171,33 @@ fn nvmf_export_local(p: NvmfExportLocalParams) -> Result<serde_json::Value, Data
     Ok(serde_json::json!({"nqn": info.nqn}))
 }
 
+#[derive(Deserialize)]
+struct SetAnaStateParams {
+    nqn: String,
+    ana_group_id: u32,
+    ana_state: String,
+}
+
+fn nvmf_set_ana_state(p: SetAnaStateParams) -> Result<serde_json::Value, DataPlaneError> {
+    let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit("nvmf manager not initialised".into()))?;
+    mgr.set_ana_state(&p.nqn, p.ana_group_id, &p.ana_state)?;
+    Ok(serde_json::json!({}))
+}
+
+#[derive(Deserialize)]
+struct GetAnaStateParams {
+    nqn: String,
+}
+
+fn nvmf_get_ana_state(p: GetAnaStateParams) -> Result<serde_json::Value, DataPlaneError> {
+    let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit("nvmf manager not initialised".into()))?;
+    let (ana_group_id, ana_state) = mgr.get_ana_state(&p.nqn)?;
+    Ok(serde_json::json!({
+        "ana_group_id": ana_group_id,
+        "ana_state": ana_state,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Replica bdev methods
 // ---------------------------------------------------------------------------
@@ -174,15 +218,137 @@ struct ReplicaTargetParam {
 }
 
 fn replica_bdev_create(p: ReplicaBdevCreateParams) -> Result<serde_json::Value, DataPlaneError> {
-    let _ = &p;
+    let read_policy = match p.read_policy.as_deref() {
+        Some("local_first") => {
+            let local_addr = p.targets.iter()
+                .find(|t| t.is_local)
+                .map(|t| t.addr.clone())
+                .unwrap_or_default();
+            ReadPolicy::LocalFirst { local_address: local_addr }
+        }
+        _ => ReadPolicy::RoundRobin,
+    };
+
+    let replicas: Vec<ReplicaTarget> = p.targets.iter().map(|t| ReplicaTarget {
+        address: t.addr.clone(),
+        port: t.port,
+        nqn: t.nqn.clone(),
+    }).collect();
+
+    let replica_count = replicas.len();
+    let write_quorum = (replica_count as u32 / 2) + 1;
+
+    let config = ReplicaBdevConfig {
+        volume_id: p.name.clone(),
+        replicas,
+        write_quorum,
+        read_policy,
+    };
+
+    let bdev = Arc::new(ReplicaBdev::new(config));
+    let bdev_name = bdev.bdev_name.clone();
+
+    // Store in the global registry
+    let mut registry = replica_bdevs().lock().unwrap();
+    registry.insert(p.name.clone(), bdev);
+
     Ok(serde_json::json!({
-        "name": p.name,
-        "replica_count": p.targets.len(),
+        "name": bdev_name,
+        "replica_count": replica_count,
     }))
 }
 
-fn replica_bdev_status(_p: serde_json::Value) -> Result<serde_json::Value, DataPlaneError> {
-    Ok(serde_json::json!({"status": "healthy"}))
+// ---------------------------------------------------------------------------
+// Replica add / remove / status handlers
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ReplicaAddParams {
+    volume_id: String,
+    target: ReplicaTargetAddParam,
+}
+
+#[derive(Deserialize)]
+struct ReplicaTargetAddParam {
+    addr: String,
+    port: u16,
+    nqn: String,
+}
+
+fn handle_replica_add(p: ReplicaAddParams) -> Result<serde_json::Value, DataPlaneError> {
+    let registry = replica_bdevs().lock().unwrap();
+    let bdev = registry.get(&p.volume_id).ok_or_else(|| {
+        DataPlaneError::ReplicaError(format!("replica bdev {} not found", p.volume_id))
+    })?.clone();
+    drop(registry);
+
+    let target = ReplicaTarget {
+        address: p.target.addr,
+        port: p.target.port,
+        nqn: p.target.nqn,
+    };
+    bdev.add_replica(target)?;
+
+    let count = bdev.replicas.read().unwrap().len();
+    Ok(serde_json::json!({
+        "volume_id": p.volume_id,
+        "replica_count": count,
+    }))
+}
+
+#[derive(Deserialize)]
+struct ReplicaRemoveParams {
+    volume_id: String,
+    address: String,
+}
+
+fn handle_replica_remove(p: ReplicaRemoveParams) -> Result<serde_json::Value, DataPlaneError> {
+    let registry = replica_bdevs().lock().unwrap();
+    let bdev = registry.get(&p.volume_id).ok_or_else(|| {
+        DataPlaneError::ReplicaError(format!("replica bdev {} not found", p.volume_id))
+    })?.clone();
+    drop(registry);
+
+    bdev.remove_replica(&p.address)?;
+
+    let count = bdev.replicas.read().unwrap().len();
+    Ok(serde_json::json!({
+        "volume_id": p.volume_id,
+        "replica_count": count,
+    }))
+}
+
+#[derive(Deserialize)]
+struct ReplicaStatusParams {
+    volume_id: String,
+}
+
+fn handle_replica_status(p: ReplicaStatusParams) -> Result<serde_json::Value, DataPlaneError> {
+    let registry = replica_bdevs().lock().unwrap();
+    let bdev = registry.get(&p.volume_id).ok_or_else(|| {
+        DataPlaneError::ReplicaError(format!("replica bdev {} not found", p.volume_id))
+    })?.clone();
+    drop(registry);
+
+    let status = bdev.full_status();
+    let replica_infos: Vec<serde_json::Value> = status.replicas.iter().map(|r| {
+        serde_json::json!({
+            "address": r.address,
+            "port": r.port,
+            "state": format!("{:?}", r.state),
+            "reads_completed": r.reads_completed,
+            "writes_completed": r.writes_completed,
+            "read_errors": r.read_errors,
+            "write_errors": r.write_errors,
+        })
+    }).collect();
+
+    Ok(serde_json::json!({
+        "volume_id": status.volume_id,
+        "replicas": replica_infos,
+        "write_quorum": status.write_quorum,
+        "healthy_count": status.healthy_count,
+    }))
 }
 
 // ---------------------------------------------------------------------------

@@ -48,7 +48,13 @@ pub struct NvmfTargetConfig {
     pub bdev_name: String,
     pub listen_address: String,
     pub listen_port: u16,
+    #[serde(default)]
+    pub ana_group_id: u32,
+    #[serde(default = "default_ana_state")]
+    pub ana_state: String,
 }
+
+fn default_ana_state() -> String { "optimized".to_string() }
 
 impl NvmfTargetConfig {
     pub fn nqn(&self) -> String {

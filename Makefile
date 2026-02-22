@@ -38,7 +38,8 @@ generate-proto: protoc-gen-go protoc-gen-go-grpc ## Generate Go code from protob
 		--go-grpc_out=. --go-grpc_opt=paths=import \
 		--proto_path=. \
 		api/proto/chunk/chunk.proto \
-		api/proto/metadata/metadata.proto
+		api/proto/metadata/metadata.proto \
+		api/proto/nvme/nvme.proto
 
 .PHONY: generate-crds
 generate-crds: manifests ## Generate CRD manifests from kubebuilder markers (runs controller-gen; copy output from config/crd to deploy/helm/novastor/crds/ manually).

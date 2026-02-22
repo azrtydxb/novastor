@@ -16,6 +16,11 @@ service NVMeTargetService {
   // DeleteTarget removes the NVMe-oF/TCP target, detaches the loop device,
   // and deletes the sparse backing file.
   rpc DeleteTarget(DeleteTargetRequest) returns (DeleteTargetResponse);
+
+  // SetANAState changes the ANA (Asymmetric Namespace Access) state for a
+  // volume's NVMe-oF target. Used during active-passive failover to transition
+  // a target between optimized (active) and inaccessible (passive) states.
+  rpc SetANAState(SetANAStateRequest) returns (SetANAStateResponse);
 }
 
 message CreateTargetRequest {
@@ -25,6 +30,15 @@ message CreateTargetRequest {
 
   // size_bytes is the requested size for the backing sparse file.
   int64 size_bytes = 2;
+
+  // ana_state is the initial ANA state for the target. Valid values are
+  // "optimized" (active path) and "inaccessible" (passive path).
+  // If empty, defaults to "optimized".
+  string ana_state = 3;
+
+  // ana_group_id is the ANA group identifier for this target. All targets
+  // sharing the same group ID transition state together during failover.
+  uint32 ana_group_id = 4;
 }
 
 message CreateTargetResponse {
@@ -45,3 +59,17 @@ message DeleteTargetRequest {
 }
 
 message DeleteTargetResponse {}
+
+message SetANAStateRequest {
+  // volume_id identifies the NVMe-oF target whose ANA state should change.
+  string volume_id = 1;
+
+  // ana_state is the desired ANA state. Valid values are "optimized"
+  // (active, accepting I/O) and "inaccessible" (passive, rejecting I/O).
+  string ana_state = 2;
+
+  // ana_group_id is the ANA group to apply the state change to.
+  uint32 ana_group_id = 3;
+}
+
+message SetANAStateResponse {}
