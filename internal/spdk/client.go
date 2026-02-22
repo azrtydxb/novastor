@@ -167,11 +167,11 @@ func (c *Client) CreateLvolStore(bdevName, lvsName string) (string, error) {
 }
 
 // CreateLvol creates a logical volume inside a store.
-func (c *Client) CreateLvol(lvsName, lvolName string, sizeMB uint64) (string, error) {
+func (c *Client) CreateLvol(lvsName, volumeID string, sizeBytes uint64) (string, error) {
 	params := map[string]interface{}{
-		"lvs_name":  lvsName,
-		"lvol_name": lvolName,
-		"size_mb":   sizeMB,
+		"lvol_store": lvsName,
+		"volume_id":  volumeID,
+		"size_bytes": sizeBytes,
 	}
 	var result struct {
 		Name string `json:"name"`

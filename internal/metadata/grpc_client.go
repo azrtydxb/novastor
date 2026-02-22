@@ -142,26 +142,38 @@ func (c *GRPCClient) DeletePlacementMap(ctx context.Context, chunkID string) err
 	return err
 }
 
-// ---- Shard placement operations ----
+// ---- Shard placement operations (erasure coding) ----
 
 // PutShardPlacement stores a shard placement entry via the remote metadata service.
-// TODO(#134): Wire to gRPC MetadataService when ShardPlacement RPCs are added to
-// the protobuf definition. Until then, EC shard distribution is only supported
-// when the CSI controller talks to the RaftStore directly (single-process mode).
-func (c *GRPCClient) PutShardPlacement(_ context.Context, _ *ShardPlacement) error {
-	return fmt.Errorf("shard placement gRPC not yet wired: EC requires direct RaftStore access")
+func (c *GRPCClient) PutShardPlacement(ctx context.Context, sp *ShardPlacement) error {
+	_, err := c.client.PutShardPlacement(ctx, &pb.PutShardPlacementRequest{
+		Placement: ShardPlacementToProto(sp),
+	})
+	return err
 }
 
 // GetShardPlacements retrieves all shard placements for a chunk.
-// TODO(#134): Wire to gRPC MetadataService when ShardPlacement RPCs are added.
-func (c *GRPCClient) GetShardPlacements(_ context.Context, _ string) ([]*ShardPlacement, error) {
-	return nil, fmt.Errorf("shard placement gRPC not yet wired: EC requires direct RaftStore access")
+func (c *GRPCClient) GetShardPlacements(ctx context.Context, chunkID string) ([]*ShardPlacement, error) {
+	resp, err := c.client.GetShardPlacements(ctx, &pb.GetShardPlacementsRequest{
+		ChunkId: chunkID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	placements := make([]*ShardPlacement, len(resp.Placements))
+	for i, sp := range resp.Placements {
+		placements[i] = ShardPlacementFromProto(sp)
+	}
+	return placements, nil
 }
 
 // DeleteShardPlacement removes a shard placement entry.
-// TODO(#134): Wire to gRPC MetadataService when ShardPlacement RPCs are added.
-func (c *GRPCClient) DeleteShardPlacement(_ context.Context, _ string, _ int) error {
-	return fmt.Errorf("shard placement gRPC not yet wired: EC requires direct RaftStore access")
+func (c *GRPCClient) DeleteShardPlacement(ctx context.Context, chunkID string, shardIndex int) error {
+	_, err := c.client.DeleteShardPlacement(ctx, &pb.DeleteShardPlacementRequest{
+		ChunkId:    chunkID,
+		ShardIndex: int32(shardIndex),
+	})
+	return err
 }
 
 // ---- Object operations ----
