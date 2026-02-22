@@ -3,6 +3,7 @@ package csi
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -41,6 +42,9 @@ func (d *ECDistributor) DistributeChunk(
 	totalShards := ec.ShardCount()
 	if len(shardNodes) != totalShards {
 		return fmt.Errorf("shard nodes count %d does not match total shards %d", len(shardNodes), totalShards)
+	}
+	if strings.Contains(chunkID, ":shard:") {
+		return fmt.Errorf("chunk ID %q is itself a shard ID; cannot distribute shards of shards", chunkID)
 	}
 
 	// Read the full chunk from the source node.

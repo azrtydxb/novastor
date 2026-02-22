@@ -145,21 +145,23 @@ func (c *GRPCClient) DeletePlacementMap(ctx context.Context, chunkID string) err
 // ---- Shard placement operations ----
 
 // PutShardPlacement stores a shard placement entry via the remote metadata service.
-// TODO: Wire to gRPC MetadataService when ShardPlacement RPCs are added.
+// TODO(#134): Wire to gRPC MetadataService when ShardPlacement RPCs are added to
+// the protobuf definition. Until then, EC shard distribution is only supported
+// when the CSI controller talks to the RaftStore directly (single-process mode).
 func (c *GRPCClient) PutShardPlacement(_ context.Context, _ *ShardPlacement) error {
-	return fmt.Errorf("shard placement gRPC not yet implemented")
+	return fmt.Errorf("shard placement gRPC not yet wired: EC requires direct RaftStore access")
 }
 
 // GetShardPlacements retrieves all shard placements for a chunk.
-// TODO: Wire to gRPC MetadataService when ShardPlacement RPCs are added.
+// TODO(#134): Wire to gRPC MetadataService when ShardPlacement RPCs are added.
 func (c *GRPCClient) GetShardPlacements(_ context.Context, _ string) ([]*ShardPlacement, error) {
-	return nil, fmt.Errorf("shard placement gRPC not yet implemented")
+	return nil, fmt.Errorf("shard placement gRPC not yet wired: EC requires direct RaftStore access")
 }
 
 // DeleteShardPlacement removes a shard placement entry.
-// TODO: Wire to gRPC MetadataService when ShardPlacement RPCs are added.
+// TODO(#134): Wire to gRPC MetadataService when ShardPlacement RPCs are added.
 func (c *GRPCClient) DeleteShardPlacement(_ context.Context, _ string, _ int) error {
-	return fmt.Errorf("shard placement gRPC not yet implemented")
+	return fmt.Errorf("shard placement gRPC not yet wired: EC requires direct RaftStore access")
 }
 
 // ---- Object operations ----

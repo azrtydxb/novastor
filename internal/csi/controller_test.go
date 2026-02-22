@@ -1189,10 +1189,12 @@ func TestCreateVolume_ECDistribution(t *testing.T) {
 		}
 	}
 
-	// Note: EC distribution itself will fail gracefully because there's no
-	// primary chunk data to read (no real agent). The ShardPlacement metadata
-	// is still written in the placement map loop regardless. This verifies
-	// the metadata path works correctly.
+	// Note: In this test environment, EC distribution itself will fail (or no-op)
+	// gracefully because there's no primary chunk data to read: AgentTarget is
+	// mocked and does not actually create NVMe targets or write data. The
+	// ShardPlacement metadata is still written in the placement map loop
+	// regardless, so this test only verifies that the metadata path works
+	// correctly, not the full production EC distribution flow.
 	_ = client // client available for future tests with pre-seeded data
 }
 

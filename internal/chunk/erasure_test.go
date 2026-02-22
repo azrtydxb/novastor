@@ -112,11 +112,11 @@ func TestShardID(t *testing.T) {
 
 func TestParseShardID(t *testing.T) {
 	tests := []struct {
-		name       string
-		id         ChunkID
-		wantChunk  string
-		wantIndex  int
-		wantErr    bool
+		name      string
+		id        ChunkID
+		wantChunk string
+		wantIndex int
+		wantErr   bool
 	}{
 		{"valid shard 0", "vol-abc-chunk-0001:shard:0", "vol-abc-chunk-0001", 0, false},
 		{"valid shard 5", "vol-abc-chunk-0001:shard:5", "vol-abc-chunk-0001", 5, false},
@@ -172,6 +172,15 @@ func TestIsShardID(t *testing.T) {
 			t.Errorf("IsShardID(%q) = %v, want %v", tt.id, got, tt.want)
 		}
 	}
+}
+
+func TestShardID_PanicsOnSeparatorInChunkID(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic when chunkID contains :shard: separator")
+		}
+	}()
+	ShardID("bad:shard:id", 0)
 }
 
 func TestNewErasureCoder_InvalidParams(t *testing.T) {

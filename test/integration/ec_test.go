@@ -137,7 +137,11 @@ func (s *ecTestMetaStore) PutShardPlacement(_ context.Context, sp *metadata.Shar
 func (s *ecTestMetaStore) GetShardPlacements(_ context.Context, chunkID string) ([]*metadata.ShardPlacement, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.shardPlacements[chunkID], nil
+	sps, ok := s.shardPlacements[chunkID]
+	if !ok {
+		return nil, fmt.Errorf("shard placements for %s not found", chunkID)
+	}
+	return sps, nil
 }
 
 func (s *ecTestMetaStore) DeleteShardPlacement(_ context.Context, chunkID string, shardIndex int) error {
@@ -183,7 +187,7 @@ func TestErasureCodingEndToEnd(t *testing.T) {
 
 	originalData := make([]byte, chunk.ChunkSize)
 	for i := range originalData {
-		originalData[i] = byte((i * 7 + 13) % 256)
+		originalData[i] = byte((i*7 + 13) % 256)
 	}
 
 	if err := client.PutChunk(ctx, primaryNode, chunkID, originalData); err != nil {
