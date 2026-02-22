@@ -43,12 +43,12 @@ func (n *NodeTargetClient) clientFor(agentAddr string) (*agent.NVMeTargetClient,
 }
 
 // CreateTarget implements AgentTargetClient.
-func (n *NodeTargetClient) CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64) (string, string, string, error) {
+func (n *NodeTargetClient) CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32) (string, string, string, error) {
 	c, err := n.clientFor(agentAddr)
 	if err != nil {
 		return "", "", "", err
 	}
-	result, err := c.CreateTarget(ctx, volumeID, sizeBytes)
+	result, err := c.CreateTarget(ctx, volumeID, sizeBytes, anaState, anaGroupID)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -62,6 +62,15 @@ func (n *NodeTargetClient) DeleteTarget(ctx context.Context, agentAddr string, v
 		return err
 	}
 	return c.DeleteTarget(ctx, volumeID)
+}
+
+// SetANAState implements AgentTargetClient.
+func (n *NodeTargetClient) SetANAState(ctx context.Context, agentAddr string, volumeID string, anaState string, anaGroupID uint32) error {
+	c, err := n.clientFor(agentAddr)
+	if err != nil {
+		return err
+	}
+	return c.SetANAState(ctx, volumeID, anaState, anaGroupID)
 }
 
 // Close closes all cached gRPC connections.

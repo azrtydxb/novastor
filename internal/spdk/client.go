@@ -4,6 +4,7 @@ package spdk
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -35,7 +36,7 @@ func (c *Client) Connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	conn, err := net.Dial("unix", c.socketPath)
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "unix", c.socketPath)
 	if err != nil {
 		return fmt.Errorf("connecting to SPDK data-plane at %s: %w", c.socketPath, err)
 	}
@@ -65,10 +66,10 @@ type rpcRequest struct {
 
 // rpcResponse is the JSON-RPC 2.0 response envelope.
 type rpcResponse struct {
-	JSONRPC string           `json:"jsonrpc"`
-	Result  json.RawMessage  `json:"result,omitempty"`
-	Error   *rpcError        `json:"error,omitempty"`
-	ID      int64            `json:"id"`
+	JSONRPC string          `json:"jsonrpc"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
+	ID      int64           `json:"id"`
 }
 
 type rpcError struct {
@@ -242,6 +243,25 @@ type ReplicaTarget struct {
 	IsLocal bool   `json:"is_local"`
 }
 
+// ReplicaBdevStatus represents the status of a replica bdev.
+type ReplicaBdevStatus struct {
+	VolumeID     string              `json:"volume_id"`
+	Replicas     []ReplicaStatusInfo `json:"replicas"`
+	WriteQuorum  uint32              `json:"write_quorum"`
+	HealthyCount uint32              `json:"healthy_count"`
+}
+
+// ReplicaStatusInfo describes the state and I/O statistics of a single replica.
+type ReplicaStatusInfo struct {
+	Address         string `json:"address"`
+	Port            uint16 `json:"port"`
+	State           string `json:"state"`
+	ReadsCompleted  uint64 `json:"reads_completed"`
+	WritesCompleted uint64 `json:"writes_completed"`
+	ReadErrors      uint64 `json:"read_errors"`
+	WriteErrors     uint64 `json:"write_errors"`
+}
+
 // CreateReplicaBdev creates a composite bdev that replicates writes across targets.
 func (c *Client) CreateReplicaBdev(name string, targets []ReplicaTarget, readPolicy string) error {
 	params := map[string]interface{}{
@@ -262,4 +282,50 @@ func (c *Client) GetVersion() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%s %s", result.Name, result.Version), nil
+}
+
+// SetANAState sets the ANA state for an NVMe-oF target subsystem.
+func (c *Client) SetANAState(nqn string, anaGroupID uint32, state string) error {
+	return c.call("nvmf_set_ana_state", map[string]interface{}{
+		"nqn":          nqn,
+		"ana_group_id": anaGroupID,
+		"ana_state":    state,
+	}, nil)
+}
+
+// GetANAState retrieves the ANA state for an NVMe-oF target subsystem.
+func (c *Client) GetANAState(nqn string) (uint32, string, error) {
+	var result struct {
+		GroupID uint32 `json:"ana_group_id"`
+		State   string `json:"ana_state"`
+	}
+	if err := c.call("nvmf_get_ana_state", map[string]interface{}{"nqn": nqn}, &result); err != nil {
+		return 0, "", err
+	}
+	return result.GroupID, result.State, nil
+}
+
+// AddReplica dynamically adds a replica target to a running replica bdev.
+func (c *Client) AddReplica(bdevName string, target ReplicaTarget) error {
+	return c.call("replica_bdev_add_replica", map[string]interface{}{
+		"volume_id": bdevName,
+		"target":    target,
+	}, nil)
+}
+
+// RemoveReplica dynamically removes a replica target from a running replica bdev.
+func (c *Client) RemoveReplica(bdevName, targetAddr string) error {
+	return c.call("replica_bdev_remove_replica", map[string]interface{}{
+		"volume_id": bdevName,
+		"address":   targetAddr,
+	}, nil)
+}
+
+// GetReplicaBdevStatus returns the detailed status of a replica bdev.
+func (c *Client) GetReplicaBdevStatus(bdevName string) (*ReplicaBdevStatus, error) {
+	var result ReplicaBdevStatus
+	if err := c.call("replica_bdev_status", map[string]interface{}{"volume_id": bdevName}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }

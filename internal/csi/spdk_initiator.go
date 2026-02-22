@@ -76,3 +76,79 @@ func (s *SPDKInitiator) Disconnect(_ context.Context, nqn string) error {
 
 	return nil
 }
+
+// TargetInfo describes a single NVMe-oF target endpoint for multipath.
+type TargetInfo struct {
+	Addr    string `json:"addr"`
+	Port    string `json:"port"`
+	NQN     string `json:"nqn"`
+	IsOwner bool   `json:"is_owner"`
+}
+
+// ConnectMultipath connects to multiple NVMe-oF targets and exports each as
+// a local loopback target so the kernel NVMe multipath layer aggregates them.
+func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo) (string, error) {
+	if len(targets) == 0 {
+		return "", fmt.Errorf("no targets provided")
+	}
+
+	basePort := localLoopbackPort
+	var connectedNQNs []string
+	var exportFailures int
+
+	for i, t := range targets {
+		port, err := strconv.ParseUint(t.Port, 10, 16)
+		if err != nil {
+			port = 4420
+		}
+		bdevName, err := s.client.ConnectInitiator(t.Addr, uint16(port), t.NQN)
+		if err != nil {
+			// Cleanup already-connected
+			for _, nqn := range connectedNQNs {
+				_ = s.client.DisconnectInitiator(nqn)
+			}
+			return "", fmt.Errorf("connect target %s: %w", t.Addr, err)
+		}
+		connectedNQNs = append(connectedNQNs, t.NQN)
+
+		// Export each as loopback on sequential ports
+		localNQN := fmt.Sprintf("nqn.2024-01.io.novastor:local-%s-path%d", t.NQN, i)
+		loopPort := basePort + uint16(i)
+		if err := s.client.ExportLocal(localNQN, localLoopbackAddr, loopPort, bdevName); err != nil {
+			// Non-fatal for individual paths, but track failures.
+			exportFailures++
+		}
+	}
+
+	if exportFailures == len(targets) {
+		// Cleanup all connections since no paths could be exported.
+		for _, nqn := range connectedNQNs {
+			_ = s.client.DisconnectInitiator(nqn)
+		}
+		return "", fmt.Errorf("all %d NVMe-oF path exports failed", len(targets))
+	}
+
+	// Discover multipath device via sysfs
+	devicePath, err := discoverMultipathDevice(targets[0].NQN)
+	if err != nil {
+		return "", fmt.Errorf("discover multipath device: %w", err)
+	}
+
+	return devicePath, nil
+}
+
+// DisconnectMultipath tears down all local loopback exports and disconnects
+// from all remote NVMe-oF targets.
+func (s *SPDKInitiator) DisconnectMultipath(_ context.Context, targets []TargetInfo) error {
+	var lastErr error
+	for i, t := range targets {
+		localNQN := fmt.Sprintf("nqn.2024-01.io.novastor:local-%s-path%d", t.NQN, i)
+		if err := s.client.DeleteNvmfTarget(localNQN); err != nil {
+			lastErr = err
+		}
+		if err := s.client.DisconnectInitiator(t.NQN); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}

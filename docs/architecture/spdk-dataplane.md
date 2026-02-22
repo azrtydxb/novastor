@@ -106,6 +106,10 @@ The Go agent communicates with the Rust data-plane over a Unix domain socket at 
 | `nvmf_export_local` | Create loopback NVMe-oF for local consumption |
 | `replica_bdev_create` | Create a replica bdev across targets |
 | `replica_bdev_status` | Query replica health |
+| `nvmf_set_ana_state` | Set ANA state for an NVMe-oF target |
+| `nvmf_get_ana_state` | Get ANA state for an NVMe-oF target |
+| `replica_bdev_add_replica` | Add replica to running bdev |
+| `replica_bdev_remove_replica` | Remove replica from running bdev |
 | `get_version` | Get data-plane version |
 
 ### Go Integration
@@ -117,6 +121,7 @@ The Go agent communicates with the Rust data-plane over a Unix domain socket at 
 | `internal/agent` | `spdk_target_server.go` | SPDK-based NVMe-oF target gRPC service |
 | `internal/agent` | `spdk_replica.go` | Replica bdev setup helper |
 | `internal/csi` | `spdk_initiator.go` | SPDK-based NVMe-oF initiator |
+| `internal/agent/failover` | `controller.go` | Failover controller for ANA state management |
 
 ## Configuration
 
@@ -208,3 +213,73 @@ graph LR
 ```
 
 Each node runs the Go agent (control plane) and the Rust data-plane (SPDK) as separate DaemonSet pods sharing a Unix socket via hostPath volume. Data replication between nodes uses NVMe-oF/TCP directly between data-plane instances.
+
+## Failover and High Availability
+
+NovaStor provides sub-second failover for block volumes using NVMe ANA (Asymmetric Namespace Access) multipath. The failover mechanism is active-passive: one replica agent owns writes while standby agents serve as hot backup paths. The Linux kernel's built-in NVMe multipath driver aggregates all paths transparently, so failover requires no application-level awareness.
+
+### How It Works
+
+Each replica agent exposes an NVMe-oF target for every volume it holds. The write-owner's target is marked **optimized** (active path) and standby agents are marked **non-optimized**. The Linux kernel's built-in NVMe multipath aggregates all paths into a single `/dev/nvmeXnY` device. On failure, the failover controller claims ownership via the metadata service and flips ANA states through SPDK JSON-RPC calls. The kernel automatically routes I/O to the new optimized path without any application intervention.
+
+### Failover Sequence
+
+```mermaid
+sequenceDiagram
+    participant K as Kernel NVMe Multipath
+    participant O as Write-Owner Agent
+    participant FC as Failover Controller
+    participant M as Metadata Service
+    participant S as Standby Agent (new owner)
+
+    Note over O: Agent dies (KATO timeout ~200ms)
+    K->>K: Mark path inaccessible
+    FC->>M: Detect stale heartbeat (500ms poll)
+    FC->>M: Claim ownership for standby
+    M-->>FC: Ownership granted
+    FC->>S: SetANAState("optimized") via SPDK
+    S-->>FC: ANA state updated
+    K->>K: Route I/O to new optimized path
+    Note over K,S: Total failover time: <500ms
+```
+
+**Step-by-step breakdown:**
+
+1. **Write-owner agent dies** — the KATO (Keep Alive Timeout) expires after ~200ms, and the kernel marks the NVMe path as inaccessible.
+2. **Kernel marks path inaccessible** — in-flight I/O is queued by the multipath layer while waiting for an alternative path.
+3. **Failover controller detects stale heartbeat** — the controller polls heartbeats every 500ms and identifies the dead agent.
+4. **Controller claims ownership via metadata service** — the standby agent is promoted to write-owner through a Raft-committed ownership transfer.
+5. **New owner sets ANA state to "optimized" via SPDK** — the `nvmf_set_ana_state` JSON-RPC call updates the NVMe-oF target's ANA group.
+6. **Kernel routes I/O to new optimized path** — the multipath driver detects the new optimized path and drains the queued I/O.
+7. **Total failover time: <500ms** — from agent death to I/O resumption on the new path.
+
+### Failover Configuration
+
+The following Helm values control failover behavior:
+
+```yaml
+agent:
+  heartbeatInterval: "500ms"
+  failover:
+    enabled: true
+    katoTimeout: "200ms"
+dataplane:
+  enabled: true
+```
+
+| Value | Default | Description |
+|---|---|---|
+| `agent.heartbeatInterval` | `500ms` | How often agents send heartbeats to the metadata service |
+| `agent.failover.enabled` | `true` | Enable ANA multipath failover |
+| `agent.failover.katoTimeout` | `200ms` | NVMe KATO timeout before kernel marks a path dead |
+| `dataplane.enabled` | `true` | Enable SPDK data plane (required for ANA failover) |
+
+### Components Involved
+
+| Component | Role |
+|---|---|
+| Failover Controller (`internal/agent/failover/`) | Watches ownership, manages ANA states |
+| SPDK Client (`internal/spdk/client.go`) | `SetANAState` / `GetANAState` JSON-RPC calls |
+| Metadata Service (`internal/metadata/ownership.go`) | Ownership tracking, heartbeat-based failure detection |
+| CSI Controller (`internal/csi/controller.go`) | Multi-target provisioning with ANA group IDs |
+| CSI Node (`internal/csi/node.go`) | Kernel NVMe multipath attachment |

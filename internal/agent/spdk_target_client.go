@@ -32,7 +32,7 @@ func NewSPDKTargetClient(opts ...grpc.DialOption) *SPDKTargetClient {
 }
 
 // CreateTarget dials the agent at agentAddr and calls CreateTarget.
-func (c *SPDKTargetClient) CreateTarget(ctx context.Context, agentAddr, volumeID string, sizeBytes int64) (subsystemNQN, targetAddress, targetPort string, err error) {
+func (c *SPDKTargetClient) CreateTarget(ctx context.Context, agentAddr, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32) (subsystemNQN, targetAddress, targetPort string, err error) {
 	conn, err := grpc.NewClient(agentAddr, c.dialOpts...)
 	if err != nil {
 		return "", "", "", fmt.Errorf("dialing agent at %s: %w", agentAddr, err)
@@ -41,8 +41,10 @@ func (c *SPDKTargetClient) CreateTarget(ctx context.Context, agentAddr, volumeID
 
 	client := pb.NewNVMeTargetServiceClient(conn)
 	resp, err := client.CreateTarget(ctx, &pb.CreateTargetRequest{
-		VolumeId:  volumeID,
-		SizeBytes: sizeBytes,
+		VolumeId:   volumeID,
+		SizeBytes:  sizeBytes,
+		AnaState:   anaState,
+		AnaGroupId: anaGroupID,
 	})
 	if err != nil {
 		return "", "", "", fmt.Errorf("CreateTarget RPC for volume %s on %s: %w", volumeID, agentAddr, err)
@@ -62,6 +64,26 @@ func (c *SPDKTargetClient) DeleteTarget(ctx context.Context, agentAddr, volumeID
 	_, err = client.DeleteTarget(ctx, &pb.DeleteTargetRequest{VolumeId: volumeID})
 	if err != nil {
 		return fmt.Errorf("DeleteTarget RPC for volume %s on %s: %w", volumeID, agentAddr, err)
+	}
+	return nil
+}
+
+// SetANAState dials the agent at agentAddr and calls SetANAState.
+func (c *SPDKTargetClient) SetANAState(ctx context.Context, agentAddr, volumeID, anaState string, anaGroupID uint32) error {
+	conn, err := grpc.NewClient(agentAddr, c.dialOpts...)
+	if err != nil {
+		return fmt.Errorf("dialing agent at %s: %w", agentAddr, err)
+	}
+	defer conn.Close()
+
+	client := pb.NewNVMeTargetServiceClient(conn)
+	_, err = client.SetANAState(ctx, &pb.SetANAStateRequest{
+		VolumeId:   volumeID,
+		AnaState:   anaState,
+		AnaGroupId: anaGroupID,
+	})
+	if err != nil {
+		return fmt.Errorf("SetANAState RPC for volume %s on %s: %w", volumeID, agentAddr, err)
 	}
 	return nil
 }

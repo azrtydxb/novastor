@@ -115,6 +115,10 @@ agent:
       memory: 2Gi
   nodeSelector: {}
   tolerations: []
+  heartbeatInterval: "500ms"    # Fast heartbeat for failover detection
+  failover:
+    enabled: true
+    katoTimeout: "200ms"        # SPDK keep-alive timeout
 
 dataplane:
   enabled: false
@@ -157,6 +161,7 @@ csi:
         cpu: 500m
         memory: 256Mi
   provisioner:
+    timeout: "120s"             # Increased for multi-target creation
     image: registry.k8s.io/sig-storage/csi-provisioner:v5.0.1
     resources:
       requests:

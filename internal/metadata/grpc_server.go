@@ -138,6 +138,14 @@ func (s *GRPCServer) Execute(ctx context.Context, req *pb.MetadataRequest) (*pb.
 	case "CleanupExpiredLocks":
 		return s.cleanupExpiredLocks(ctx)
 
+	// ---- Volume ownership operations ----
+	case "SetVolumeOwner":
+		return s.setVolumeOwner(ctx, req.Payload)
+	case "GetVolumeOwner":
+		return s.getVolumeOwner(ctx, req.Payload)
+	case "RequestOwnership":
+		return s.requestOwnership(ctx, req.Payload)
+
 	default:
 		return &pb.MetadataResponse{Error: fmt.Sprintf("unknown operation: %s", req.Operation)}, nil
 	}
@@ -699,4 +707,49 @@ func (s *GRPCServer) cleanupExpiredLocks(ctx context.Context) (*pb.MetadataRespo
 	return okResp(struct {
 		Cleaned int `json:"cleaned"`
 	}{Cleaned: count})
+}
+
+// ---- Volume ownership operations ----
+
+func (s *GRPCServer) setVolumeOwner(_ context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var ownership VolumeOwnership
+	if err := json.Unmarshal(payload, &ownership); err != nil {
+		return errResp(fmt.Errorf("unmarshal VolumeOwnership: %w", err)), nil
+	}
+	if err := s.store.SetVolumeOwner(&ownership); err != nil {
+		return errResp(err), nil
+	}
+	return &pb.MetadataResponse{}, nil
+}
+
+func (s *GRPCServer) getVolumeOwner(_ context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args struct {
+		VolumeID string `json:"volume_id"`
+	}
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal args: %w", err)), nil
+	}
+	ownership, err := s.store.GetVolumeOwner(args.VolumeID)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(ownership)
+}
+
+func (s *GRPCServer) requestOwnership(_ context.Context, payload []byte) (*pb.MetadataResponse, error) {
+	var args struct {
+		VolumeID      string `json:"volume_id"`
+		RequesterAddr string `json:"requester_addr"`
+	}
+	if err := json.Unmarshal(payload, &args); err != nil {
+		return errResp(fmt.Errorf("unmarshal args: %w", err)), nil
+	}
+	granted, generation, err := s.store.RequestOwnership(args.VolumeID, args.RequesterAddr)
+	if err != nil {
+		return errResp(err), nil
+	}
+	return okResp(struct {
+		Granted    bool   `json:"granted"`
+		Generation uint64 `json:"generation"`
+	}{Granted: granted, Generation: generation})
 }

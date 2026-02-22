@@ -12,6 +12,8 @@ pub struct SubsystemInfo {
     pub bdev_name: String,
     pub listen_address: String,
     pub listen_port: u16,
+    pub ana_group_id: u32,
+    pub ana_state: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -51,6 +53,8 @@ impl NvmfManager {
                 bdev_name: config.bdev_name.clone(),
                 listen_address: config.listen_address.clone(),
                 listen_port: config.listen_port,
+                ana_group_id: config.ana_group_id,
+                ana_state: config.ana_state.clone(),
             };
             self.subsystems.lock().unwrap().insert(nqn, info.clone());
             Ok(info)
@@ -116,6 +120,8 @@ impl NvmfManager {
             bdev_name: bdev_name.to_string(),
             listen_address: "127.0.0.1".to_string(),
             listen_port: port,
+            ana_group_id: 0,
+            ana_state: "optimized".to_string(),
         };
         self.create_target(&config)
     }
@@ -126,5 +132,28 @@ impl NvmfManager {
 
     pub fn list_initiators(&self) -> Vec<InitiatorInfo> {
         self.initiators.lock().unwrap().values().cloned().collect()
+    }
+
+    pub fn set_ana_state(&self, nqn: &str, ana_group_id: u32, ana_state: &str) -> Result<()> {
+        let mut subsystems = self.subsystems.lock().unwrap();
+        let info = subsystems.get_mut(nqn).ok_or_else(|| {
+            crate::error::DataPlaneError::NvmfTargetError(
+                format!("subsystem not found: {}", nqn),
+            )
+        })?;
+        info!("setting ANA state: nqn={}, ana_group_id={}, ana_state={}", nqn, ana_group_id, ana_state);
+        info.ana_group_id = ana_group_id;
+        info.ana_state = ana_state.to_string();
+        Ok(())
+    }
+
+    pub fn get_ana_state(&self, nqn: &str) -> Result<(u32, String)> {
+        let subsystems = self.subsystems.lock().unwrap();
+        let info = subsystems.get(nqn).ok_or_else(|| {
+            crate::error::DataPlaneError::NvmfTargetError(
+                format!("subsystem not found: {}", nqn),
+            )
+        })?;
+        Ok((info.ana_group_id, info.ana_state.clone()))
     }
 }
