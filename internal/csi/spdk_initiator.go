@@ -94,6 +94,7 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 
 	basePort := localLoopbackPort
 	var connectedNQNs []string
+	var exportFailures int
 
 	for i, t := range targets {
 		port, err := strconv.ParseUint(t.Port, 10, 16)
@@ -114,9 +115,17 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 		localNQN := fmt.Sprintf("nqn.2024-01.io.novastor:local-%s-path%d", t.NQN, i)
 		loopPort := basePort + uint16(i)
 		if err := s.client.ExportLocal(localNQN, localLoopbackAddr, loopPort, bdevName); err != nil {
-			// Non-fatal: log and continue — some paths may still work.
-			_ = err
+			// Non-fatal for individual paths, but track failures.
+			exportFailures++
 		}
+	}
+
+	if exportFailures == len(targets) {
+		// Cleanup all connections since no paths could be exported.
+		for _, nqn := range connectedNQNs {
+			_ = s.client.DisconnectInitiator(nqn)
+		}
+		return "", fmt.Errorf("all %d NVMe-oF path exports failed", len(targets))
 	}
 
 	// Discover multipath device via sysfs
