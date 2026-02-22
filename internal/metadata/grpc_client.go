@@ -567,6 +567,23 @@ func (c *GRPCClient) CleanupExpiredLocks(ctx context.Context) (int, error) {
 	return result.Cleaned, nil
 }
 
+// ---- Inode counter operations ----
+
+// AllocateIno atomically allocates the next inode number via the remote metadata service.
+func (c *GRPCClient) AllocateIno(ctx context.Context) (uint64, error) {
+	data, err := c.exec(ctx, "AllocateIno", nil)
+	if err != nil {
+		return 0, err
+	}
+	var result struct {
+		Ino uint64 `json:"ino"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return 0, fmt.Errorf("unmarshaling AllocateIno result: %w", err)
+	}
+	return result.Ino, nil
+}
+
 // ---- Volume ownership operations ----
 
 // SetVolumeOwner stores or updates volume ownership via the remote metadata service.

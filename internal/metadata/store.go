@@ -298,6 +298,57 @@ func (s *RaftStore) apply(op *fsmOp) error {
 	return nil
 }
 
+// applyWithResponse applies a Raft operation and returns both the FSM response
+// and any error. This is used for operations like AllocateIno that need to
+// return a value from the FSM.
+func (s *RaftStore) applyWithResponse(op *fsmOp) (interface{}, error) {
+	data, err := json.Marshal(op)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling operation: %w", err)
+	}
+	f := s.raft.Apply(data, 5*time.Second)
+	if err := f.Error(); err != nil {
+		return nil, fmt.Errorf("applying raft log: %w", err)
+	}
+	resp := f.Response()
+	if e, ok := resp.(error); ok {
+		return nil, e
+	}
+	return resp, nil
+}
+
+// AllocateIno atomically allocates the next available inode number via the
+// Raft consensus log, ensuring uniqueness across restarts and cluster members.
+func (s *RaftStore) AllocateIno(_ context.Context) (uint64, error) {
+	resp, err := s.applyWithResponse(&fsmOp{Op: opAllocateIno, Bucket: bucketCounters, Key: "nextIno"})
+	if err != nil {
+		return 0, fmt.Errorf("allocating inode: %w", err)
+	}
+	ino, ok := resp.(uint64)
+	if !ok {
+		return 0, fmt.Errorf("unexpected response type from AllocateIno FSM: %T", resp)
+	}
+	return ino, nil
+}
+
+// GetNextIno reads the current inode counter value from the FSM without
+// going through Raft consensus. Used at startup to seed the counter.
+func (s *RaftStore) GetNextIno(_ context.Context) (uint64, error) {
+	data, err := s.fsm.Get(bucketCounters, "nextIno")
+	if err != nil {
+		// Counter not yet initialized — return default.
+		if errors.Is(err, ErrKeyNotFound) {
+			return 2, nil
+		}
+		return 0, fmt.Errorf("reading inode counter: %w", err)
+	}
+	var val uint64
+	if err := json.Unmarshal(data, &val); err != nil {
+		return 0, fmt.Errorf("unmarshaling inode counter: %w", err)
+	}
+	return val, nil
+}
+
 // PutVolumeMeta stores volume metadata in the Raft store.
 func (s *RaftStore) PutVolumeMeta(_ context.Context, meta *VolumeMeta) error {
 	data, err := json.Marshal(meta)

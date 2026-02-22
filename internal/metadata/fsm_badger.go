@@ -127,6 +127,28 @@ func (f *BadgerFSM) Apply(log *raft.Log) interface{} {
 		if err != nil {
 			return fmt.Errorf("badger sub quota: %w", err)
 		}
+	case opAllocateIno:
+		// Atomically increment the inode counter and return the new value.
+		var next uint64
+		err := f.db.Update(func(txn *badger.Txn) error {
+			current := uint64(2) // Default start value.
+			item, err := txn.Get(compositeKey(op.Bucket, op.Key))
+			if err == nil {
+				val, err := item.ValueCopy(nil)
+				if err == nil {
+					if err := json.Unmarshal(val, &current); err != nil {
+						return fmt.Errorf("unmarshaling current inode counter: %w", err)
+					}
+				}
+			}
+			next = current + 1
+			updated, _ := json.Marshal(next)
+			return txn.Set(compositeKey(op.Bucket, op.Key), updated)
+		})
+		if err != nil {
+			return fmt.Errorf("badger allocate ino: %w", err)
+		}
+		return next
 	default:
 		return fmt.Errorf("unknown op: %s", op.Op)
 	}

@@ -68,6 +68,11 @@ func (a *MetadataAdapter) LookupDirEntry(ctx context.Context, parentIno uint64, 
 	return fromMetaDirEntry(de), nil
 }
 
+// AllocateIno atomically allocates the next inode number via the metadata service.
+func (a *MetadataAdapter) AllocateIno(ctx context.Context) (uint64, error) {
+	return a.client.AllocateIno(ctx)
+}
+
 // ListDirectory returns all directory entries for the given parent inode.
 func (a *MetadataAdapter) ListDirectory(ctx context.Context, parentIno uint64) ([]*DirEntry, error) {
 	entries, err := a.client.ListDirectory(ctx, parentIno)

@@ -74,40 +74,13 @@ spec:
       {{- end }}
       containers:
         - name: bootstrap
-          image: {{ .Values.global.tls.bootstrapImage.registry }}/{{ .Values.global.tls.bootstrapImage.repository }}:{{ .Values.global.tls.bootstrapImage.tag }}
+          image: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}-controller:{{ .Values.global.image.tag | default .Chart.AppVersion }}
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           command:
-            - /bin/sh
-            - -c
-            - |
-              set -e
-
-              SECRET_NAME="{{ include "novastor.tls.volumeName" . }}"
-              NAMESPACE="{{ .Release.Namespace }}"
-
-              # Check if secret already exists with valid CA
-              if kubectl get secret "$SECRET_NAME" -n "$NAMESPACE" 2>/dev/null; then
-                EXISTING_CA=$(kubectl get secret "$SECRET_NAME" -n "$NAMESPACE" -o jsonpath='{.data.ca\.crt}' 2>/dev/null || echo "")
-                if [ -n "$EXISTING_CA" ] && [ "$EXISTING_CA" != "" ]; then
-                  echo "Secret $SECRET_NAME already exists with valid CA certificate, skipping bootstrap"
-                  exit 0
-                fi
-              fi
-
-              # Generate certificates using novastorctl
-              /novastorctl cert bootstrap --output-dir /tmp/certs
-
-              # Create or update the secret with generated certificates
-              kubectl create secret generic "$SECRET_NAME" \
-                --from-file=ca.crt=/tmp/certs/ca.crt \
-                --from-file=ca.key=/tmp/certs/ca.key \
-                --from-file=server.crt=/tmp/certs/server.crt \
-                --from-file=server.key=/tmp/certs/server.key \
-                --from-file=client.crt=/tmp/certs/client.crt \
-                --from-file=client.key=/tmp/certs/client.key \
-                -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
-
-              echo "TLS bootstrap completed successfully"
+            - /usr/local/bin/novastor-controller
+            - tls-bootstrap
+            - --secret-name={{ include "novastor.tls.volumeName" . }}
+            - --namespace={{ .Release.Namespace }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

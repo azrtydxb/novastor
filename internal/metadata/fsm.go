@@ -14,12 +14,14 @@ import (
 )
 
 const (
-	opPut      = "put"
-	opDelete   = "delete"
-	opAddQuota = "addQuota"
-	opSubQuota = "subQuota"
+	opPut         = "put"
+	opDelete      = "delete"
+	opAddQuota    = "addQuota"
+	opSubQuota    = "subQuota"
+	opAllocateIno = "allocateIno"
 
 	bucketVolumes          = "volumes"
+	bucketCounters         = "counters"
 	bucketPlacements       = "placements"
 	bucketObjects          = "objects"
 	bucketBuckets          = "buckets" // S3 buckets, not FSM buckets
@@ -85,6 +87,7 @@ func NewFSM() *FSM {
 			bucketHealTasks:        {},
 			bucketChunkHealLocks:   {},
 			bucketLocks:            {},
+			bucketCounters:         {},
 			bucketQuotas:           {},
 			bucketUsage:            {},
 			"nodes":                {},
@@ -157,6 +160,18 @@ func (f *FSM) Apply(log *raft.Log) interface{} {
 		}
 		updated, _ := json.Marshal(newVal)
 		bucket[op.Key] = updated
+	case opAllocateIno:
+		// Atomically increment the inode counter and return the new value.
+		current := uint64(2) // Default start value (1 is reserved for root).
+		if existing, ok := bucket[op.Key]; ok {
+			if err := json.Unmarshal(existing, &current); err != nil {
+				return fmt.Errorf("unmarshaling current inode counter: %w", err)
+			}
+		}
+		next := current + 1
+		updated, _ := json.Marshal(next)
+		bucket[op.Key] = updated
+		return next
 	default:
 		return fmt.Errorf("unknown op: %s", op.Op)
 	}

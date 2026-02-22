@@ -268,3 +268,77 @@ func TestRaftStore_ListVolumesWithProtection(t *testing.T) {
 		}
 	}
 }
+
+func TestRaftStore_AllocateIno(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// First allocation should return 3 (counter starts at 2, increments to 3).
+	ino1, err := store.AllocateIno(ctx)
+	if err != nil {
+		t.Fatalf("AllocateIno 1: %v", err)
+	}
+	if ino1 != 3 {
+		t.Errorf("expected ino=3, got %d", ino1)
+	}
+
+	// Second allocation should return 4.
+	ino2, err := store.AllocateIno(ctx)
+	if err != nil {
+		t.Fatalf("AllocateIno 2: %v", err)
+	}
+	if ino2 != 4 {
+		t.Errorf("expected ino=4, got %d", ino2)
+	}
+
+	// Allocations must be strictly increasing.
+	if ino2 <= ino1 {
+		t.Errorf("expected ino2 > ino1, got %d <= %d", ino2, ino1)
+	}
+
+	// GetNextIno reads the stored counter value (last allocated + 1 = 4, which is
+	// the value stored after the second allocation since our FSM stores current+1).
+	// After allocating 3 and 4, the stored value is 4 (the last increment result).
+	next, err := store.GetNextIno(ctx)
+	if err != nil {
+		t.Fatalf("GetNextIno: %v", err)
+	}
+	// The stored counter value after two allocations is 4.
+	if next != 4 {
+		t.Errorf("expected next=4, got %d", next)
+	}
+}
+
+func TestRaftStore_AllocateIno_UniqueUnderConcurrency(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const numAllocs = 50
+	results := make(chan uint64, numAllocs)
+
+	for i := 0; i < numAllocs; i++ {
+		go func() {
+			ino, err := store.AllocateIno(ctx)
+			if err != nil {
+				t.Errorf("AllocateIno: %v", err)
+				results <- 0
+				return
+			}
+			results <- ino
+		}()
+	}
+
+	seen := make(map[uint64]bool)
+	for i := 0; i < numAllocs; i++ {
+		ino := <-results
+		if ino == 0 {
+			continue
+		}
+		if seen[ino] {
+			t.Errorf("duplicate inode number: %d", ino)
+		}
+		seen[ino] = true
+	}
+}
