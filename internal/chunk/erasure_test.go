@@ -89,6 +89,100 @@ func TestErasureCoder_SmallData(t *testing.T) {
 	}
 }
 
+func TestShardID(t *testing.T) {
+	tests := []struct {
+		name       string
+		chunkID    string
+		shardIndex int
+		want       ChunkID
+	}{
+		{"first shard", "vol-abc-chunk-0001", 0, "vol-abc-chunk-0001:shard:0"},
+		{"last shard", "vol-abc-chunk-0001", 5, "vol-abc-chunk-0001:shard:5"},
+		{"uuid chunk", "550e8400-e29b-41d4-a716-446655440000-chunk-0042", 3, "550e8400-e29b-41d4-a716-446655440000-chunk-0042:shard:3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ShardID(tt.chunkID, tt.shardIndex)
+			if got != tt.want {
+				t.Errorf("ShardID(%q, %d) = %q, want %q", tt.chunkID, tt.shardIndex, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseShardID(t *testing.T) {
+	tests := []struct {
+		name      string
+		id        ChunkID
+		wantChunk string
+		wantIndex int
+		wantErr   bool
+	}{
+		{"valid shard 0", "vol-abc-chunk-0001:shard:0", "vol-abc-chunk-0001", 0, false},
+		{"valid shard 5", "vol-abc-chunk-0001:shard:5", "vol-abc-chunk-0001", 5, false},
+		{"not a shard", "vol-abc-chunk-0001", "", 0, true},
+		{"empty chunk ID", ":shard:0", "", 0, true},
+		{"invalid index", "vol-abc-chunk-0001:shard:abc", "", 0, true},
+		{"negative index", "vol-abc-chunk-0001:shard:-1", "", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunkID, shardIndex, err := ParseShardID(tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseShardID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+			if err == nil {
+				if chunkID != tt.wantChunk {
+					t.Errorf("chunkID = %q, want %q", chunkID, tt.wantChunk)
+				}
+				if shardIndex != tt.wantIndex {
+					t.Errorf("shardIndex = %d, want %d", shardIndex, tt.wantIndex)
+				}
+			}
+		})
+	}
+}
+
+func TestShardID_Roundtrip(t *testing.T) {
+	chunkID := "vol-abc-chunk-0001"
+	for i := range 6 {
+		sid := ShardID(chunkID, i)
+		gotChunk, gotIndex, err := ParseShardID(sid)
+		if err != nil {
+			t.Fatalf("ParseShardID(ShardID(%q, %d)) failed: %v", chunkID, i, err)
+		}
+		if gotChunk != chunkID || gotIndex != i {
+			t.Errorf("roundtrip failed: got (%q, %d), want (%q, %d)", gotChunk, gotIndex, chunkID, i)
+		}
+	}
+}
+
+func TestIsShardID(t *testing.T) {
+	tests := []struct {
+		id   ChunkID
+		want bool
+	}{
+		{"vol-abc-chunk-0001:shard:0", true},
+		{"vol-abc-chunk-0001:shard:5", true},
+		{"vol-abc-chunk-0001", false},
+		{"plain-chunk-id", false},
+	}
+	for _, tt := range tests {
+		if got := IsShardID(tt.id); got != tt.want {
+			t.Errorf("IsShardID(%q) = %v, want %v", tt.id, got, tt.want)
+		}
+	}
+}
+
+func TestShardID_PanicsOnSeparatorInChunkID(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic when chunkID contains :shard: separator")
+		}
+	}()
+	ShardID("bad:shard:id", 0)
+}
+
 func TestNewErasureCoder_InvalidParams(t *testing.T) {
 	tests := []struct {
 		name   string
