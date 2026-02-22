@@ -106,11 +106,16 @@ func (f *FSM) Apply(log *raft.Log) interface{} {
 		metrics.RaftApplyLatency.Observe(time.Since(start).Seconds())
 	}()
 
+	var op fsmOp
 	var pbOp pb.FsmOp
 	if err := proto.Unmarshal(log.Data, &pbOp); err != nil {
-		return fmt.Errorf("unmarshaling fsm op: %w", err)
+		// Fall back to JSON for backward compatibility with pre-protobuf log entries.
+		if jsonErr := json.Unmarshal(log.Data, &op); jsonErr != nil {
+			return fmt.Errorf("unmarshaling fsm op: %w", err)
+		}
+	} else {
+		op = fsmOp{Op: pbOp.Op, Bucket: pbOp.Bucket, Key: pbOp.Key, Value: pbOp.Value}
 	}
-	op := fsmOp{Op: pbOp.Op, Bucket: pbOp.Bucket, Key: pbOp.Key, Value: pbOp.Value}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	bucket, ok := f.buckets[op.Bucket]
@@ -241,17 +246,22 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	if err != nil {
 		return fmt.Errorf("reading snapshot: %w", err)
 	}
+	var data map[string]map[string][]byte
 	var snap pb.FsmSnapshot
 	if err := proto.Unmarshal(raw, &snap); err != nil {
-		return fmt.Errorf("decoding snapshot: %w", err)
-	}
-	data := make(map[string]map[string][]byte, len(snap.Buckets))
-	for bk, bv := range snap.Buckets {
-		bucket := make(map[string][]byte, len(bv.Entries))
-		for k, v := range bv.Entries {
-			bucket[k] = v
+		// Fall back to JSON for backward compatibility with pre-protobuf snapshots.
+		if jsonErr := json.Unmarshal(raw, &data); jsonErr != nil {
+			return fmt.Errorf("decoding snapshot: %w (json fallback: %v)", err, jsonErr)
 		}
-		data[bk] = bucket
+	} else {
+		data = make(map[string]map[string][]byte, len(snap.Buckets))
+		for bk, bv := range snap.Buckets {
+			bucket := make(map[string][]byte, len(bv.Entries))
+			for k, v := range bv.Entries {
+				bucket[k] = v
+			}
+			data[bk] = bucket
+		}
 	}
 	f.mu.Lock()
 	f.buckets = data

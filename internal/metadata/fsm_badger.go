@@ -55,11 +55,16 @@ func (f *BadgerFSM) Apply(log *raft.Log) interface{} {
 		metrics.RaftApplyLatency.Observe(time.Since(start).Seconds())
 	}()
 
+	var op fsmOp
 	var pbOp pb.FsmOp
 	if err := proto.Unmarshal(log.Data, &pbOp); err != nil {
-		return fmt.Errorf("unmarshaling fsm op: %w", err)
+		// Fall back to JSON for backward compatibility with pre-protobuf log entries.
+		if jsonErr := json.Unmarshal(log.Data, &op); jsonErr != nil {
+			return fmt.Errorf("unmarshaling fsm op: %w", err)
+		}
+	} else {
+		op = fsmOp{Op: pbOp.Op, Bucket: pbOp.Bucket, Key: pbOp.Key, Value: pbOp.Value}
 	}
-	op := fsmOp{Op: pbOp.Op, Bucket: pbOp.Bucket, Key: pbOp.Key, Value: pbOp.Value}
 
 	switch op.Op {
 	case opPut:
@@ -273,12 +278,20 @@ func (f *BadgerFSM) Restore(rc io.ReadCloser) error {
 		if _, err := io.ReadFull(rc, entryBuf); err != nil {
 			return fmt.Errorf("reading entry data: %w", err)
 		}
-		var entry pb.BadgerSnapshotEntry
-		if err := proto.Unmarshal(entryBuf, &entry); err != nil {
-			return fmt.Errorf("unmarshaling snapshot entry: %w", err)
+		var key, value []byte
+		var pbEntry pb.BadgerSnapshotEntry
+		if err := proto.Unmarshal(entryBuf, &pbEntry); err != nil {
+			// Fall back to JSON for backward compatibility with pre-protobuf snapshots.
+			var jsonEntry badgerSnapshotEntry
+			if jsonErr := json.Unmarshal(entryBuf, &jsonEntry); jsonErr != nil {
+				return fmt.Errorf("unmarshaling snapshot entry: %w (json fallback: %v)", err, jsonErr)
+			}
+			key, value = jsonEntry.Key, jsonEntry.Value
+		} else {
+			key, value = pbEntry.Key, pbEntry.Value
 		}
 		if err := f.db.Update(func(txn *badger.Txn) error {
-			return txn.Set(entry.Key, entry.Value)
+			return txn.Set(key, value)
 		}); err != nil {
 			return fmt.Errorf("restoring entry: %w", err)
 		}
