@@ -66,7 +66,7 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 
 	// Step 3: Create a logical volume.
 	t.Log("creating logical volume")
-	lvolName, err := client.CreateLvol("e2e-lvs", testVolumeID, 128)
+	lvolName, err := client.CreateLvol("e2e-lvs", testVolumeID, 128*1024*1024)
 	if err != nil {
 		t.Fatalf("CreateLvol failed: %v", err)
 	}

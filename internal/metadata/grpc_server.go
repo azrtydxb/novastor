@@ -536,3 +536,38 @@ func (s *GRPCServer) RequestOwnership(_ context.Context, req *pb.RequestOwnershi
 	}
 	return &pb.RequestOwnershipResponse{Granted: granted, Generation: generation}, nil
 }
+
+// ---- Shard placement operations (erasure coding) ----
+
+func (s *GRPCServer) PutShardPlacement(ctx context.Context, req *pb.PutShardPlacementRequest) (*emptypb.Empty, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("PutShardPlacement").Inc()
+	if req.Placement == nil {
+		return nil, status.Error(codes.InvalidArgument, "placement is required")
+	}
+	sp := ShardPlacementFromProto(req.Placement)
+	if err := s.store.PutShardPlacement(ctx, sp); err != nil {
+		return nil, storeErr(err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+func (s *GRPCServer) GetShardPlacements(ctx context.Context, req *pb.GetShardPlacementsRequest) (*pb.GetShardPlacementsResponse, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("GetShardPlacements").Inc()
+	placements, err := s.store.GetShardPlacements(ctx, req.ChunkId)
+	if err != nil {
+		return nil, storeErr(err)
+	}
+	resp := &pb.GetShardPlacementsResponse{Placements: make([]*pb.ShardPlacementMsg, len(placements))}
+	for i, sp := range placements {
+		resp.Placements[i] = ShardPlacementToProto(sp)
+	}
+	return resp, nil
+}
+
+func (s *GRPCServer) DeleteShardPlacement(ctx context.Context, req *pb.DeleteShardPlacementRequest) (*emptypb.Empty, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("DeleteShardPlacement").Inc()
+	if err := s.store.DeleteShardPlacement(ctx, req.ChunkId, int(req.ShardIndex)); err != nil {
+		return nil, storeErr(err)
+	}
+	return &emptypb.Empty{}, nil
+}

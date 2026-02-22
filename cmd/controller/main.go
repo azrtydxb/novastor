@@ -16,6 +16,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlcfg "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	crzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -169,6 +170,7 @@ func main() {
 	var policyScanIntervalStr string
 	var policyRepairEnabled bool
 	var policyRepairConcurrency int
+	var cacheSyncTimeout time.Duration
 
 	// Handle subcommands before flag parsing.
 	if len(os.Args) > 1 && os.Args[1] == "tls-bootstrap" {
@@ -195,6 +197,7 @@ func main() {
 	flag.StringVar(&policyScanIntervalStr, "policy-scan-interval", "5m", "Interval between compliance scans.")
 	flag.BoolVar(&policyRepairEnabled, "policy-repair-enabled", true, "Enable automatic repair of non-compliant chunks.")
 	flag.IntVar(&policyRepairConcurrency, "policy-repair-concurrency", 4, "Maximum number of concurrent policy repair operations.")
+	flag.DurationVar(&cacheSyncTimeout, "cache-sync-timeout", 2*time.Minute, "Timeout for waiting for cache sync on startup.")
 
 	opts := crzap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -216,6 +219,9 @@ func main() {
 		HealthProbeBindAddress: healthProbeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "novastor-controller-leader-election",
+		Controller: ctrlcfg.Controller{
+			CacheSyncTimeout: cacheSyncTimeout,
+		},
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to create manager")

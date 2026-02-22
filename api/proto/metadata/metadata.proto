@@ -77,6 +77,11 @@ service MetadataService {
   rpc SetVolumeOwner(SetVolumeOwnerRequest)       returns (google.protobuf.Empty);
   rpc GetVolumeOwner(GetVolumeOwnerRequest)       returns (GetVolumeOwnerResponse);
   rpc RequestOwnership(RequestOwnershipRequest)   returns (RequestOwnershipResponse);
+
+  // ---- Shard placement operations (erasure coding) ----
+  rpc PutShardPlacement(PutShardPlacementRequest)       returns (google.protobuf.Empty);
+  rpc GetShardPlacements(GetShardPlacementsRequest)     returns (GetShardPlacementsResponse);
+  rpc DeleteShardPlacement(DeleteShardPlacementRequest) returns (google.protobuf.Empty);
 }
 
 // ============================================================================
@@ -259,6 +264,14 @@ message VolumeOwnership {
   string owner_addr  = 2;
   int64  owner_since = 3;
   uint64 generation  = 4;
+}
+
+message ShardPlacementMsg {
+  string chunk_id      = 1;
+  string volume_id     = 2;
+  int32  shard_index   = 3;
+  string node_id       = 4;
+  int64  last_verified = 5;
 }
 
 // ============================================================================
@@ -564,6 +577,25 @@ message RequestOwnershipRequest {
 message RequestOwnershipResponse {
   bool   granted    = 1;
   uint64 generation = 2;
+}
+
+// ---- Shard placement (erasure coding) ----
+
+message PutShardPlacementRequest {
+  ShardPlacementMsg placement = 1;
+}
+
+message GetShardPlacementsRequest {
+  string chunk_id = 1;
+}
+
+message GetShardPlacementsResponse {
+  repeated ShardPlacementMsg placements = 1;
+}
+
+message DeleteShardPlacementRequest {
+  string chunk_id    = 1;
+  int32  shard_index = 2;
 }
 
 // ---- FSM internal serialization messages ----

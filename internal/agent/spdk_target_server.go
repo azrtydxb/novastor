@@ -69,17 +69,13 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	}
 
 	nqn := spdkNQNPrefix + volumeID
-	sizeMB := uint64(sizeBytes) / (1024 * 1024)
-	if sizeMB == 0 {
-		sizeMB = 1
-	}
 
 	// Create a logical volume in the SPDK data-plane.
-	lvolName, err := s.spdkClient.CreateLvol(spdkLvsName, volumeID, sizeMB)
+	lvolName, err := s.spdkClient.CreateLvol(spdkLvsName, volumeID, uint64(sizeBytes))
 	if err != nil {
 		logging.L.Error("spdk target: failed to create lvol",
 			zap.String("volumeID", volumeID),
-			zap.Uint64("sizeMB", sizeMB),
+			zap.Int64("sizeBytes", sizeBytes),
 			zap.Error(err),
 		)
 		return nil, status.Errorf(codes.Internal, "creating SPDK lvol for volume %s: %v", volumeID, err)
@@ -88,7 +84,7 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	logging.L.Info("spdk target: lvol created",
 		zap.String("volumeID", volumeID),
 		zap.String("lvolName", lvolName),
-		zap.Uint64("sizeMB", sizeMB),
+		zap.Int64("sizeBytes", sizeBytes),
 	)
 
 	// Expose the lvol as an NVMe-oF/TCP target.
