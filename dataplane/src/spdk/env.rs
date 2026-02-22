@@ -1,7 +1,7 @@
 //! SPDK environment initialization and reactor management.
 
 use crate::config::DataPlaneConfig;
-use crate::error::{DataPlaneError, Result};
+use crate::error::Result;
 use log::info;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -12,6 +12,13 @@ mod ffi {
     include!(concat!(env!("OUT_DIR"), "/spdk_bindings.rs"));
 }
 
+/// Data passed to the SPDK startup callback via the arg pointer.
+#[cfg(feature = "spdk-sys")]
+struct SpdkStartupData {
+    rpc_socket: String,
+    listen_port: u16,
+}
+
 pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
     info!(
         "SPDK env init: reactor_mask={}, mem={}MB",
@@ -20,6 +27,8 @@ pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
 
     #[cfg(feature = "spdk-sys")]
     {
+        use crate::error::DataPlaneError;
+
         unsafe {
             let rust_size = std::mem::size_of::<ffi::spdk_app_opts>();
             info!("sizeof(spdk_app_opts) in Rust = {} bytes (C expects 253)", rust_size);
@@ -38,7 +47,17 @@ pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
             opts.hugedir = hugedir.as_ptr();
             opts.rpc_addr = std::ptr::null();
 
-            let rc = ffi::spdk_app_start(&mut opts, Some(spdk_startup_cb), std::ptr::null_mut());
+            // Package config for the startup callback.  The callback runs
+            // inside spdk_app_start *before* the reactor loop blocks, so the
+            // JSON-RPC server is guaranteed to be listening before any agent
+            // tries to connect.
+            let startup_data = Box::new(SpdkStartupData {
+                rpc_socket: config.rpc_socket.clone(),
+                listen_port: config.listen_port,
+            });
+            let arg = Box::into_raw(startup_data) as *mut std::os::raw::c_void;
+
+            let rc = ffi::spdk_app_start(&mut opts, Some(spdk_startup_cb), arg);
             if rc != 0 {
                 return Err(DataPlaneError::SpdkInit(format!(
                     "spdk_app_start failed with rc={}", rc
@@ -56,8 +75,37 @@ pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
 }
 
 #[cfg(feature = "spdk-sys")]
-unsafe extern "C" fn spdk_startup_cb(_arg: *mut std::os::raw::c_void) {
+unsafe extern "C" fn spdk_startup_cb(arg: *mut std::os::raw::c_void) {
+    use log::error;
+
     info!("SPDK startup callback: subsystems initialized");
+
+    // Recover the startup data passed through the arg pointer.
+    let data = Box::from_raw(arg as *mut SpdkStartupData);
+
+    // Initialise managers and register RPC methods.
+    let bdev_mgr = crate::spdk::bdev_manager::BdevManager::new();
+    let nvmf_mgr = crate::spdk::nvmf_manager::NvmfManager::new(data.listen_port);
+    crate::jsonrpc::methods::init_managers(bdev_mgr, nvmf_mgr);
+
+    let mut router = crate::jsonrpc::server::Router::new();
+    crate::jsonrpc::methods::register_all(&mut router);
+    let router = Arc::new(router);
+
+    info!("starting JSON-RPC server on {}", data.rpc_socket);
+    match crate::jsonrpc::server::start_server(&data.rpc_socket, router) {
+        Ok(_handle) => {
+            // The JoinHandle is dropped here, which detaches the listener
+            // thread.  It will run for the lifetime of the process, which
+            // is controlled by the SPDK reactor loop.
+            info!("JSON-RPC server started successfully");
+        }
+        Err(e) => {
+            error!("failed to start JSON-RPC server: {}", e);
+            // Cannot operate without the RPC server — stop SPDK.
+            ffi::spdk_app_stop(-1);
+        }
+    }
 }
 
 pub fn run_reactor_loop() -> Result<()> {
