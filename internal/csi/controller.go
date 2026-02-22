@@ -92,9 +92,9 @@ type AgentTargetClient interface {
 // ControllerServer implements the CSI Controller service.
 type ControllerServer struct {
 	csi.UnimplementedControllerServer
-	meta        MetadataStore
-	nodeMeta    NodeMetaStore
-	placer      PlacementEngine
+	meta            MetadataStore
+	nodeMeta        NodeMetaStore
+	placer          PlacementEngine
 	agentTarget     AgentTargetClient
 	quota           QuotaChecker
 	chunkReplicator ChunkReplicator
