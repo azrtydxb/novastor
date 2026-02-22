@@ -62,7 +62,7 @@ func NewClient() (client.Client, error) {
 func TestControllerDeployment(t *testing.T) {
 	k8sClient, err := NewClient()
 	if err != nil {
-		t.Fatalf("failed to create k8s client: %v", err)
+		t.Skipf("skipping: no Kubernetes cluster available: %v", err)
 	}
 
 	ctx := context.Background()

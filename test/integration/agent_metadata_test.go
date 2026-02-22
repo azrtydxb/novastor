@@ -38,7 +38,7 @@ func setupMetadataService(t *testing.T) (*metadata.RaftStore, *metadata.GRPCClie
 	waitForLeader(t, store, 10*time.Second)
 
 	// Start gRPC metadata server.
-	metaLis, err := net.ListenConfig{}.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	metaLis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to listen for metadata server: %v", err)
 	}
