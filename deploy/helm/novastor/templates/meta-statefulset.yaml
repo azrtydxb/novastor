@@ -43,7 +43,7 @@ spec:
       {{- end }}
       containers:
         - name: meta
-          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.meta.image.repository }}:{{ include "novastor.imageTag" . }}"
+          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.meta.image.repository }}:{{ .Values.meta.image.tag | default (include "novastor.imageTag" .) }}"
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           args:
             - --node-id=$(POD_NAME)
@@ -58,6 +58,8 @@ spec:
             - --tls-ca={{ include "novastor.tls.caPath" . }}
             - --tls-cert={{ include "novastor.tls.serverCertPath" . }}
             - --tls-key={{ include "novastor.tls.serverKeyPath" . }}
+            - --tls-client-cert={{ include "novastor.tls.clientCertPath" . }}
+            - --tls-client-key={{ include "novastor.tls.clientKeyPath" . }}
             - --tls-rotation-interval={{ .Values.global.tls.rotationInterval }}
             {{- end }}
           env:

@@ -41,6 +41,8 @@ func main() {
 	tlsCA := flag.String("tls-ca", "", "Path to CA certificate for mTLS")
 	tlsCert := flag.String("tls-cert", "", "Path to server certificate for mTLS")
 	tlsKey := flag.String("tls-key", "", "Path to server key for mTLS")
+	tlsClientCert := flag.String("tls-client-cert", "", "Path to client certificate for mTLS (used for cluster join)")
+	tlsClientKey := flag.String("tls-client-key", "", "Path to client key for mTLS (used for cluster join)")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	grpcJoinAddr := flag.String("grpc-join", "", "gRPC address of existing cluster peer for join; defaults to --join host with port 7001")
 	gcInterval := flag.Duration("gc-interval", 1*time.Hour, "Interval between metadata garbage collection runs")
@@ -66,12 +68,14 @@ func main() {
 	metrics.Register()
 
 	// Build gRPC dial options for the join RPC (used when joining an existing cluster).
+	// Uses client cert/key (with ExtKeyUsageClientAuth) rather than server cert/key,
+	// because the peer's gRPC server enforces RequireAndVerifyClientCert.
 	var grpcDialOpts []grpc.DialOption
-	if *tlsCA != "" && *tlsCert != "" && *tlsKey != "" {
+	if *tlsCA != "" && *tlsClientCert != "" && *tlsClientKey != "" {
 		tlsDialOpt, tlsDialErr := transport.NewClientTLS(transport.TLSConfig{
 			CACertPath: *tlsCA,
-			CertPath:   *tlsCert,
-			KeyPath:    *tlsKey,
+			CertPath:   *tlsClientCert,
+			KeyPath:    *tlsClientKey,
 		})
 		if tlsDialErr != nil {
 			log.Fatalf("Failed to configure TLS for cluster join: %v", tlsDialErr)
