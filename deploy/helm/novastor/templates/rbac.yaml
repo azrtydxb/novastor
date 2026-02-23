@@ -13,6 +13,7 @@ rules:
       - blockvolumes
       - sharedfilesystems
       - objectstores
+      - storagequotas
     verbs: ["*"]
   - apiGroups: ["novastor.io"]
     resources:
@@ -20,7 +21,16 @@ rules:
       - blockvolumes/status
       - sharedfilesystems/status
       - objectstores/status
+      - storagequotas/status
     verbs: ["get", "patch", "update"]
+  - apiGroups: ["novastor.io"]
+    resources:
+      - storagepools/finalizers
+      - blockvolumes/finalizers
+      - sharedfilesystems/finalizers
+      - objectstores/finalizers
+      - storagequotas/finalizers
+    verbs: ["update"]
   # Core resources - read/write
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets"]

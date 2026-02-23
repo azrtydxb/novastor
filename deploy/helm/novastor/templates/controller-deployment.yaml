@@ -52,6 +52,11 @@ spec:
             {{- if .Values.controller.leaderElect }}
             - --leader-elect
             {{- end }}
+            {{- if include "novastor.tls.enabled" . }}
+            - --tls-ca={{ include "novastor.tls.caPath" . }}
+            - --tls-cert={{ include "novastor.tls.clientCertPath" . }}
+            - --tls-key={{ include "novastor.tls.clientKeyPath" . }}
+            {{- end }}
           ports:
             - name: metrics
               containerPort: 8080
