@@ -13,6 +13,8 @@ import (
 
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/piwi3910/novastor/api/proto/metadata"
@@ -86,6 +88,9 @@ type RaftConfig struct {
 	// Backend selects the FSM storage backend. Valid values are "memory" and
 	// "badger". When empty, defaults to "badger" for persistent storage.
 	Backend string
+	// GRPCDialOpts are gRPC dial options for connecting to peers during join.
+	// When nil, insecure credentials are used.
+	GRPCDialOpts []grpc.DialOption
 }
 
 // NewRaftStore creates a Raft-backed metadata store.
@@ -209,7 +214,7 @@ func NewRaftStore(cfg RaftConfig) (*RaftStore, error) {
 	if cfg.BootstrapExpect > 0 {
 		maxJoinAttempts = 5 // Reduced: will fall back to bootstrap.
 	}
-	if err := store.joinCluster(cfg.NodeID, ownAddr, filteredPeers, maxJoinAttempts); err != nil {
+	if err := store.joinCluster(cfg.NodeID, ownAddr, filteredPeers, cfg.GRPCDialOpts, maxJoinAttempts); err != nil {
 		if cfg.BootstrapExpect > 0 {
 			bootstrapCfg := raft.Configuration{
 				Servers: []raft.Server{
@@ -231,41 +236,86 @@ func NewRaftStore(cfg RaftConfig) (*RaftStore, error) {
 }
 
 // joinCluster attempts to add this node as a voter to an existing Raft cluster
-// by contacting each of the provided peer addresses in turn.  It retries with
-// a small back-off to tolerate a brief window where no leader is available
-// (e.g. immediately after all peers start simultaneously).
-func (s *RaftStore) joinCluster(nodeID, raftAddr string, peers []string, maxAttempts int) error {
+// by calling the JoinCluster gRPC RPC on each peer.  Only the Raft leader can
+// execute AddVoter, so the joining node must ask a remote peer (the leader) to
+// add it.  It retries with a small back-off to tolerate a brief window where
+// no leader is available (e.g. immediately after all peers start simultaneously).
+func (s *RaftStore) joinCluster(nodeID, raftAddr string, peers []string, grpcDialOpts []grpc.DialOption, maxAttempts int) error {
 	const retryDelay = 2 * time.Second
 
+	// Convert Raft peer addresses (port 7000) to gRPC addresses (port 7001).
+	grpcPeers := make([]string, 0, len(peers))
+	for _, p := range peers {
+		host, _, err := net.SplitHostPort(p)
+		if err != nil {
+			// If the address doesn't have a port, skip it.
+			continue
+		}
+		grpcPeers = append(grpcPeers, net.JoinHostPort(host, "7001"))
+	}
+
+	if len(grpcDialOpts) == 0 {
+		grpcDialOpts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	}
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// Check if we might already be a member of the cluster.
-		configFuture := s.raft.GetConfiguration()
-		if err := configFuture.Error(); err == nil {
-			for _, srv := range configFuture.Configuration().Servers {
-				if string(srv.ID) == nodeID {
-					// Already a member – nothing more to do.
+		for _, addr := range grpcPeers {
+			conn, err := grpc.NewClient(addr, grpcDialOpts...)
+			if err != nil {
+				continue
+			}
+			client := pb.NewMetadataServiceClient(conn)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			resp, err := client.JoinCluster(ctx, &pb.JoinClusterRequest{
+				NodeId:      nodeID,
+				RaftAddress: raftAddr,
+			})
+			cancel()
+			conn.Close()
+
+			if err != nil {
+				continue
+			}
+			if resp.Success {
+				return nil
+			}
+			// If the peer returned a leader address, try it directly.
+			if resp.LeaderAddr != "" {
+				if leaderResp := s.tryJoinViaLeader(resp.LeaderAddr, nodeID, raftAddr, grpcDialOpts); leaderResp {
 					return nil
 				}
 			}
 		}
-
-		// Attempt to add this node as a voter.  AddVoter must be called on the
-		// leader; if this node is not yet the leader the future will return
-		// ErrNotLeader and we retry after a delay.
-		addFuture := s.raft.AddVoter(
-			raft.ServerID(nodeID),
-			raft.ServerAddress(raftAddr),
-			0, // prevIndex: 0 means append unconditionally
-			5*time.Second,
-		)
-		if err := addFuture.Error(); err == nil {
-			return nil
-		}
-
 		time.Sleep(retryDelay)
 	}
 
 	return fmt.Errorf("failed to join cluster after %d attempts via peers %v", maxAttempts, peers)
+}
+
+// tryJoinViaLeader dials the leader's gRPC address directly and attempts JoinCluster.
+func (s *RaftStore) tryJoinViaLeader(leaderRaftAddr, nodeID, raftAddr string, grpcDialOpts []grpc.DialOption) bool {
+	// Convert the Raft leader address to gRPC port.
+	host, _, err := net.SplitHostPort(leaderRaftAddr)
+	if err != nil {
+		return false
+	}
+	leaderGRPC := net.JoinHostPort(host, "7001")
+
+	conn, err := grpc.NewClient(leaderGRPC, grpcDialOpts...)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
+	client := pb.NewMetadataServiceClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := client.JoinCluster(ctx, &pb.JoinClusterRequest{
+		NodeId:      nodeID,
+		RaftAddress: raftAddr,
+	})
+	return err == nil && resp.Success
 }
 
 // IsLeader returns true if this node is the Raft leader.

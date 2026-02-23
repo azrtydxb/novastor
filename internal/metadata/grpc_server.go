@@ -3,6 +3,9 @@ package metadata
 import (
 	"context"
 	"errors"
+	"time"
+
+	"github.com/hashicorp/raft"
 
 	pb "github.com/piwi3910/novastor/api/proto/metadata"
 	"github.com/piwi3910/novastor/internal/metrics"
@@ -570,4 +573,49 @@ func (s *GRPCServer) DeleteShardPlacement(ctx context.Context, req *pb.DeleteSha
 		return nil, storeErr(err)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+// ---- Cluster management operations ----
+
+func (s *GRPCServer) JoinCluster(_ context.Context, req *pb.JoinClusterRequest) (*pb.JoinClusterResponse, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("JoinCluster").Inc()
+	if req.NodeId == "" || req.RaftAddress == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id and raft_address required")
+	}
+
+	// Check if the node is already a cluster member.
+	configFuture := s.store.raft.GetConfiguration()
+	if err := configFuture.Error(); err == nil {
+		for _, srv := range configFuture.Configuration().Servers {
+			if string(srv.ID) == req.NodeId {
+				return &pb.JoinClusterResponse{Success: true}, nil
+			}
+		}
+	}
+
+	// If this node is not the Raft leader, return the leader address so
+	// the caller can retry against the actual leader.
+	if s.store.raft.State() != raft.Leader {
+		leaderAddr, _ := s.store.raft.LeaderWithID()
+		return &pb.JoinClusterResponse{
+			Success:      false,
+			ErrorMessage: "not leader",
+			LeaderAddr:   string(leaderAddr),
+		}, nil
+	}
+
+	// We are the leader — add the requesting node as a voter.
+	future := s.store.raft.AddVoter(
+		raft.ServerID(req.NodeId),
+		raft.ServerAddress(req.RaftAddress),
+		0,
+		10*time.Second,
+	)
+	resp := &pb.JoinClusterResponse{Success: true}
+	if futureErr := future.Error(); futureErr != nil {
+		resp.Success = false
+		resp.ErrorMessage = futureErr.Error()
+	}
+
+	return resp, nil
 }

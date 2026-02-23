@@ -53,6 +53,7 @@ spec:
             - --metrics-addr=0.0.0.0:7002
             - --bootstrap-expect={{ .Values.meta.replicas }}
             - --join={{ include "novastor.fullname" . }}-meta-0.{{ include "novastor.fullname" . }}-meta-headless.{{ .Release.Namespace }}.svc.cluster.local:7000
+            - --grpc-join={{ include "novastor.fullname" . }}-meta-0.{{ include "novastor.fullname" . }}-meta-headless.{{ .Release.Namespace }}.svc.cluster.local:7001
             {{- if include "novastor.tls.enabled" . }}
             - --tls-ca={{ include "novastor.tls.caPath" . }}
             - --tls-cert={{ include "novastor.tls.serverCertPath" . }}

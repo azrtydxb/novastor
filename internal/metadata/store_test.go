@@ -310,6 +310,33 @@ func TestRaftStore_AllocateIno(t *testing.T) {
 	}
 }
 
+func TestSplitAndTrim(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"", nil},
+		{"a:7000", []string{"a:7000"}},
+		{"a:7000, b:7000 , c:7000", []string{"a:7000", "b:7000", "c:7000"}},
+		{" , , ", nil},
+	}
+	for _, tt := range tests {
+		got := splitAndTrim(tt.input)
+		if len(got) == 0 && len(tt.want) == 0 {
+			continue
+		}
+		if len(got) != len(tt.want) {
+			t.Errorf("splitAndTrim(%q) = %v, want %v", tt.input, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("splitAndTrim(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
 func TestRaftStore_AllocateIno_UniqueUnderConcurrency(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()

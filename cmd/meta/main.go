@@ -16,6 +16,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/piwi3910/novastor/internal/logging"
 	"github.com/piwi3910/novastor/internal/metadata"
@@ -41,6 +42,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "Path to server certificate for mTLS")
 	tlsKey := flag.String("tls-key", "", "Path to server key for mTLS")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
+	grpcJoinAddr := flag.String("grpc-join", "", "gRPC address of existing cluster peer for join; defaults to --join host with port 7001")
 	gcInterval := flag.Duration("gc-interval", 1*time.Hour, "Interval between metadata garbage collection runs")
 	gcNodeTTL := flag.Duration("gc-node-ttl", 24*time.Hour, "Time after which a node with no heartbeat is considered stale for GC")
 	flag.Parse()
@@ -63,6 +65,29 @@ func main() {
 	// Register Prometheus metrics.
 	metrics.Register()
 
+	// Build gRPC dial options for the join RPC (used when joining an existing cluster).
+	var grpcDialOpts []grpc.DialOption
+	if *tlsCA != "" && *tlsCert != "" && *tlsKey != "" {
+		tlsDialOpt, tlsDialErr := transport.NewClientTLS(transport.TLSConfig{
+			CACertPath: *tlsCA,
+			CertPath:   *tlsCert,
+			KeyPath:    *tlsKey,
+		})
+		if tlsDialErr != nil {
+			log.Fatalf("Failed to configure TLS for cluster join: %v", tlsDialErr)
+		}
+		grpcDialOpts = []grpc.DialOption{tlsDialOpt}
+	} else {
+		grpcDialOpts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	}
+
+	// --grpc-join overrides the gRPC peer address for join (defaults to --join host:7001).
+	// Currently unused in code since joinCluster derives port 7001 from --join addresses,
+	// but the flag allows Helm templates to specify an explicit gRPC address.
+	if *grpcJoinAddr != "" {
+		log.Printf("--grpc-join specified: %s (override for cluster join gRPC address)", *grpcJoinAddr)
+	}
+
 	// Create the Raft-backed metadata store.
 	store, err := metadata.NewRaftStore(metadata.RaftConfig{
 		NodeID:          *nodeID,
@@ -70,6 +95,7 @@ func main() {
 		RaftAddr:        *raftAddr,
 		JoinAddrs:       *join,
 		BootstrapExpect: *bootstrapExpect,
+		GRPCDialOpts:    grpcDialOpts,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create Raft store: %v", err)

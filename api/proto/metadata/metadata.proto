@@ -82,6 +82,9 @@ service MetadataService {
   rpc PutShardPlacement(PutShardPlacementRequest)       returns (google.protobuf.Empty);
   rpc GetShardPlacements(GetShardPlacementsRequest)     returns (GetShardPlacementsResponse);
   rpc DeleteShardPlacement(DeleteShardPlacementRequest) returns (google.protobuf.Empty);
+
+  // ---- Cluster management ----
+  rpc JoinCluster(JoinClusterRequest) returns (JoinClusterResponse);
 }
 
 // ============================================================================
@@ -596,6 +599,19 @@ message GetShardPlacementsResponse {
 message DeleteShardPlacementRequest {
   string chunk_id    = 1;
   int32  shard_index = 2;
+}
+
+// ---- Cluster management ----
+
+message JoinClusterRequest {
+  string node_id      = 1;
+  string raft_address = 2;
+}
+
+message JoinClusterResponse {
+  bool   success       = 1;
+  string error_message = 2;
+  string leader_addr   = 3;  // If not leader, return the leader address for retry
 }
 
 // ---- FSM internal serialization messages ----

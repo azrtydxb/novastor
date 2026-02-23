@@ -7,6 +7,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	pb "github.com/piwi3910/novastor/api/proto/metadata"
 )
 
 // setupGRPCTest spins up a single-node RaftStore, wraps it in a
@@ -339,5 +341,120 @@ func TestGRPC_DirEntry_RoundTrip(t *testing.T) {
 	}
 	if len(listAfter) != 2 {
 		t.Errorf("expected 2 entries after delete, got %d", len(listAfter))
+	}
+}
+
+// setupGRPCTestRaw spins up a single-node RaftStore with a gRPC server and
+// returns a raw proto client (not the wrapper) for testing cluster management RPCs.
+func setupGRPCTestRaw(t *testing.T) (pb.MetadataServiceClient, func()) {
+	t.Helper()
+
+	store, storeCleanup := setupTestStore(t)
+
+	srv := grpc.NewServer()
+	NewGRPCServer(store).Register(srv)
+
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		storeCleanup()
+		t.Fatalf("listen: %v", err)
+	}
+
+	go func() { _ = srv.Serve(lis) }()
+
+	conn, err := grpc.NewClient(
+		lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		srv.Stop()
+		storeCleanup()
+		t.Fatalf("dial: %v", err)
+	}
+
+	client := pb.NewMetadataServiceClient(conn)
+
+	cleanup := func() {
+		conn.Close()
+		srv.Stop()
+		storeCleanup()
+	}
+	return client, cleanup
+}
+
+func TestGRPC_JoinCluster_OnLeader(t *testing.T) {
+	client, cleanup := setupGRPCTestRaw(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Request to join a new node. The test store is a single-node leader,
+	// so AddVoter should succeed.
+	resp, err := client.JoinCluster(ctx, &pb.JoinClusterRequest{
+		NodeId:      "new-node",
+		RaftAddress: "127.0.0.1:9999",
+	})
+	if err != nil {
+		t.Fatalf("JoinCluster: %v", err)
+	}
+	if !resp.Success {
+		t.Errorf("expected success, got error: %s", resp.ErrorMessage)
+	}
+}
+
+func TestGRPC_JoinCluster_AlreadyMember(t *testing.T) {
+	client, cleanup := setupGRPCTestRaw(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// First join.
+	resp, err := client.JoinCluster(ctx, &pb.JoinClusterRequest{
+		NodeId:      "repeat-node",
+		RaftAddress: "127.0.0.1:9998",
+	})
+	if err != nil {
+		t.Fatalf("JoinCluster first: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("expected first join to succeed: %s", resp.ErrorMessage)
+	}
+
+	// Second join with same node ID should be idempotent.
+	resp2, err := client.JoinCluster(ctx, &pb.JoinClusterRequest{
+		NodeId:      "repeat-node",
+		RaftAddress: "127.0.0.1:9998",
+	})
+	if err != nil {
+		t.Fatalf("JoinCluster second: %v", err)
+	}
+	if !resp2.Success {
+		t.Errorf("expected idempotent success, got error: %s", resp2.ErrorMessage)
+	}
+}
+
+func TestGRPC_JoinCluster_InvalidArgument(t *testing.T) {
+	client, cleanup := setupGRPCTestRaw(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Empty node_id should return an error.
+	_, err := client.JoinCluster(ctx, &pb.JoinClusterRequest{
+		NodeId:      "",
+		RaftAddress: "127.0.0.1:9999",
+	})
+	if err == nil {
+		t.Error("expected error for empty node_id")
+	}
+
+	// Empty raft_address should return an error.
+	_, err = client.JoinCluster(ctx, &pb.JoinClusterRequest{
+		NodeId:      "node",
+		RaftAddress: "",
+	})
+	if err == nil {
+		t.Error("expected error for empty raft_address")
 	}
 }

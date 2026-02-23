@@ -69,6 +69,7 @@ const (
 	MetadataService_PutShardPlacement_FullMethodName     = "/metadata.MetadataService/PutShardPlacement"
 	MetadataService_GetShardPlacements_FullMethodName    = "/metadata.MetadataService/GetShardPlacements"
 	MetadataService_DeleteShardPlacement_FullMethodName  = "/metadata.MetadataService/DeleteShardPlacement"
+	MetadataService_JoinCluster_FullMethodName           = "/metadata.MetadataService/JoinCluster"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -139,6 +140,8 @@ type MetadataServiceClient interface {
 	PutShardPlacement(ctx context.Context, in *PutShardPlacementRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetShardPlacements(ctx context.Context, in *GetShardPlacementsRequest, opts ...grpc.CallOption) (*GetShardPlacementsResponse, error)
 	DeleteShardPlacement(ctx context.Context, in *DeleteShardPlacementRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// ---- Cluster management ----
+	JoinCluster(ctx context.Context, in *JoinClusterRequest, opts ...grpc.CallOption) (*JoinClusterResponse, error)
 }
 
 type metadataServiceClient struct {
@@ -639,6 +642,16 @@ func (c *metadataServiceClient) DeleteShardPlacement(ctx context.Context, in *De
 	return out, nil
 }
 
+func (c *metadataServiceClient) JoinCluster(ctx context.Context, in *JoinClusterRequest, opts ...grpc.CallOption) (*JoinClusterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(JoinClusterResponse)
+	err := c.cc.Invoke(ctx, MetadataService_JoinCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetadataServiceServer is the server API for MetadataService service.
 // All implementations must embed UnimplementedMetadataServiceServer
 // for forward compatibility.
@@ -707,6 +720,8 @@ type MetadataServiceServer interface {
 	PutShardPlacement(context.Context, *PutShardPlacementRequest) (*emptypb.Empty, error)
 	GetShardPlacements(context.Context, *GetShardPlacementsRequest) (*GetShardPlacementsResponse, error)
 	DeleteShardPlacement(context.Context, *DeleteShardPlacementRequest) (*emptypb.Empty, error)
+	// ---- Cluster management ----
+	JoinCluster(context.Context, *JoinClusterRequest) (*JoinClusterResponse, error)
 	mustEmbedUnimplementedMetadataServiceServer()
 }
 
@@ -863,6 +878,9 @@ func (UnimplementedMetadataServiceServer) GetShardPlacements(context.Context, *G
 }
 func (UnimplementedMetadataServiceServer) DeleteShardPlacement(context.Context, *DeleteShardPlacementRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteShardPlacement not implemented")
+}
+func (UnimplementedMetadataServiceServer) JoinCluster(context.Context, *JoinClusterRequest) (*JoinClusterResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method JoinCluster not implemented")
 }
 func (UnimplementedMetadataServiceServer) mustEmbedUnimplementedMetadataServiceServer() {}
 func (UnimplementedMetadataServiceServer) testEmbeddedByValue()                         {}
@@ -1767,6 +1785,24 @@ func _MetadataService_DeleteShardPlacement_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_JoinCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(JoinClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).JoinCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_JoinCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).JoinCluster(ctx, req.(*JoinClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetadataService_ServiceDesc is the grpc.ServiceDesc for MetadataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1969,6 +2005,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteShardPlacement",
 			Handler:    _MetadataService_DeleteShardPlacement_Handler,
+		},
+		{
+			MethodName: "JoinCluster",
+			Handler:    _MetadataService_JoinCluster_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
