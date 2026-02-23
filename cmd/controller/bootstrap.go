@@ -71,11 +71,11 @@ func runTLSBootstrap() error {
 		return fmt.Errorf("generating CA: %w", err)
 	}
 
-	// Generate server certificate.
+	// Generate server certificate with SANs matching the deployment namespace.
 	serverCertPEM, serverKeyPEM, err := transport.GenerateCert(caCertPEM, caKeyPEM, "novastor-server", true, []string{
 		"localhost",
-		"*.novastor.svc",
-		"*.novastor.svc.cluster.local",
+		fmt.Sprintf("*.%s.svc", *namespace),
+		fmt.Sprintf("*.%s.svc.cluster.local", *namespace),
 	})
 	if err != nil {
 		return fmt.Errorf("generating server cert: %w", err)

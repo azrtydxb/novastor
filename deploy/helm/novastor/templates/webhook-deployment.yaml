@@ -29,8 +29,8 @@ spec:
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.scheduler.webhook.image.repository }}:{{ include "novastor.imageTag" . }}"
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           args:
-            - --tls-cert=/etc/webhook-cert/tls.crt
-            - --tls-key=/etc/webhook-cert/tls.key
+            - --tls-cert=/etc/webhook-cert/cert
+            - --tls-key=/etc/webhook-cert/key
             - --port=9443
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
