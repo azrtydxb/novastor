@@ -80,6 +80,9 @@ func runTLSBootstrap() error {
 		"localhost",
 		fmt.Sprintf("*.%s.svc", *namespace),
 		fmt.Sprintf("*.%s.svc.cluster.local", *namespace),
+		// Headless StatefulSet DNS: pod-name.svc-headless.namespace.svc.cluster.local
+		// Wildcard certs only match one level, so we need explicit headless wildcards.
+		fmt.Sprintf("*.%s-meta-headless.%s.svc.cluster.local", releaseName, *namespace),
 		// Short service names for same-namespace resolution
 		releaseName + "-meta",
 		releaseName + "-agent",

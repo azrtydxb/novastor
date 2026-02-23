@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -258,10 +259,13 @@ func (s *RaftStore) joinCluster(nodeID, raftAddr string, peers []string, grpcDia
 		grpcDialOpts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	}
 
+	log.Printf("joinCluster: node %s attempting to join via gRPC peers %v", nodeID, grpcPeers)
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		for _, addr := range grpcPeers {
 			conn, err := grpc.NewClient(addr, grpcDialOpts...)
 			if err != nil {
+				log.Printf("joinCluster: attempt %d: dial %s failed: %v", attempt, addr, err)
 				continue
 			}
 			client := pb.NewMetadataServiceClient(conn)
@@ -274,12 +278,16 @@ func (s *RaftStore) joinCluster(nodeID, raftAddr string, peers []string, grpcDia
 			conn.Close()
 
 			if err != nil {
+				log.Printf("joinCluster: attempt %d: JoinCluster RPC to %s failed: %v", attempt, addr, err)
 				continue
 			}
 			if resp.Success {
+				log.Printf("joinCluster: successfully joined cluster via %s", addr)
 				return nil
 			}
 			// If the peer returned a leader address, try it directly.
+			log.Printf("joinCluster: attempt %d: peer %s returned: success=%v error=%q leader=%q",
+				attempt, addr, resp.Success, resp.ErrorMessage, resp.LeaderAddr)
 			if resp.LeaderAddr != "" {
 				if leaderResp := s.tryJoinViaLeader(resp.LeaderAddr, nodeID, raftAddr, grpcDialOpts); leaderResp {
 					return nil
@@ -289,7 +297,7 @@ func (s *RaftStore) joinCluster(nodeID, raftAddr string, peers []string, grpcDia
 		time.Sleep(retryDelay)
 	}
 
-	return fmt.Errorf("failed to join cluster after %d attempts via peers %v", maxAttempts, peers)
+	return fmt.Errorf("failed to join cluster after %d attempts via gRPC peers %v", maxAttempts, grpcPeers)
 }
 
 // tryJoinViaLeader dials the leader's gRPC address directly and attempts JoinCluster.
