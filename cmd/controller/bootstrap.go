@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -72,10 +73,21 @@ func runTLSBootstrap() error {
 	}
 
 	// Generate server certificate with SANs matching the deployment namespace.
+	// Include wildcard patterns for FQDN resolution (*.novastor-system.svc)
+	// and explicit short names for same-namespace resolution.
+	releaseName := strings.TrimSuffix(*secretName, "-tls-certs")
 	serverCertPEM, serverKeyPEM, err := transport.GenerateCert(caCertPEM, caKeyPEM, "novastor-server", true, []string{
 		"localhost",
 		fmt.Sprintf("*.%s.svc", *namespace),
 		fmt.Sprintf("*.%s.svc.cluster.local", *namespace),
+		// Short service names for same-namespace resolution
+		releaseName + "-meta",
+		releaseName + "-agent",
+		releaseName + "-controller",
+		releaseName + "-csi-controller",
+		releaseName + "-s3gw",
+		releaseName + "-filer",
+		releaseName + "-webhook",
 	})
 	if err != nil {
 		return fmt.Errorf("generating server cert: %w", err)
