@@ -59,7 +59,11 @@ spec:
             - --node-id=$(NODE_NAME)
             - --node-zone=$(NODE_ZONE)
             - --node-region=$(NODE_REGION)
-            - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+            - --meta-addr={{ include "novastor.fullname" . }}-meta-headless.{{ .Release.Namespace }}.svc.cluster.local:7001
+            {{- if .Values.dataplane.enabled }}
+            - --data-plane=spdk
+            - --spdk-socket=/var/tmp/novastor-spdk.sock
+            {{- end }}
             {{- if include "novastor.tls.enabled" . }}
             - --tls-ca={{ include "novastor.tls.caPath" . }}
             - --tls-cert={{ include "novastor.tls.clientCertPath" . }}
@@ -107,6 +111,10 @@ spec:
               mountPath: /dev
             - name: sys
               mountPath: /sys
+            {{- if .Values.dataplane.enabled }}
+            - name: spdk-socket
+              mountPath: /var/tmp
+            {{- end }}
             {{- if include "novastor.tls.enabled" . }}
             - name: tls-certs
               mountPath: {{ include "novastor.tls.mountPath" . }}
@@ -150,6 +158,12 @@ spec:
           hostPath:
             path: /lib/modules
             type: Directory
+        {{- if .Values.dataplane.enabled }}
+        - name: spdk-socket
+          hostPath:
+            path: /var/tmp
+            type: DirectoryOrCreate
+        {{- end }}
         {{- if include "novastor.tls.enabled" . }}
         - name: tls-certs
           secret:

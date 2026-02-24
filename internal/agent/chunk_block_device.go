@@ -9,9 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/piwi3910/novastor/internal/chunk"
 	"github.com/piwi3910/novastor/internal/logging"
@@ -214,9 +217,21 @@ func (cbd *ChunkBlockDevice) Verify(ctx context.Context) error {
 // This is used during volume provisioning when the volume has just been
 // created and chunks don't exist yet.
 func (cbd *ChunkBlockDevice) EnsureChunks(ctx context.Context) error {
-	volMeta, err := cbd.metaClient.GetVolumeMeta(ctx, cbd.volumeID)
-	if err != nil {
-		return fmt.Errorf("getting volume metadata: %w", err)
+	// Retry GetVolumeMeta with back-off because the volume metadata may
+	// have just been written to the Raft leader and followers haven't
+	// applied the log entry to their FSM yet. With round-robin load
+	// balancing a read can land on a stale follower, returning NotFound.
+	var volMeta *metadata.VolumeMeta
+	for attempt := 0; attempt < 10; attempt++ {
+		var err error
+		volMeta, err = cbd.metaClient.GetVolumeMeta(ctx, cbd.volumeID)
+		if err == nil {
+			break
+		}
+		if status.Code(err) != codes.NotFound || attempt == 9 {
+			return fmt.Errorf("getting volume metadata: %w", err)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	emptyBlock := make([]byte, chunkBlockSize)

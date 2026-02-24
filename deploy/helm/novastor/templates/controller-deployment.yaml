@@ -45,7 +45,7 @@ spec:
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.controller.image.repository }}:{{ include "novastor.imageTag" . }}"
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           args:
-            - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+            - --meta-addr={{ include "novastor.fullname" . }}-meta-headless.{{ .Release.Namespace }}.svc.cluster.local:7001
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
             - --cache-sync-timeout=2m

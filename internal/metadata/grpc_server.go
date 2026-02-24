@@ -42,6 +42,9 @@ func storeErr(err error) error {
 	if errors.Is(err, ErrBucketNotFound) {
 		return status.Error(codes.NotFound, err.Error())
 	}
+	if errors.Is(err, raft.ErrNotLeader) {
+		return status.Error(codes.Unavailable, err.Error())
+	}
 	return status.Error(codes.Internal, err.Error())
 }
 

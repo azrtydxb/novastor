@@ -47,7 +47,7 @@ spec:
           args:
             - -nfs-listen=:2049
             - -metrics-addr=:8080
-            - -meta-addr={{ include "novastor.fullname" . }}-meta:7001
+            - -meta-addr={{ include "novastor.fullname" . }}-meta-headless.{{ .Release.Namespace }}.svc.cluster.local:7001
             {{- if include "novastor.tls.enabled" . }}
             - -tls-ca={{ include "novastor.tls.caPath" . }}
             - -tls-cert={{ include "novastor.tls.clientCertPath" . }}

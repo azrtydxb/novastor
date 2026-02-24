@@ -63,7 +63,7 @@ spec:
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           args:
             - --listen=0.0.0.0:9100
-            - --meta-addr={{ include "novastor.fullname" . }}-meta:7000
+            - --meta-addr={{ include "novastor.fullname" . }}-meta-headless.{{ .Release.Namespace }}.svc.cluster.local:7001
             - --node-id=$(NODE_NAME)
             - --host-ip=$(HOST_IP)
             - --pod-ip=$(POD_IP)
