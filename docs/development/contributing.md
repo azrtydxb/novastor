@@ -49,7 +49,7 @@ go build -o bin/novastor-controller ./cmd/controller/
 make docker-build
 
 # Build a specific image
-docker build -t ghcr.io/piwi3910/novastor-agent:dev -f build/Dockerfile.agent .
+docker build -t ghcr.io/piwi3910/novastor/novastor-agent:dev -f build/Dockerfile.agent .
 ```
 
 ## Running Tests

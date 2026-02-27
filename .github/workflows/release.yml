@@ -107,7 +107,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/piwi3910/novastor-${{ matrix.component.name }}
+          images: ghcr.io/piwi3910/novastor/novastor-${{ matrix.component.name }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

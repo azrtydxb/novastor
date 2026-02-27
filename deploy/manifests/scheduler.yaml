@@ -97,7 +97,7 @@ spec:
       serviceAccountName: novastor-scheduler
       containers:
         - name: scheduler
-          image: ghcr.io/piwi3910/novastor-scheduler:latest
+          image: ghcr.io/piwi3910/novastor/novastor-scheduler:latest
           imagePullPolicy: IfNotPresent
           args:
             - --log-level=info
@@ -157,7 +157,7 @@ spec:
       serviceAccountName: novastor-scheduler
       containers:
         - name: scheduler
-          image: ghcr.io/piwi3910/novastor-scheduler:latest
+          image: ghcr.io/piwi3910/novastor/novastor-scheduler:latest
           imagePullPolicy: IfNotPresent
           args:
             - --log-level=info
