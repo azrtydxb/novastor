@@ -6,7 +6,7 @@ Complete reference for all NovaStor Helm chart values. The chart deploys all Nov
 
 | Parameter | Default | Description |
 |---|---|---|
-| `global.image.registry` | `ghcr.io/piwi3910` | Container image registry |
+| `global.image.registry` | `ghcr.io/piwi3910/novastor` | Container image registry |
 | `global.image.tag` | `0.1.0` | Image tag for all NovaStor components |
 | `global.image.pullPolicy` | `IfNotPresent` | Image pull policy |
 | `nameOverride` | `""` | Override the chart name |
@@ -35,9 +35,9 @@ The controller runs reconciliation loops for all NovaStor CRDs and manages autom
 | `controller.image.repository` | `novastor-controller` | Controller image name |
 | `controller.leaderElect` | `true` | Enable leader election for HA |
 | `controller.resources.requests.cpu` | `100m` | CPU request |
-| `controller.resources.requests.memory` | `128Mi` | Memory request |
+| `controller.resources.requests.memory` | `256Mi` | Memory request |
 | `controller.resources.limits.cpu` | `500m` | CPU limit |
-| `controller.resources.limits.memory` | `256Mi` | Memory limit |
+| `controller.resources.limits.memory` | `512Mi` | Memory limit |
 | `controller.nodeSelector` | `{}` | Node selector for controller pods |
 | `controller.tolerations` | `[]` | Tolerations for controller pods |
 | `controller.affinity` | `{}` | Affinity rules for controller pods |
@@ -184,6 +184,38 @@ When `storageClasses.enabled` is `true`, the chart creates three StorageClasses:
 | `monitoring.serviceMonitor.labels` | `{}` | Additional labels for ServiceMonitor (for Prometheus selector matching) |
 | `monitoring.serviceMonitor.interval` | `30s` | Prometheus scrape interval |
 | `monitoring.serviceMonitor.scrapeTimeout` | `10s` | Prometheus scrape timeout |
+
+## Global TLS
+
+| Parameter | Default | Description |
+|---|---|---|
+| `global.tls.enabled` | `false` | Enable mTLS between NovaStor components |
+| `global.tls.certManager` | `false` | Use cert-manager for certificate provisioning |
+| `global.tls.existingSecret` | `""` | Existing TLS secret name |
+
+## Agent Advanced Settings
+
+| Parameter | Default | Description |
+|---|---|---|
+| `agent.heartbeatInterval` | `500ms` | How often agents send heartbeats to the metadata service |
+| `agent.failover.enabled` | `true` | Enable ANA multipath failover |
+| `agent.failover.katoTimeout` | `200ms` | NVMe KATO timeout before kernel marks a path dead |
+
+## SPDK Data Plane
+
+| Parameter | Default | Description |
+|---|---|---|
+| `dataplane.enabled` | `false` | Enable SPDK data plane (required for ANA failover) |
+
+## Scheduler Webhook
+
+| Parameter | Default | Description |
+|---|---|---|
+| `scheduler.webhook.enabled` | `true` | Enable the webhook deployment |
+| `scheduler.webhook.replicas` | `2` | Number of webhook pods |
+| `scheduler.webhook.failurePolicy` | `Ignore` | Webhook failure policy (Ignore/Fail) |
+| `scheduler.webhook.timeoutSeconds` | `5` | Webhook admission timeout |
+| `scheduler.webhook.cert.existingSecret` | `""` | Existing secret with TLS cert/key |
 
 ## Common Configurations
 

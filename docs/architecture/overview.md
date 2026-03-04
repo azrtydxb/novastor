@@ -8,7 +8,7 @@ NovaStor is a unified Kubernetes-native storage system that provides **block**, 
 graph TB
     subgraph Access Layers
         CSI["CSI Driver<br/>(Block Storage)<br/>NVMe-oF / TCP"]
-        NFS["NFS Gateway<br/>(File Storage)<br/>NFS v4.1 / RWX"]
+        NFS["NFS Gateway<br/>(File Storage)<br/>NFS v3 / RWX"]
         S3["S3 Gateway<br/>(Object Storage)<br/>AWS SigV4"]
     end
 
@@ -109,7 +109,7 @@ sequenceDiagram
     NFS-->>Pod: file data
 ```
 
-The NFS Gateway translates POSIX filesystem operations into chunk reads and writes. Each file's inode metadata (stored in the Metadata Service) maps file offsets to chunk IDs. NFS v4.1 is served over TCP with full file locking support.
+The NFS Gateway translates POSIX filesystem operations into chunk reads and writes. Each file's inode metadata (stored in the Metadata Service) maps file offsets to chunk IDs. NFS v3 is served over TCP with full file locking support.
 
 ### Object Storage (S3)
 
@@ -209,7 +209,7 @@ NovaStor is fully Kubernetes-native:
 | Node Agent | DaemonSet | 9100 (gRPC), 9101 (metrics) | Chunk storage, disk management |
 | CSI Controller | Deployment (1 replica) | CSI socket | Volume lifecycle management |
 | CSI Node | DaemonSet | CSI socket | Volume mount/unmount |
-| NFS Gateway | Deployment | TCP (configurable) | NFS v4.1 file serving |
+| NFS Gateway | Deployment | TCP (configurable) | NFS v3 file serving |
 | S3 Gateway | Deployment (2 replicas) | 9000 (HTTP) | S3-compatible API |
 | Scheduler Webhook | Deployment (2 replicas) | 9443 (webhook), 8080 (metrics), 8081 (health) | Auto-injects NovaStor scheduler for pods using NovaStor PVCs |
 

@@ -7,7 +7,7 @@ This guide covers testing NovaStor at various levels.
 ```bash
 # Install dependencies
 go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.62.0
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1
 ```
 
 ## Unit Tests
@@ -52,7 +52,7 @@ The `test/e2e/validate-controller.sh` script validates the controller deployment
 
 This script validates:
 
-1. **CRD Installation**: Verifies all 4 CRDs are installed
+1. **CRD Installation**: Verifies all 5 CRDs are installed
 2. **Controller Deployment**: Checks controller pods are running
 3. **Leader Election**: Verifies HA with multiple replicas
 4. **StoragePool**: Creates a test pool and verifies node discovery

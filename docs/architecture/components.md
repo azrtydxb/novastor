@@ -241,8 +241,8 @@ The CSI driver implements the [Container Storage Interface](https://github.com/c
 | `CREATE_DELETE_VOLUME` | Supported |
 | `CREATE_DELETE_SNAPSHOT` | Supported |
 | `EXPAND_VOLUME` | Supported |
-| `PUBLISH_UNPUBLISH_VOLUME` | Not supported (handled at node level) |
-| `GET_CAPACITY` | Not supported |
+| `PUBLISH_UNPUBLISH_VOLUME` | Supported |
+| `GET_CAPACITY` | Supported |
 
 ### Node Capabilities
 
@@ -296,7 +296,7 @@ Device discovery polls `/sys/class/nvme/*/subsysnqn` to find the attached contro
 
 **Binary**: `novastor-filer` | **Package**: `internal/filer/` | **K8s Resource**: Deployment
 
-The File Gateway provides shared filesystem access via NFS v4.1, enabling ReadWriteMany (RWX) persistent volumes.
+The File Gateway provides shared filesystem access via NFS v3, enabling ReadWriteMany (RWX) persistent volumes.
 
 ### Supported Operations
 
@@ -317,7 +317,7 @@ The File Gateway provides shared filesystem access via NFS v4.1, enabling ReadWr
 
 ### Architecture
 
-The NFS Server accepts TCP connections and processes requests using a JSON-RPC protocol. Each connection is handled in its own goroutine. The server includes a `LockManager` for NFS file locking semantics.
+The NFS Server accepts TCP connections and processes requests using the ONC RPC (Sun RPC) protocol with XDR encoding. Each connection is handled in its own goroutine. The server includes a `LockManager` for NFS file locking semantics.
 
 ### Configuration
 

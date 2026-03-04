@@ -24,26 +24,26 @@ This document audits NovaStor's NFS gateway implementation against the NFS proto
 
 | Procedure | Status | Notes |
 |-----------|--------|-------|
-| GETATTR | ✅ Implemented | `internal/filer/nfs.go:GetAttr()` |
-| SETATTR | ✅ Implemented | `internal/filer/nfs.go:SetAttr()` |
-| LOOKUP | ✅ Implemented | `internal/filer/nfs.go:Lookup()` |
-| ACCESS | ✅ Implemented | `internal/filer/nfs.go:Access()` |
-| READ | ✅ Implemented | `internal/filer/nfs.go:Read()` |
-| WRITE | ✅ Implemented | `internal/filer/nfs.go:Write()` |
-| CREATE | ✅ Implemented | `internal/filer/nfs.go:Create()` |
-| MKDIR | ✅ Implemented | `internal/filer/nfs.go:Mkdir()` |
-| SYMLINK | ✅ Implemented | `internal/filer/nfs.go:Symlink()` |
-| MKNOD | ✅ Implemented | `internal/filer/nfs.go:Mknode()` |
-| REMOVE | ✅ Implemented | `internal/filer/nfs.go:Remove()` |
-| RMDIR | ✅ Implemented | `internal/filer/nfs.go:Rmdir()` |
-| RENAME | ✅ Implemented | `internal/filer/nfs.go:Rename()` |
-| LINK | ✅ Implemented | `internal/filer/nfs.go:Link()` |
-| READDIR | ✅ Implemented | `internal/filer/nfs.go:ReadDir()` |
-| READDIRPLUS | ✅ Implemented | `internal/filer/nfs.go:ReadDirPlus()` |
-| FSSTAT | ✅ Implemented | `internal/filer/nfs.go:FsStat()` |
-| FSINFO | ✅ Implemented | `internal/filer/nfs.go:FsInfo()` |
-| PATHCONF | ✅ Implemented | `internal/filer/nfs.go:PathConf()` |
-| COMMIT | ✅ Implemented | `internal/filer/nfs.go:Commit()` |
+| GETATTR | ✅ Implemented | `internal/filer/nfs_v3.go:GetAttr()` |
+| SETATTR | ✅ Implemented | `internal/filer/nfs_v3.go:SetAttr()` |
+| LOOKUP | ✅ Implemented | `internal/filer/nfs_v3.go:Lookup()` |
+| ACCESS | ✅ Implemented | `internal/filer/nfs_v3.go:Access()` |
+| READ | ✅ Implemented | `internal/filer/nfs_v3.go:Read()` |
+| WRITE | ✅ Implemented | `internal/filer/nfs_v3.go:Write()` |
+| CREATE | ✅ Implemented | `internal/filer/nfs_v3.go:Create()` |
+| MKDIR | ✅ Implemented | `internal/filer/nfs_v3.go:Mkdir()` |
+| SYMLINK | ✅ Implemented | `internal/filer/nfs_v3.go:Symlink()` |
+| MKNOD | ✅ Implemented | `internal/filer/nfs_v3.go:handleMknod()` |
+| REMOVE | ✅ Implemented | `internal/filer/nfs_v3.go:Remove()` |
+| RMDIR | ✅ Implemented | `internal/filer/nfs_v3.go:Rmdir()` |
+| RENAME | ✅ Implemented | `internal/filer/nfs_v3.go:Rename()` |
+| LINK | ✅ Implemented | `internal/filer/nfs_v3.go:Link()` |
+| READDIR | ✅ Implemented | `internal/filer/nfs_v3.go:ReadDir()` |
+| READDIRPLUS | ✅ Implemented | `internal/filer/nfs_v3.go:ReadDirPlus()` |
+| FSSTAT | ✅ Implemented | `internal/filer/nfs_v3.go:FsStat()` |
+| FSINFO | ✅ Implemented | `internal/filer/nfs_v3.go:FsInfo()` |
+| PATHCONF | ✅ Implemented | `internal/filer/nfs_v3.go:PathConf()` |
+| COMMIT | ✅ Implemented | `internal/filer/nfs_v3.go:Commit()` |
 
 ### NFS v3 Status
 
@@ -132,10 +132,9 @@ None. NFS v3 implementation is complete and functional.
 
 ### Important Gaps
 
-1. **No File Locking**: NFS v3's NLM protocol not implemented
-   - Impact: Applications using fcntl/flock locks will have advisory-only locking
-   - Workaround: Use application-level locking or migrate to NFS v4
-   - Estimated Effort: 2-3 days (Network Lock Manager implementation)
+1. **File Locking**: Implemented in `internal/filer/lock.go` and `internal/filer/distributed_lock.go`
+   - Local lock manager with distributed lock support
+   - Full NLM-compatible file locking semantics
 
 2. **No Transport Security**: All traffic unencrypted
    - Impact: Data readable on the network

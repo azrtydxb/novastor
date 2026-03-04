@@ -14,24 +14,24 @@ This document audits NovaStor's S3 gateway implementation against the AWS S3 API
 
 | Operation | Status | Notes |
 |-----------|--------|-------|
-| CreateBucket | ✅ Implemented | `internal/s3/handler.go:CreateBucket()` |
-| DeleteBucket | ✅ Implemented | `internal/s3/handler.go:DeleteBucket()` |
-| HeadBucket | ✅ Implemented | `internal/s3/handler.go:HeadBucket()` |
-| ListBuckets | ✅ Implemented | `internal/s3/handler.go:ListBuckets()` |
-| ListObjectsV2 | ✅ Implemented | `internal/s3/handler.go:ListObjectsV2()` |
+| CreateBucket | ✅ Implemented | `internal/s3/bucket.go:CreateBucket()` |
+| DeleteBucket | ✅ Implemented | `internal/s3/bucket.go:DeleteBucket()` |
+| HeadBucket | ✅ Implemented | `internal/s3/bucket.go:HeadBucket()` |
+| ListBuckets | ✅ Implemented | `internal/s3/bucket.go:ListBuckets()` |
+| ListObjectsV2 | ✅ Implemented | `internal/s3/list.go:ListObjectsV2()` |
 | ListObjectsV1 | ⚠️ Partial | Uses V2 backend, may not match V1 pagination |
-| GetBucketLocation | ✅ Implemented | Returns default region |
+| GetBucketLocation | ❌ Not Implemented | -- |
 | GetBucketVersioning | ✅ Implemented | Returns disabled status |
 
 ### Object Operations
 
 | Operation | Status | Notes |
 |-----------|--------|-------|
-| PutObject | ✅ Implemented | `internal/s3/handler.go:PutObject()` |
-| GetObject | ✅ Implemented | `internal/s3/handler.go:GetObject()` |
-| HeadObject | ✅ Implemented | `internal/s3/handler.go:HeadObject()` |
-| DeleteObject | ✅ Implemented | `internal/s3/handler.go:DeleteObject()` |
-| DeleteObjects | ✅ Implemented | `internal/s3/handler.go:DeleteObjects()` (multi-object) |
+| PutObject | ✅ Implemented | `internal/s3/object.go:PutObject()` |
+| GetObject | ✅ Implemented | `internal/s3/object.go:GetObject()` |
+| HeadObject | ✅ Implemented | `internal/s3/object.go:HeadObject()` |
+| DeleteObject | ✅ Implemented | `internal/s3/object.go:DeleteObject()` |
+| DeleteObjects | ❌ Not Implemented | Multi-object delete not available |
 | CopyObject | ✅ Implemented | Server-side copy via metadata service |
 | GetObjectTagging | ✅ Implemented | Tag support |
 | PutObjectTagging | ✅ Implemented | Tag support |
@@ -41,19 +41,28 @@ This document audits NovaStor's S3 gateway implementation against the AWS S3 API
 
 | Operation | Status | Notes |
 |-----------|--------|-------|
-| CreateMultipartUpload | ✅ Implemented | `internal/s3/handler.go:CreateMultipartUpload()` |
-| UploadPart | ✅ Implemented | `internal/s3/handler.go:UploadPart()` |
-| CompleteMultipartUpload | ✅ Implemented | `internal/s3/handler.go:CompleteMultipartUpload()` |
-| AbortMultipartUpload | ✅ Implemented | `internal/s3/handler.go:AbortMultipartUpload()` |
-| ListParts | ✅ Implemented | `internal/s3/handler.go:ListParts()` |
-| ListMultipartUploads | ✅ Implemented | `internal/s3/handler.go:ListMultipartUploads()` |
+| CreateMultipartUpload | ✅ Implemented | `internal/s3/multipart.go:CreateMultipartUpload()` |
+| UploadPart | ✅ Implemented | `internal/s3/multipart.go:UploadPart()` |
+| CompleteMultipartUpload | ✅ Implemented | `internal/s3/multipart.go:CompleteMultipartUpload()` |
+| AbortMultipartUpload | ✅ Implemented | `internal/s3/multipart.go:AbortMultipartUpload()` |
+| ListParts | ✅ Implemented | `internal/s3/multipart.go:ListParts()` |
+| ListMultipartUploads | ❌ Not Implemented | -- |
+
+### Lifecycle & Encryption Operations (Implemented)
+
+| Operation | Status | Notes |
+|-----------|--------|-------|
+| PutBucketLifecycleConfiguration | ✅ Implemented | `internal/s3/operations.go` |
+| GetBucketLifecycleConfiguration | ✅ Implemented | `internal/s3/operations.go` |
+| DeleteBucketLifecycleConfiguration | ✅ Implemented | `internal/s3/operations.go` |
+| PutBucketEncryption | ✅ Implemented | `internal/s3/operations.go` |
+| GetBucketEncryption | ✅ Implemented | `internal/s3/operations.go` |
+| DeleteBucketEncryption | ✅ Implemented | `internal/s3/operations.go` |
 
 ### Not Implemented (Priority Features)
 
 | Operation | Priority | Complexity |
 |-----------|----------|------------|
-| PutBucketLifecycleConfiguration | High | Medium |
-| GetBucketLifecycleConfiguration | High | Medium |
 | PutBucketPolicy | High | High (policy parsing) |
 | GetBucketPolicy | High | High (policy parsing) |
 | DeleteBucketPolicy | High | High (policy parsing) |
@@ -71,8 +80,6 @@ This document audits NovaStor's S3 gateway implementation against the AWS S3 API
 | GetBucketLogging | Low | High |
 | PutBucketMetricsConfiguration | Low | Medium |
 | GetBucketMetricsConfiguration | Low | Medium |
-| PutBucketEncryption | Low | Medium (SSE-KMS) |
-| GetBucketEncryption | Low | Medium |
 | PutBucketReplication | Low | High |
 | GetBucketReplication | Low | High |
 | GetObjectRetention | Low | High (WORM) |
@@ -85,7 +92,7 @@ This document audits NovaStor's S3 gateway implementation against the AWS S3 API
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| AWS Signature V2 | ❌ Not Implemented | Legacy protocol |
+| AWS Signature V2 | ✅ Implemented | `internal/s3/auth.go` (legacy compatibility) |
 | AWS Signature V4 | ✅ Implemented | `internal/s3/auth.go` |
 | Query String Auth | ✅ Implemented | Presigned URLs |
 | IAM Policy Evaluation | ⚠️ Partial | Basic ACLs only |

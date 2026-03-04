@@ -67,10 +67,11 @@ Check that the CRDs are installed:
 
 ```bash
 kubectl get crds | grep novastor
-# storagepools.novastor.io
 # blockvolumes.novastor.io
-# sharedfilesystems.novastor.io
 # objectstores.novastor.io
+# sharedfilesystems.novastor.io
+# storagepools.novastor.io
+# storagequotas.novastor.io
 ```
 
 Check that the StorageClasses are available:

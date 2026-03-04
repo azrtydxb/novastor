@@ -3,7 +3,7 @@
 > **Issue**: #96
 > **Date**: 2026-02-19
 > **Status**: Initial Audit
-> **Spec Version**: CSI 1.9.0
+> **Spec Version**: CSI 1.12.0
 
 ## Overview
 
@@ -31,10 +31,10 @@ This document audits NovaStor's CSI driver implementation against the Container 
 | ListVolumes | No | ✅ Implemented | `internal/csi/controller.go:ListVolumes()` |
 | GetCapacity | No | ✅ Implemented | `internal/csi/controller.go:GetCapacity()` |
 | ControllerGetCapabilities | Yes | ✅ Implemented | Returns all implemented capabilities |
-| CreateSnapshot | No | ⚠️ Stub | Returns unimplemented |
-| DeleteSnapshot | No | ⚠️ Stub | Returns unimplemented |
-| ListSnapshots | No | ⚠️ Stub | Returns unimplemented |
-| ControllerExpandVolume | No | ⚠️ Stub | Returns unimplemented |
+| CreateSnapshot | No | ✅ Implemented | `internal/csi/snapshot.go:CreateSnapshot()` |
+| DeleteSnapshot | No | ✅ Implemented | `internal/csi/snapshot.go:DeleteSnapshot()` |
+| ListSnapshots | No | ✅ Implemented | `internal/csi/snapshot.go:ListSnapshots()` |
+| ControllerExpandVolume | No | ✅ Implemented | `internal/csi/expand.go:ControllerExpandVolume()` |
 | ControllerModifyVolume | No | ❌ Not Implemented | Returns unimplemented |
 | GetVolume | No | ❌ Not Implemented | Returns unimplemented |
 
@@ -47,7 +47,7 @@ This document audits NovaStor's CSI driver implementation against the Container 
 | NodePublishVolume | Yes | ✅ Implemented | `internal/csi/node.go:NodePublishVolume()` |
 | NodeUnpublishVolume | Yes | ✅ Implemented | `internal/csi/node.go:NodeUnpublishVolume()` |
 | NodeGetVolumeStats | Yes | ✅ Implemented | `internal/csi/node.go:NodeGetVolumeStats()` |
-| NodeExpandVolume | No | ⚠️ Stub | Returns unimplemented |
+| NodeExpandVolume | No | ✅ Implemented | `internal/csi/node.go:NodeExpandVolume()` |
 | NodeGetCapabilities | Yes | ✅ Implemented | Returns stage, stats, volume condition |
 | NodeGetInfo | Yes | ✅ Implemented | Returns node ID and max volumes |
 | **Condition:** NodeStageVolume required if `STAGE_UNSTAGE_VOLUME` capability is set (which it is). |
@@ -60,22 +60,7 @@ None. All required RPCs are implemented and functional.
 
 ### Important Gaps (Feature Limitations)
 
-1. **Volume Expansion**: ControllerExpandVolume and NodeExpandVolume not implemented
-   - Impact: Cannot resize volumes after creation
-   - Spec Recommendation: Optional but highly expected by users
-   - Implementation Path:
-     - Controller: Call chunk store resize, update volume CRD size
-     - Node: Run filesystem resize (ext4/xfs grow)
-   - Estimated Effort: 2-3 days
-
-2. **Snapshots**: CreateSnapshot, DeleteSnapshot, ListSnapshots not implemented
-   - Impact: Cannot create volume snapshots for backup/restore
-   - Spec Recommendation: Optional but commonly expected
-   - Implementation Path:
-     - Create snapshot metadata in metadata service
-     - Use chunk store snapshot capability
-     - Expose via VolumeSnapshot CRD
-   - Estimated Effort: 3-5 days
+_No important gaps remain. Volume expansion and snapshots are now fully implemented._
 
 ### Minor Gaps
 
@@ -139,35 +124,24 @@ Missing tests:
 | Category | Score |
 |----------|-------|
 | Required RPCs | 100% (11/11) |
-| Optional RPCs (Important) | 50% (6/12) |
+| Optional RPCs (Important) | 83% (10/12) |
 | Volume Capabilities | 60% (3/5 access modes) |
-| Overall | ~75% |
+| Overall | ~85% |
 
 ## Recommendations
 
-### Phase 1: High Priority (Next Sprint)
-1. **Implement Volume Expansion** - Most requested feature
-   - ControllerExpandVolume with ONLINE flag
-   - NodeExpandVolume with filesystem grow
-   - Update CRD size field
+### Phase 1: Medium Priority
+1. **Implement GetVolume** - Useful for debugging and monitoring
+2. **Add ControllerModifyVolume** - For label/annotation updates
+3. **Improve Error Handling** - Add detailed gRPC status codes
 
-2. **Add Volume Snapshot Support** - Critical for backup workflows
-   - CreateSnapshot with point-in-time metadata
-   - DeleteSnapshot and ListSnapshots
-   - Integrate with VolumeSnapshot CRD
-
-### Phase 2: Medium Priority
-3. **Implement GetVolume** - Useful for debugging and monitoring
-4. **Add ControllerModifyVolume** - For label/annotation updates
-5. **Improve Error Handling** - Add detailed gRPC status codes
-
-### Phase 3: Future Enhancements
-6. **Ephemeral Volume Support** - Inline CSI volumes
-7. **Multi-Writer Access Mode** - For shared filesystem access
-8. **Volume Condition Metrics** - Enhanced health reporting
+### Phase 2: Future Enhancements
+4. **Ephemeral Volume Support** - Inline CSI volumes
+5. **Multi-Writer Access Mode** - For shared filesystem access
+6. **Volume Condition Metrics** - Enhanced health reporting
 
 ## References
 
-- [CSI Spec v1.9.0](https://github.com/container-storage-interface/spec/blob/master/spec.md)
+- [CSI Spec v1.12.0](https://github.com/container-storage-interface/spec/blob/master/spec.md)
 - [CSI Sidecars](https://kubernetes-csi.github.io/docs/)
 - [Kubernetes Volume Dynamics](https://kubernetes.io/blog/2020/09/14/kubernetes-1-19-introdu-csi-volume-health-monitor/)
