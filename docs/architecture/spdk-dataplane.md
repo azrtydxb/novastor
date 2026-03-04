@@ -305,7 +305,7 @@ dataplane:
 | `agent.heartbeatInterval` | `500ms` | How often agents send heartbeats to the metadata service |
 | `agent.failover.enabled` | `true` | Enable ANA multipath failover |
 | `agent.failover.katoTimeout` | `200ms` | NVMe KATO timeout before kernel marks a path dead |
-| `dataplane.enabled` | `true` | Enable SPDK data plane (required for ANA failover) |
+| `dataplane.enabled` | `false` | Enable SPDK data plane (required for ANA failover) |
 
 ### Components Involved
 

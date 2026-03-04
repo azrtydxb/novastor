@@ -5,7 +5,7 @@
 NovaStor is a unified Kubernetes-native storage system providing **block** (CSI/NVMe-oF), **file** (NFS/FUSE), and **object** (S3-compatible) storage through a shared chunk storage engine.
 
 - **Module**: `github.com/piwi3910/novastor`
-- **Language**: Go 1.24+
+- **Language**: Go 1.25+
 - **Registry**: `ghcr.io/piwi3910/novastor`
 
 ## Architecture
@@ -44,6 +44,8 @@ NovaStor is a unified Kubernetes-native storage system providing **block** (CSI/
 | CSI Driver | `novastor-csi` | DaemonSet + Deployment | `cmd/csi/`, `internal/csi/` |
 | File Gateway | `novastor-filer` | Deployment | `cmd/filer/`, `internal/filer/` |
 | S3 Gateway | `novastor-s3gw` | Deployment | `cmd/s3gw/`, `internal/s3/` |
+| Scheduler | `novastor-scheduler` | Deployment | `cmd/scheduler/`, `internal/scheduler/` |
+| Scheduler Webhook | `novastor-webhook` | Deployment | `cmd/webhook/`, `internal/webhook/` |
 | CLI | `novastorctl` | — | `cmd/cli/` |
 
 ### Data Protection
@@ -109,7 +111,7 @@ make manifests      # Update CRD manifests
 - **gRPC** for all inter-component communication (Phase 1)
 - **NVMe-oF/TCP** added in Phase 2 for block device path
 - Proto definitions live in `api/proto/`
-- Generated code goes to `internal/proto/gen/`
+- Generated code goes alongside `.proto` sources: `api/proto/chunk/`, `api/proto/metadata/`, `api/proto/nvme/`
 
 ## Project Structure
 
@@ -122,6 +124,8 @@ novastor/
 │   ├── csi/                 # CSI driver
 │   ├── filer/               # NFS/file gateway
 │   ├── s3gw/                # S3-compatible gateway
+│   ├── scheduler/           # Data-locality scheduler
+│   ├── webhook/             # Mutating admission webhook
 │   └── cli/                 # novastorctl CLI tool
 ├── api/
 │   ├── v1alpha1/            # CRD type definitions
@@ -138,7 +142,11 @@ novastor/
 │   ├── s3/                  # S3 gateway logic
 │   ├── operator/            # Controller reconcile loops
 │   ├── agent/               # Node agent logic
-│   └── proto/               # Generated protobuf code
+│   ├── datamover/           # Data migration and rebalancing
+│   ├── policy/              # Storage policy engine
+│   ├── webhook/             # Mutating admission webhook logic
+│   ├── scheduler/           # Data-locality scheduler logic
+│   └── cli/                 # novastorctl command implementations
 ├── deploy/
 │   ├── helm/                # Helm chart
 │   └── manifests/           # Raw YAML manifests
@@ -177,6 +185,10 @@ kind: SharedFilesystem
 # Object store
 apiVersion: novastor.io/v1alpha1
 kind: ObjectStore
+
+# Storage quota
+apiVersion: novastor.io/v1alpha1
+kind: StorageQuota
 ```
 
 ## Build & Development
@@ -184,7 +196,7 @@ kind: ObjectStore
 ### Quick Reference
 
 ```bash
-make build-all          # Build all 7 binaries
+make build-all          # Build all 9 binaries
 make test               # Run tests with race detection
 make lint               # Run golangci-lint (16 linters)
 make check              # Run fmt + vet + lint
@@ -229,7 +241,7 @@ Every PR runs:
 - **Lint**: gofmt, golangci-lint, `go mod tidy` check
 - **Security**: govulncheck, gitleaks secret scanning
 - **Test**: All tests with `-race` flag and coverage
-- **Build**: All 7 binaries must compile
+- **Build**: All 9 binaries must compile
 - **Helm**: Chart linting and CRD sync verification
 - **Docs**: `mkdocs build --strict`
 

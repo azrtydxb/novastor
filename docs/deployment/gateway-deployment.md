@@ -87,7 +87,7 @@ metadata:
   namespace: default
 spec:
   pool: nvme-replicated
-  size: "100Gi"
+  capacity: "100Gi"
   accessMode: ReadWriteMany
 ```
 

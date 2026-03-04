@@ -7,7 +7,7 @@ NovaStor is a distributed storage system built for Kubernetes that provides bloc
 ## Key Features
 
 - **Block Storage** -- CSI driver with NVMe-oF/TCP transport for near-local-disk latency
-- **File Storage** -- NFS v4.1 gateway with ReadWriteMany (RWX) support
+- **File Storage** -- NFS v3 gateway with ReadWriteMany (RWX) support
 - **Object Storage** -- S3-compatible API with multipart uploads, presigned URLs, and versioning
 - **Unified Engine** -- Single chunk-based storage engine powering all three access layers
 - **Flexible Data Protection** -- Per-pool choice of replication (factor 1-5) or erasure coding (Reed-Solomon)

@@ -6,7 +6,7 @@ This guide covers building NovaStor from source, running tests, understanding th
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Go | 1.24+ | Build and test |
+| Go | 1.25+ | Build and test |
 | Docker | 20+ | Container image builds |
 | Helm | 3.x | Chart linting and testing |
 | kubectl | 1.28+ | Kubernetes interaction |
@@ -22,7 +22,7 @@ This guide covers building NovaStor from source, running tests, understanding th
 make build-all
 ```
 
-This builds all seven binaries:
+This builds all nine binaries:
 
 | Binary | Source |
 |---|---|
@@ -32,6 +32,8 @@ This builds all seven binaries:
 | `novastor-csi` | `cmd/csi/` |
 | `novastor-filer` | `cmd/filer/` |
 | `novastor-s3gw` | `cmd/s3gw/` |
+| `novastor-scheduler` | `cmd/scheduler/` |
+| `novastor-webhook` | `cmd/webhook/` |
 | `novastorctl` | `cmd/cli/` |
 
 ### Individual Binaries
@@ -147,7 +149,7 @@ After modifying `.proto` files in `api/proto/`:
 make generate-proto
 ```
 
-Generated Go code is written to `internal/proto/gen/`.
+Generated Go code is written alongside `.proto` sources: `api/proto/chunk/`, `api/proto/metadata/`, `api/proto/nvme/`.
 
 ## Code Organization
 
@@ -166,9 +168,13 @@ internal/
   operator/       # Recovery manager, placement adapter
   controller/     # Kubernetes reconcilers (StoragePool, BlockVolume, etc.)
   agent/          # Node agent gRPC server (ChunkServer)
+  datamover/      # Data migration and rebalancing
+  policy/         # Storage policy engine
+  webhook/        # Mutating admission webhook logic
+  scheduler/      # Data-locality scheduler logic
+  cli/            # novastorctl command implementations
   metrics/        # Prometheus metric definitions and collectors
   logging/        # Structured logging setup (zap)
-  proto/          # Generated protobuf code
 ```
 
 ### Key Design Patterns
@@ -266,7 +272,7 @@ Every pull request runs through the CI pipeline defined in `.github/workflows/ci
 | Security | `govulncheck` | Go vulnerability scanner |
 | Security | `gitleaks` | Secret scanning |
 | Test | `go test -race` | All tests with race detection |
-| Build | `go build` | All 7 binaries compile |
+| Build | `go build` | All 9 binaries compile |
 | Helm | `helm lint` | Chart validation |
 | Helm | CRD sync | CRD manifests match types |
 | Docs | `mkdocs build --strict` | Documentation builds without errors |

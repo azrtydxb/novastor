@@ -1,6 +1,6 @@
 # CRD Reference
 
-NovaStor defines four Custom Resource Definitions (CRDs) in the `novastor.io/v1alpha1` API group. This page documents every field in their spec and status.
+NovaStor defines five Custom Resource Definitions (CRDs) in the `novastor.io/v1alpha1` API group. This page documents every field in their spec and status.
 
 ## StoragePool
 
@@ -105,6 +105,7 @@ spec:
 | `pool` | `string` | Yes | -- | Name of the StoragePool to allocate from. |
 | `size` | `string` | Yes | Kubernetes quantity | Volume size (e.g., `"50Gi"`, `"1Ti"`). |
 | `accessMode` | `string` | Yes | Enum: `ReadWriteOnce`, `ReadOnlyMany` | Volume access mode. |
+| `quota` | `*int64` | No | -- | Optional per-volume quota limit in bytes. |
 
 ### BlockVolumeStatus
 
@@ -252,6 +253,7 @@ spec:
 |---|---|---|---|
 | `maxBuckets` | `int` | -- | Maximum number of buckets allowed. |
 | `versioning` | `string` | Enum: `enabled`, `disabled`, `suspended` | Default versioning state for new buckets. |
+| `maxBucketSize` | `int64` | -- | Per-bucket storage quota in bytes. When set, individual buckets cannot exceed this size. |
 
 ### ObjectStoreStatus
 
@@ -276,6 +278,73 @@ When an ObjectStore is created, the controller:
 2. Creates a Deployment running the S3 gateway image
 3. Creates a Service exposing the configured port
 4. Updates the ObjectStore status with the endpoint URL
+
+---
+
+## StorageQuota
+
+A StorageQuota defines storage consumption limits for a scope (namespace, storage pool, bucket, or volume).
+
+```yaml
+apiVersion: novastor.io/v1alpha1
+kind: StorageQuota
+metadata:
+  name: team-quota
+  namespace: production
+spec:
+  scope:
+    kind: Namespace
+    name: production
+  storage:
+    hard: 1099511627776
+    soft: 858993459200
+  objectCount:
+    hard: 10000
+```
+
+### StorageQuotaSpec
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `scope` | `QuotaScope` | Yes | Target of this quota. |
+| `storage` | `StorageQuotaSpecStorage` | No | Storage limits. |
+| `objectCount` | `ObjectCountQuotaSpec` | No | Object/bucket count limits. |
+
+#### QuotaScope
+
+| Field | Type | Validation | Description |
+|---|---|---|---|
+| `kind` | `string` | Enum: `Namespace`, `StoragePool`, `Bucket`, `Volume` | Scope type. |
+| `name` | `string` | -- | Name of the scoped resource. |
+
+#### StorageQuotaSpecStorage
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `hard` | `int64` | Yes | Hard limit in bytes. Requests exceeding this are rejected. |
+| `soft` | `int64` | No | Soft limit in bytes. Warnings are issued but requests are allowed. |
+
+#### ObjectCountQuotaSpec
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `hard` | `int64` | Yes | Hard limit for object/bucket count. |
+
+### StorageQuotaStatus
+
+| Field | Type | Description |
+|---|---|---|
+| `phase` | `string` | Quota enforcement state: `Active`, `Exceeded`, `Warning` |
+| `storage` | `StorageQuotaStatusStorage` | Storage usage report. |
+| `objectCount` | `ObjectCountQuotaStatus` | Object/bucket count usage report. |
+| `conditions` | `[]Condition` | Standard Kubernetes conditions |
+
+### kubectl Columns
+
+```
+NAME          SCOPE       SCOPE NAME    STORAGE LIMIT    USED    PHASE
+team-quota    Namespace   production    1099511627776    0       Active
+```
 
 ---
 

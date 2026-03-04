@@ -104,6 +104,7 @@ scrape_configs:
 | `novastor_controller_pool_capacity_bytes` | Gauge | `pool` | Total capacity of each storage pool in bytes |
 | `novastor_controller_recovery_chunks_pending` | Gauge | -- | Chunks currently pending recovery |
 | `novastor_controller_recovery_chunks_completed_total` | Counter | -- | Total chunks recovered since startup |
+| `novastor_controller_recovery_chunks_failed_total` | Counter | -- | Total chunk recovery failures since startup |
 
 ### CSI Metrics
 
@@ -129,6 +130,83 @@ scrape_configs:
 | `novastor_filer_nfs_ops_total` | Counter | `operation` | Total NFS operations by type |
 | `novastor_filer_nfs_op_duration_seconds` | Histogram | `operation` | NFS operation duration by type |
 | `novastor_filer_active_locks` | Gauge | -- | Number of active file locks |
+
+### Dedup Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `novastor_dedup_hits_total` | Counter | -- | Total dedup cache hits |
+| `novastor_dedup_misses_total` | Counter | -- | Total dedup cache misses |
+| `novastor_dedup_ratio` | Gauge | -- | Current dedup ratio |
+| `novastor_dedup_saved_bytes` | Gauge | -- | Bytes saved by deduplication |
+| `novastor_dedup_index_size` | Gauge | -- | Size of the dedup index |
+| `novastor_dedup_chunks_deduped_total` | Counter | -- | Total chunks deduplicated |
+| `novastor_dedup_lookup_duration_seconds` | Histogram | -- | Dedup index lookup latency |
+| `novastor_dedup_index_entries` | Gauge | -- | Number of entries in dedup index |
+
+### GC Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `novastor_gc_chunks_collected_total` | Counter | -- | Total chunks garbage collected |
+| `novastor_gc_bytes_reclaimed_total` | Counter | -- | Total bytes reclaimed by GC |
+| `novastor_gc_run_duration_seconds` | Histogram | -- | GC run duration |
+| `novastor_gc_pending_chunks` | Gauge | -- | Chunks pending garbage collection |
+| `novastor_gc_errors_total` | Counter | -- | Total GC errors |
+
+### Policy Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `novastor_policy_evaluations_total` | Counter | `policy` | Total policy evaluations |
+| `novastor_policy_violations_total` | Counter | `policy` | Total policy violations |
+| `novastor_policy_enforcement_duration_seconds` | Histogram | -- | Policy enforcement latency |
+| `novastor_policy_active_count` | Gauge | -- | Number of active policies |
+| `novastor_policy_migrations_total` | Counter | -- | Total policy-triggered migrations |
+| `novastor_policy_migrations_pending` | Gauge | -- | Pending policy migrations |
+| `novastor_policy_migrations_failed_total` | Counter | -- | Failed policy migrations |
+
+### Webhook Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `novastor_webhook_requests_total` | Counter | `action` | Total webhook admission requests |
+| `novastor_webhook_injections_total` | Counter | -- | Total scheduler injections performed |
+| `novastor_webhook_errors_total` | Counter | -- | Total webhook errors |
+| `novastor_webhook_latency_seconds` | Histogram | -- | Webhook request latency |
+
+### Data Mover Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `novastor_datamover_bytes_moved_total` | Counter | -- | Total bytes moved |
+| `novastor_datamover_chunks_moved_total` | Counter | -- | Total chunks moved |
+| `novastor_datamover_active_moves` | Gauge | -- | Currently active data move operations |
+| `novastor_datamover_move_duration_seconds` | Histogram | -- | Data move operation duration |
+| `novastor_datamover_errors_total` | Counter | -- | Total data mover errors |
+| `novastor_datamover_queue_depth` | Gauge | -- | Number of moves queued |
+| `novastor_datamover_throughput_bytes` | Gauge | -- | Current data mover throughput in bytes/sec |
+
+### Lock Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `novastor_lock_acquisitions_total` | Counter | `type` | Total lock acquisitions |
+| `novastor_lock_releases_total` | Counter | `type` | Total lock releases |
+| `novastor_lock_contention_total` | Counter | -- | Total lock contention events |
+| `novastor_lock_wait_duration_seconds` | Histogram | -- | Lock wait time distribution |
+
+### Quota Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `novastor_quota_usage_bytes` | Gauge | `scope`, `name` | Current quota usage in bytes |
+| `novastor_quota_limit_bytes` | Gauge | `scope`, `name` | Quota hard limit in bytes |
+| `novastor_quota_utilization_ratio` | Gauge | `scope`, `name` | Quota utilization ratio (0-1) |
+| `novastor_quota_exceeded_total` | Counter | `scope`, `name` | Total quota exceeded events |
+| `novastor_quota_warnings_total` | Counter | `scope`, `name` | Total soft quota warning events |
+| `novastor_quota_enforcements_total` | Counter | -- | Total quota enforcement actions |
+| `novastor_quota_active_count` | Gauge | -- | Number of active quotas |
 
 ## Grafana Dashboard
 

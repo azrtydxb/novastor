@@ -60,6 +60,8 @@ graph TB
 | CSI Driver | `novastor-csi` | DaemonSet + Deployment | Kubernetes CSI plugin for block provisioning and attachment |
 | File Gateway | `novastor-filer` | Deployment | NFS server backed by the chunk engine |
 | S3 Gateway | `novastor-s3gw` | Deployment | S3-compatible HTTP API backed by the chunk engine |
+| Scheduler | `novastor-scheduler` | Deployment | Data-locality aware pod scheduler |
+| Scheduler Webhook | `novastor-webhook` | Deployment | Mutating admission webhook for scheduler injection |
 | CLI | `novastorctl` | — | Administrative command-line tool |
 
 ### Data Protection
@@ -173,6 +175,8 @@ bin/novastor-meta
 bin/novastor-csi
 bin/novastor-filer
 bin/novastor-s3gw
+bin/novastor-scheduler
+bin/novastor-webhook
 bin/novastorctl
 ```
 
@@ -225,11 +229,12 @@ make generate-proto     # Regenerate gRPC/protobuf Go code
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--node-id` | _(required)_ | Unique Raft node identifier |
+| `--node-id` | _(hostname)_ | Unique Raft node identifier (defaults to hostname when empty) |
 | `--data-dir` | `/var/lib/novastor/meta` | Raft log and snapshot directory |
-| `--bind-addr` | `:7000` | Raft peer communication address |
+| `--raft-addr` | `:7000` | Raft peer communication address |
 | `--grpc-addr` | `:7001` | gRPC API address for clients |
-| `--bootstrap` | `false` | Bootstrap a single-node cluster (first node only) |
+| `--bootstrap-expect` | `0` | Number of nodes expected to bootstrap cluster (0 = join existing) |
+| `--join` | `""` | Comma-separated peer addresses to join existing cluster |
 | `--metrics-addr` | `:7002` | Prometheus metrics endpoint |
 
 ### novastor-csi
@@ -245,7 +250,7 @@ make generate-proto     # Regenerate gRPC/protobuf Go code
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--listen` | `:2049` | NFS listen address |
+| `--nfs-listen` | `:2049` | NFS listen address |
 | `--meta-addr` | `localhost:7001` | Metadata service gRPC address |
 | `--agent-addr` | `localhost:9100` | Chunk agent gRPC address |
 
@@ -322,6 +327,8 @@ novastor/
 │   ├── csi/                 # CSI driver entrypoint
 │   ├── filer/               # NFS/file gateway entrypoint
 │   ├── s3gw/                # S3 gateway entrypoint
+│   ├── scheduler/           # Data-locality scheduler entrypoint
+│   ├── webhook/             # Mutating admission webhook entrypoint
 │   └── cli/                 # novastorctl CLI entrypoint
 ├── api/
 │   ├── v1alpha1/            # CRD type definitions (Go structs)
@@ -338,6 +345,10 @@ novastor/
 │   ├── s3/                  # S3 gateway: auth, bucket, object, multipart
 │   ├── operator/            # Controller reconcile loops and recovery
 │   ├── agent/               # Node agent: chunk server, gRPC handlers
+│   ├── datamover/           # Data migration and rebalancing
+│   ├── policy/              # Storage policy engine
+│   ├── webhook/             # Mutating admission webhook logic
+│   ├── scheduler/           # Data-locality scheduler logic
 │   ├── cli/                 # novastorctl command implementations
 │   ├── logging/             # Structured logging (zap)
 │   └── metrics/             # Prometheus metrics registration
@@ -363,7 +374,7 @@ novastor/
 
 ## Custom Resource Definitions
 
-NovaStor installs four CRDs in the `novastor.io` API group.
+NovaStor installs five CRDs in the `novastor.io` API group.
 
 ### StoragePool (`sp`)
 
@@ -440,6 +451,27 @@ spec:
   bucketPolicy:
     maxBuckets: 100
     versioning: enabled
+```
+
+### StorageQuota (`sq`)
+
+Namespace-scoped. Defines storage consumption limits for a scope (namespace, pool, bucket, or volume).
+
+```yaml
+apiVersion: novastor.io/v1alpha1
+kind: StorageQuota
+metadata:
+  name: team-quota
+  namespace: production
+spec:
+  scope:
+    kind: Namespace
+    name: production
+  storage:
+    hard: 1099511627776  # 1 TiB
+    soft: 858993459200   # 800 GiB
+  objectCount:
+    hard: 10000
 ```
 
 ## License
