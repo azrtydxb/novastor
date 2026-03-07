@@ -10,7 +10,7 @@ import (
 	"github.com/hashicorp/raft"
 	"google.golang.org/protobuf/proto"
 
-	pb "github.com/piwi3910/novastor/api/proto/metadata"
+	pb "github.com/azrtydxb/novastor/api/proto/metadata"
 )
 
 // mockLockStore is a minimal lock store implementation for testing.

@@ -148,7 +148,7 @@ jobs:
           file: ${{ matrix.image.dockerfile }}
           platforms: linux/${{ matrix.arch.name }}
           push: true
-          tags: ghcr.io/piwi3910/novastor/novastor-${{ matrix.image.name }}:nightly-${{ matrix.arch.name }}
+          tags: ghcr.io/azrtydxb/novastor/novastor-${{ matrix.image.name }}:nightly-${{ matrix.arch.name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

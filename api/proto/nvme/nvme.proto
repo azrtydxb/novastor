@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package nvme;
 
-option go_package = "github.com/piwi3910/novastor/api/proto/nvme";
+option go_package = "github.com/azrtydxb/novastor/api/proto/nvme";
 
 // NVMeTargetService manages NVMe-oF/TCP targets on storage agent nodes.
 // The CSI controller calls this service during CreateVolume/DeleteVolume

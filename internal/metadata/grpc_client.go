@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/piwi3910/novastor/api/proto/metadata"
+	pb "github.com/azrtydxb/novastor/api/proto/metadata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"

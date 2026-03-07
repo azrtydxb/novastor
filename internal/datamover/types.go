@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/chunk"
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // DataMover coordinates chunk healing operations across the cluster.

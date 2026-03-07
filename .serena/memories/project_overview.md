@@ -8,8 +8,8 @@ NovaStor is a unified Kubernetes-native storage system providing **block** (CSI/
 
 ## Tech Stack
 - **Language**: Go 1.24+
-- **Module**: `github.com/piwi3910/novastor`
-- **Registry**: `ghcr.io/piwi3910/novastor`
+- **Module**: `github.com/azrtydxb/novastor`
+- **Registry**: `ghcr.io/azrtydxb/novastor`
 - **Container Storage Interface**: CSI spec
 - **Consensus**: hashicorp/raft
 - **Metadata store**: dgraph-io/badger/v4

@@ -18,8 +18,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 
-	pb "github.com/piwi3910/novastor/api/proto/metadata"
-	"github.com/piwi3910/novastor/internal/metrics"
+	pb "github.com/azrtydxb/novastor/api/proto/metadata"
+	"github.com/azrtydxb/novastor/internal/metrics"
 )
 
 // VolumeProtectionMode is an alias for ProtectionMode for backward compatibility.

@@ -3,7 +3,7 @@ package metadata
 import (
 	"testing"
 
-	"github.com/piwi3910/novastor/api/v1alpha1"
+	"github.com/azrtydxb/novastor/api/v1alpha1"
 )
 
 func TestProtectionProfile_Validate(t *testing.T) {

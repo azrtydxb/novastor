@@ -7,7 +7,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	pb "github.com/piwi3910/novastor/api/proto/nvme"
+	pb "github.com/azrtydxb/novastor/api/proto/nvme"
 )
 
 // NVMeTargetResult holds the connection parameters returned by CreateTarget.

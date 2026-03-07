@@ -38,7 +38,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 LABEL org.opencontainers.image.title="novastor-s3gw" \
       org.opencontainers.image.description="NovaStor S3-compatible object storage gateway" \
-      org.opencontainers.image.source="https://github.com/piwi3910/novastor" \
+      org.opencontainers.image.source="https://github.com/azrtydxb/novastor" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=builder /out/novastor-s3gw /usr/local/bin/novastor-s3gw

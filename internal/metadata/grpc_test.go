@@ -8,7 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	pb "github.com/piwi3910/novastor/api/proto/metadata"
+	pb "github.com/azrtydxb/novastor/api/proto/metadata"
 )
 
 // setupGRPCTest spins up a single-node RaftStore, wraps it in a

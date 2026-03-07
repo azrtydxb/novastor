@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/piwi3910/novastor/api/proto/metadata"
+	pb "github.com/azrtydxb/novastor/api/proto/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 

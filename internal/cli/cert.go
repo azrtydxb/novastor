@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/piwi3910/novastor/internal/transport"
+	"github.com/azrtydxb/novastor/internal/transport"
 )
 
 var (

@@ -16,7 +16,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/piwi3910/novastor/internal/scheduler"
+	"github.com/azrtydxb/novastor/internal/scheduler"
 )
 
 const (

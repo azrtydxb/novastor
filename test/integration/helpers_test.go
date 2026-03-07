@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // allocAddr allocates a random TCP port on localhost and returns the address

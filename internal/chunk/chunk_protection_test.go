@@ -3,7 +3,7 @@ package chunk
 import (
 	"testing"
 
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 func TestChunk_WithProtectionProfile(t *testing.T) {

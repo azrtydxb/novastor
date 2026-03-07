@@ -4,8 +4,8 @@ import (
 	"context"
 	"io"
 
-	pb "github.com/piwi3910/novastor/api/proto/chunk"
-	"github.com/piwi3910/novastor/internal/chunk"
+	pb "github.com/azrtydxb/novastor/api/proto/chunk"
+	"github.com/azrtydxb/novastor/internal/chunk"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

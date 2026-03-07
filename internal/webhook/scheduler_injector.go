@@ -18,8 +18,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/piwi3910/novastor/internal/logging"
-	"github.com/piwi3910/novastor/internal/metrics"
+	"github.com/azrtydxb/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/metrics"
 )
 
 const (

@@ -56,7 +56,7 @@ FROM alpine:3.20
 
 LABEL org.opencontainers.image.title="novastor-csi" \
       org.opencontainers.image.description="NovaStor CSI driver (DaemonSet + Deployment)" \
-      org.opencontainers.image.source="https://github.com/piwi3910/novastor" \
+      org.opencontainers.image.source="https://github.com/azrtydxb/novastor" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 # nvme-cli   : nvme connect / disconnect for NVMe-oF initiator

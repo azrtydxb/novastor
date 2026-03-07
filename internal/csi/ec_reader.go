@@ -7,8 +7,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/piwi3910/novastor/internal/chunk"
-	"github.com/piwi3910/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/logging"
 )
 
 // ECReader reconstructs chunks from erasure-coded shards.

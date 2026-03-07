@@ -7,7 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/piwi3910/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/logging"
 )
 
 // ScrubReporter receives reports of corrupt chunks.

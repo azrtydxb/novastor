@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // getFreePort returns an available TCP port on localhost.

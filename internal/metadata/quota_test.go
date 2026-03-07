@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
-	pb "github.com/piwi3910/novastor/api/proto/metadata"
+	pb "github.com/azrtydxb/novastor/api/proto/metadata"
 )
 
 // Test helper that applies an FSM operation

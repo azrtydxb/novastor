@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/metadata"
-	"github.com/piwi3910/novastor/internal/metrics"
+	"github.com/azrtydxb/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metrics"
 )
 
 // DefaultLeaseTTL is the default TTL for lock leases.

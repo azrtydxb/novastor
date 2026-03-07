@@ -13,7 +13,7 @@ This guide walks you through deploying NovaStor on a Kubernetes cluster and prov
 | Storage | Raw disks or host directories on each node |
 
 !!! note "Container Registry"
-    NovaStor images are hosted at `ghcr.io/piwi3910`. Ensure your cluster can pull images from this registry.
+    NovaStor images are hosted at `ghcr.io/azrtydxb`. Ensure your cluster can pull images from this registry.
 
 ## Step 1: Install NovaStor via Helm
 
@@ -21,7 +21,7 @@ Add the Helm repository and install the chart:
 
 ```bash
 # Add the Helm repository
-helm repo add novastor https://piwi3910.github.io/novastor
+helm repo add novastor https://azrtydxb.github.io/novastor
 helm repo update
 
 # Create a namespace

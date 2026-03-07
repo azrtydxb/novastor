@@ -6,7 +6,7 @@ Complete reference for all NovaStor Helm chart values. The chart deploys all Nov
 
 | Parameter | Default | Description |
 |---|---|---|
-| `global.image.registry` | `ghcr.io/piwi3910/novastor` | Container image registry |
+| `global.image.registry` | `ghcr.io/azrtydxb/novastor` | Container image registry |
 | `global.image.tag` | `0.1.0` | Image tag for all NovaStor components |
 | `global.image.pullPolicy` | `IfNotPresent` | Image pull policy |
 | `nameOverride` | `""` | Override the chart name |

@@ -14,9 +14,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/piwi3910/novastor/internal/agent"
-	"github.com/piwi3910/novastor/internal/logging"
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/agent"
+	"github.com/azrtydxb/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // MetadataPlacementAdapter implements PlacementLookup by querying the

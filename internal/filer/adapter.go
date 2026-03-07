@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"hash/crc32"
 
-	"github.com/piwi3910/novastor/internal/agent"
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/agent"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // MetadataAdapter wraps a metadata.GRPCClient to satisfy the filer.MetadataClient

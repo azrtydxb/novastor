@@ -65,7 +65,7 @@ Create the name of the service account to use
 Global image registry helper
 */}}
 {{- define "novastor.imageRegistry" -}}
-{{- .Values.global.image.registry | default "ghcr.io/piwi3910/novastor" }}
+{{- .Values.global.image.registry | default "ghcr.io/azrtydxb/novastor" }}
 {{- end }}
 
 {{/*

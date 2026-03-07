@@ -1,8 +1,8 @@
 site_name: NovaStor
 site_description: Unified Kubernetes-Native Storage — Block, File, and Object
-site_url: https://piwi3910.github.io/novastor
-repo_url: https://github.com/piwi3910/novastor
-repo_name: piwi3910/novastor
+site_url: https://azrtydxb.github.io/novastor
+repo_url: https://github.com/azrtydxb/novastor
+repo_name: azrtydxb/novastor
 
 theme:
   name: material

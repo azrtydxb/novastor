@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // mockMetadataStore is a test double for MetadataStore.

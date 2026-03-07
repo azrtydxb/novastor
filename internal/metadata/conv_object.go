@@ -1,7 +1,7 @@
 package metadata
 
 import (
-	pb "github.com/piwi3910/novastor/api/proto/metadata"
+	pb "github.com/azrtydxb/novastor/api/proto/metadata"
 )
 
 // ObjectMetaToProto converts a Go ObjectMeta to its protobuf representation.

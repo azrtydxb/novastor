@@ -150,7 +150,7 @@ clean-dataplane: ## Clean data-plane build artifacts.
 ##@ Docker
 
 DOCKER ?= docker
-REGISTRY ?= ghcr.io/piwi3910
+REGISTRY ?= ghcr.io/azrtydxb
 IMAGE_TAG ?= latest
 
 .PHONY: docker-build

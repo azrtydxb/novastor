@@ -9,7 +9,7 @@ import (
 	"github.com/hashicorp/raft"
 	"google.golang.org/protobuf/proto"
 
-	pb "github.com/piwi3910/novastor/api/proto/metadata"
+	pb "github.com/azrtydxb/novastor/api/proto/metadata"
 )
 
 func newTestBadgerFSM(t *testing.T) (*BadgerFSM, func()) {

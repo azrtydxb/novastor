@@ -38,7 +38,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 LABEL org.opencontainers.image.title="novastor-controller" \
       org.opencontainers.image.description="NovaStor Kubernetes operator / controller manager" \
-      org.opencontainers.image.source="https://github.com/piwi3910/novastor" \
+      org.opencontainers.image.source="https://github.com/azrtydxb/novastor" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=builder /out/novastor-controller /usr/local/bin/novastor-controller

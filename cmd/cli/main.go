@@ -6,7 +6,7 @@ package main
 import (
 	"os"
 
-	"github.com/piwi3910/novastor/internal/cli"
+	"github.com/azrtydxb/novastor/internal/cli"
 )
 
 func main() {

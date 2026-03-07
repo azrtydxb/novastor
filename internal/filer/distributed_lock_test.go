@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // Helper to call metadata.conflicts with proper types.

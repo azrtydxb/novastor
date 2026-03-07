@@ -7,7 +7,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/piwi3910/novastor/internal/agent"
+	"github.com/azrtydxb/novastor/internal/agent"
 )
 
 // NodeTargetClient implements AgentTargetClient by managing gRPC connections

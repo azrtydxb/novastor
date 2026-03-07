@@ -4,9 +4,9 @@
 
 NovaStor is a unified Kubernetes-native storage system providing **block** (CSI/NVMe-oF), **file** (NFS/FUSE), and **object** (S3-compatible) storage through a shared chunk storage engine.
 
-- **Module**: `github.com/piwi3910/novastor`
+- **Module**: `github.com/azrtydxb/novastor`
 - **Language**: Go 1.25+
-- **Registry**: `ghcr.io/piwi3910/novastor`
+- **Registry**: `ghcr.io/azrtydxb/novastor`
 
 ## Architecture
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/piwi3910/novastor/api/v1alpha1"
+	"github.com/azrtydxb/novastor/api/v1alpha1"
 )
 
 // ComplianceStatus represents the compliance state of a chunk.

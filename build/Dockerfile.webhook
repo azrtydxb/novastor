@@ -38,7 +38,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 LABEL org.opencontainers.image.title="novastor-webhook" \
       org.opencontainers.image.description="NovaStor mutating webhook for scheduler injection" \
-      org.opencontainers.image.source="https://github.com/piwi3910/novastor" \
+      org.opencontainers.image.source="https://github.com/azrtydxb/novastor" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=builder /out/novastor-webhook /usr/local/bin/novastor-webhook

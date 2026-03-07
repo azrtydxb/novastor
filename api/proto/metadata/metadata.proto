@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package metadata;
 
-option go_package = "github.com/piwi3910/novastor/api/proto/metadata";
+option go_package = "github.com/azrtydxb/novastor/api/proto/metadata";
 
 import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";

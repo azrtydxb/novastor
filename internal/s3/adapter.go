@@ -3,7 +3,7 @@ package s3
 import (
 	"context"
 
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // MetadataAdapter wraps a metadata.GRPCClient to satisfy the S3 BucketStore,

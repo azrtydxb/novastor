@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // GRPCQuotaAdapter adapts a metadata.GRPCClient to implement QuotaReconciler's MetadataClient interface.
