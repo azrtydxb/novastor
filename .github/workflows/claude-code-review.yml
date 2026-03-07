@@ -13,7 +13,7 @@ jobs:
   review:
     name: Code Review
     if: github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - uses: actions/checkout@v4
         with:

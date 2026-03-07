@@ -12,7 +12,7 @@ permissions:
 jobs:
   build-binaries:
     name: Build Binaries
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     strategy:
       matrix:
         goos: [linux]
@@ -52,7 +52,7 @@ jobs:
   create-release:
     name: Create Release
     needs: build-binaries
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - uses: actions/checkout@v4
       - name: Download all artifacts
@@ -73,12 +73,16 @@ jobs:
             artifacts/SHA256SUMS
 
   docker-images:
-    name: Docker Images
+    name: "Docker ${{ matrix.image.name }} (${{ matrix.arch.name }})"
     needs: build-binaries
-    runs-on: ubuntu-latest
     strategy:
       matrix:
-        component:
+        arch:
+          - name: amd64
+            runner: qnap-nas
+          - name: arm64
+            runner: ubuntu-24.04-arm
+        image:
           - name: controller
             dockerfile: build/Dockerfile.controller
           - name: agent
@@ -91,10 +95,9 @@ jobs:
             dockerfile: build/Dockerfile.filer
           - name: s3gw
             dockerfile: build/Dockerfile.s3gw
+    runs-on: ${{ matrix.arch.runner }}
     steps:
       - uses: actions/checkout@v4
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -103,23 +106,70 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/piwi3910/novastor/novastor-${{ matrix.component.name }}
-          tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=sha
+      - name: Extract version tags
+        id: version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          # v1.2.3 -> 1.2.3
+          FULL="${VERSION#v}"
+          # 1.2.3 -> 1.2
+          MINOR="${FULL%.*}"
+          echo "full=${FULL}" >> "$GITHUB_OUTPUT"
+          echo "minor=${MINOR}" >> "$GITHUB_OUTPUT"
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.component.dockerfile }}
-          platforms: linux/amd64,linux/arm64
+          file: ${{ matrix.image.dockerfile }}
+          platforms: linux/${{ matrix.arch.name }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ghcr.io/piwi3910/novastor/novastor-${{ matrix.image.name }}:v${{ steps.version.outputs.full }}-${{ matrix.arch.name }}
+            ghcr.io/piwi3910/novastor/novastor-${{ matrix.image.name }}:v${{ steps.version.outputs.minor }}-${{ matrix.arch.name }}
+            ghcr.io/piwi3910/novastor/novastor-${{ matrix.image.name }}:sha-${{ github.sha }}-${{ matrix.arch.name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  docker-manifest:
+    name: "Docker Manifest ${{ matrix.image }}"
+    runs-on: qnap-nas
+    needs: docker-images
+    steps:
+      - name: Extract version tags
+        id: version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          FULL="${VERSION#v}"
+          MINOR="${FULL%.*}"
+          echo "full=${FULL}" >> "$GITHUB_OUTPUT"
+          echo "minor=${MINOR}" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifests
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/novastor/novastor-${{ matrix.image }}
+        run: |
+          FULL="v${{ steps.version.outputs.full }}"
+          MINOR="v${{ steps.version.outputs.minor }}"
+          SHA="sha-${{ github.sha }}"
+
+          for TAG in "${FULL}" "${MINOR}" "${SHA}"; do
+            docker manifest create ${IMAGE}:${TAG} \
+              --amend ${IMAGE}:${TAG}-amd64 \
+              --amend ${IMAGE}:${TAG}-arm64
+            docker manifest push ${IMAGE}:${TAG}
+          done
+    strategy:
+      matrix:
+        image:
+          - controller
+          - agent
+          - meta
+          - csi
+          - filer
+          - s3gw

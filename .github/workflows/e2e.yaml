@@ -9,7 +9,7 @@ on:
 jobs:
   e2e:
     name: E2E Controller Tests
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     timeout-minutes: 30
     steps:
       - name: Checkout code

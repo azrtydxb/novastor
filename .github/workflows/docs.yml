@@ -20,7 +20,7 @@ concurrency:
 jobs:
   build:
     name: Build Docs
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,7 +42,7 @@ jobs:
   deploy:
     name: Deploy Docs
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

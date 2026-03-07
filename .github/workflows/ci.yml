@@ -15,7 +15,7 @@ permissions:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     outputs:
       go: ${{ steps.filter.outputs.go }}
       helm: ${{ steps.filter.outputs.helm }}
@@ -45,7 +45,7 @@ jobs:
     name: Lint
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -77,7 +77,7 @@ jobs:
     name: Security
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - uses: actions/checkout@v4
         with:
@@ -101,7 +101,7 @@ jobs:
     name: Test
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -121,7 +121,7 @@ jobs:
     name: Build
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     strategy:
       matrix:
         binary:
@@ -147,7 +147,7 @@ jobs:
     name: Integration Tests
     needs: [changes, test]
     if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -162,7 +162,7 @@ jobs:
     name: E2E Tests
     needs: [changes, test]
     if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -177,7 +177,7 @@ jobs:
     name: Helm Lint
     needs: changes
     if: needs.changes.outputs.helm == 'true'
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
@@ -218,7 +218,7 @@ jobs:
     name: Protobuf Sync
     needs: changes
     if: needs.changes.outputs.proto == 'true'
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -264,7 +264,7 @@ jobs:
     name: Docs Build
     needs: changes
     if: needs.changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - uses: actions/checkout@v4
         with:

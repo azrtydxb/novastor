@@ -15,7 +15,7 @@ jobs:
   claude:
     name: Claude Code
     if: contains(github.event.comment.body, '@claude')
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - uses: actions/checkout@v4
         with:

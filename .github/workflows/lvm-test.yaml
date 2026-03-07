@@ -9,7 +9,7 @@ on:
 jobs:
   lvm-tests:
     name: LVM Store Tests
-    runs-on: ubuntu-latest
+    runs-on: qnap-nas
     steps:
       - name: Load dm-thin-pool kernel module
         run: |
