@@ -1,4 +1,4 @@
-module github.com/piwi3910/novastor
+module github.com/azrtydxb/novastor
 
 go 1.25.7
 

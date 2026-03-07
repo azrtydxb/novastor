@@ -13,7 +13,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	"github.com/piwi3910/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/logging"
 )
 
 // FUSEConfig holds configuration for the FUSE filesystem mount.

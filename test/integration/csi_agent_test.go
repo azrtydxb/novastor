@@ -10,9 +10,9 @@ import (
 	"net"
 	"testing"
 
-	"github.com/piwi3910/novastor/internal/agent"
-	"github.com/piwi3910/novastor/internal/chunk"
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/agent"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/metadata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

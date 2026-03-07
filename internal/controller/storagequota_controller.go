@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	novastorev1alpha1 "github.com/piwi3910/novastor/api/v1alpha1"
+	novastorev1alpha1 "github.com/azrtydxb/novastor/api/v1alpha1"
 )
 
 // QuotaReconciler reconciles StorageQuota objects.

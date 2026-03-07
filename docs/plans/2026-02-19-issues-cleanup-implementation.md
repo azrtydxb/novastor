@@ -1034,7 +1034,7 @@ import (
     "sigs.k8s.io/controller-runtime/pkg/client"
     "sigs.k8s.io/controller-runtime/pkg/log"
 
-    novastorv1alpha1 "github.com/piwi3910/novastor/api/v1alpha1"
+    novastorv1alpha1 "github.com/azrtydxb/novastor/api/v1alpha1"
 )
 
 // StorageQuotaReconciler reconciles StorageQuota objects.

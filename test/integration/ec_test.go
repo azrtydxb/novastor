@@ -9,9 +9,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/piwi3910/novastor/internal/chunk"
-	"github.com/piwi3910/novastor/internal/csi"
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/csi"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // ecTestChunkClient is an in-memory ChunkClient that simulates multiple

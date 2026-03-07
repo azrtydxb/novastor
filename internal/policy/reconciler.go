@@ -10,8 +10,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/events"
 
-	"github.com/piwi3910/novastor/api/v1alpha1"
-	"github.com/piwi3910/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/api/v1alpha1"
+	"github.com/azrtydxb/novastor/internal/logging"
 )
 
 // Reconciler repairs non-compliant chunks to restore data protection.

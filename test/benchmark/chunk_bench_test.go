@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/piwi3910/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/chunk"
 )
 
 func BenchmarkChunkWrite(b *testing.B) {

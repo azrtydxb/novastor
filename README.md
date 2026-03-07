@@ -85,7 +85,7 @@ Both modes are available for all three access layers. The choice is made per Sto
 
 ```bash
 # Add the NovaStor Helm repository
-helm repo add novastor https://piwi3910.github.io/novastor
+helm repo add novastor https://azrtydxb.github.io/novastor
 helm repo update
 
 # Install into the novastor-system namespace
@@ -99,7 +99,7 @@ helm install novastor novastor/novastor \
 ### Install from source
 
 ```bash
-git clone https://github.com/piwi3910/novastor.git
+git clone https://github.com/azrtydxb/novastor.git
 cd novastor
 
 # Install CRDs first

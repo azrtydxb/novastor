@@ -10,8 +10,8 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
-	"github.com/piwi3910/novastor/internal/agent/failover"
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/agent/failover"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // --------------------------------------------------------------------------

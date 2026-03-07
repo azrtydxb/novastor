@@ -8,9 +8,9 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/piwi3910/novastor/internal/chunk"
-	"github.com/piwi3910/novastor/internal/logging"
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // ECDistributor encodes chunks into Reed-Solomon shards and distributes

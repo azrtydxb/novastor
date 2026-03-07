@@ -8,8 +8,8 @@ import (
 
 	csipb "github.com/container-storage-interface/spec/lib/go/csi"
 
-	novacsi "github.com/piwi3910/novastor/internal/csi"
-	"github.com/piwi3910/novastor/internal/placement"
+	novacsi "github.com/azrtydxb/novastor/internal/csi"
+	"github.com/azrtydxb/novastor/internal/placement"
 )
 
 // TestBlockStorage_ProvisionWriteReadDelete tests the full block storage flow:

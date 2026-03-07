@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/piwi3910/novastor/internal/scheduler"
+	"github.com/azrtydxb/novastor/internal/scheduler"
 )
 
 // Server runs the HTTP server for the scheduler plugin.

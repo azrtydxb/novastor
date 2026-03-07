@@ -8,10 +8,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/piwi3910/novastor/internal/chunk"
-	"github.com/piwi3910/novastor/internal/logging"
-	"github.com/piwi3910/novastor/internal/metadata"
-	"github.com/piwi3910/novastor/internal/metrics"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metrics"
 )
 
 // GCResult holds the results of an agent garbage collection run.

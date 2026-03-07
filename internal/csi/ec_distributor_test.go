@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/piwi3910/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/chunk"
 )
 
 // ecMockChunkClient is an in-memory ChunkClient for EC tests.

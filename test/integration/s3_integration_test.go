@@ -15,9 +15,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/piwi3910/novastor/internal/agent"
-	"github.com/piwi3910/novastor/internal/chunk"
-	s3gw "github.com/piwi3910/novastor/internal/s3"
+	"github.com/azrtydxb/novastor/internal/agent"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	s3gw "github.com/azrtydxb/novastor/internal/s3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

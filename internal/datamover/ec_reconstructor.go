@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/piwi3910/novastor/internal/chunk"
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // AgentClient defines the interface for communicating with agent nodes.

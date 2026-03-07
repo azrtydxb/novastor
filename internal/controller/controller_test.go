@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	novastorev1alpha1 "github.com/piwi3910/novastor/api/v1alpha1"
+	novastorev1alpha1 "github.com/azrtydxb/novastor/api/v1alpha1"
 )
 
 func testScheme() *runtime.Scheme {

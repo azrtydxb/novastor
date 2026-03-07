@@ -7,8 +7,8 @@ import (
 
 	"github.com/hashicorp/raft"
 
-	pb "github.com/piwi3910/novastor/api/proto/metadata"
-	"github.com/piwi3910/novastor/internal/metrics"
+	pb "github.com/azrtydxb/novastor/api/proto/metadata"
+	"github.com/azrtydxb/novastor/internal/metrics"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

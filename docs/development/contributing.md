@@ -51,7 +51,7 @@ go build -o bin/novastor-controller ./cmd/controller/
 make docker-build
 
 # Build a specific image
-docker build -t ghcr.io/piwi3910/novastor/novastor-agent:dev -f build/Dockerfile.agent .
+docker build -t ghcr.io/azrtydxb/novastor/novastor-agent:dev -f build/Dockerfile.agent .
 ```
 
 ## Running Tests
@@ -314,5 +314,5 @@ Releases follow semantic versioning. The release process:
 1. Update version references in `values.yaml` and documentation
 2. Create a signed tag: `git tag -s v0.2.0 -m "Release v0.2.0"`
 3. Push the tag: `git push origin v0.2.0`
-4. CI builds and publishes container images to `ghcr.io/piwi3910`
+4. CI builds and publishes container images to `ghcr.io/azrtydxb`
 5. Helm chart is published to the GitHub Pages site

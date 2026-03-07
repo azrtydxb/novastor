@@ -20,9 +20,9 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/piwi3910/novastor/internal/logging"
-	"github.com/piwi3910/novastor/internal/metrics"
-	"github.com/piwi3910/novastor/internal/webhook"
+	"github.com/azrtydxb/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/metrics"
+	"github.com/azrtydxb/novastor/internal/webhook"
 )
 
 var (

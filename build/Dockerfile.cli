@@ -38,7 +38,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 LABEL org.opencontainers.image.title="novastorctl" \
       org.opencontainers.image.description="NovaStor CLI tool for managing storage resources" \
-      org.opencontainers.image.source="https://github.com/piwi3910/novastor" \
+      org.opencontainers.image.source="https://github.com/azrtydxb/novastor" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=builder /out/novastorctl /usr/local/bin/novastorctl

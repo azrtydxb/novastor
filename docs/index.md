@@ -88,7 +88,7 @@ graph TB
 
 ## Project Links
 
-- **Source Code**: [github.com/piwi3910/novastor](https://github.com/piwi3910/novastor)
-- **Container Images**: `ghcr.io/piwi3910/novastor/novastor-*`
-- **Module**: `github.com/piwi3910/novastor`
+- **Source Code**: [github.com/azrtydxb/novastor](https://github.com/azrtydxb/novastor)
+- **Container Images**: `ghcr.io/azrtydxb/novastor/novastor-*`
+- **Module**: `github.com/azrtydxb/novastor`
 - **License**: See repository

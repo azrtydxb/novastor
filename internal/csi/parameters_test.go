@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 func TestParseProtectionParams_Default(t *testing.T) {

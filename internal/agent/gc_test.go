@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/chunk"
 )
 
 // mockMetadataClient mocks the metadata client for testing.

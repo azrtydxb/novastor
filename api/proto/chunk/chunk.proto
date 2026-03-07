@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package chunk;
 
-option go_package = "github.com/piwi3910/novastor/api/proto/chunk";
+option go_package = "github.com/azrtydxb/novastor/api/proto/chunk";
 
 // ChunkService provides gRPC access to the chunk storage layer.
 service ChunkService {

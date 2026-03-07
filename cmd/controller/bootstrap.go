@@ -16,7 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/piwi3910/novastor/internal/transport"
+	"github.com/azrtydxb/novastor/internal/transport"
 )
 
 // runTLSBootstrap generates TLS certificates and stores them in a Kubernetes

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/chunk"
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // worker processes healing tasks from the queue.

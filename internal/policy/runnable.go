@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/piwi3910/novastor/api/v1alpha1"
-	"github.com/piwi3910/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/api/v1alpha1"
+	"github.com/azrtydxb/novastor/internal/logging"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"

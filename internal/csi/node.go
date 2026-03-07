@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/piwi3910/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/logging"
 )
 
 // ChunkClient is the interface for fetching and writing chunks to remote nodes.

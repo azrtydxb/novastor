@@ -9,7 +9,7 @@ import (
 	"io"
 	"sync"
 
-	pb "github.com/piwi3910/novastor/api/proto/chunk"
+	pb "github.com/azrtydxb/novastor/api/proto/chunk"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

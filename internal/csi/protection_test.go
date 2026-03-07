@@ -3,7 +3,7 @@ package csi
 import (
 	"testing"
 
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 func TestParseProtectionParams(t *testing.T) {

@@ -124,9 +124,9 @@ jobs:
           platforms: linux/${{ matrix.arch.name }}
           push: true
           tags: |
-            ghcr.io/piwi3910/novastor/novastor-${{ matrix.image.name }}:v${{ steps.version.outputs.full }}-${{ matrix.arch.name }}
-            ghcr.io/piwi3910/novastor/novastor-${{ matrix.image.name }}:v${{ steps.version.outputs.minor }}-${{ matrix.arch.name }}
-            ghcr.io/piwi3910/novastor/novastor-${{ matrix.image.name }}:sha-${{ github.sha }}-${{ matrix.arch.name }}
+            ghcr.io/azrtydxb/novastor/novastor-${{ matrix.image.name }}:v${{ steps.version.outputs.full }}-${{ matrix.arch.name }}
+            ghcr.io/azrtydxb/novastor/novastor-${{ matrix.image.name }}:v${{ steps.version.outputs.minor }}-${{ matrix.arch.name }}
+            ghcr.io/azrtydxb/novastor/novastor-${{ matrix.image.name }}:sha-${{ github.sha }}-${{ matrix.arch.name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

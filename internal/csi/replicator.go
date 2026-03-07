@@ -8,8 +8,8 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/piwi3910/novastor/internal/agent"
-	"github.com/piwi3910/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/agent"
+	"github.com/azrtydxb/novastor/internal/logging"
 )
 
 // ChunkReplicator replicates chunks between agent nodes by address.

@@ -6,9 +6,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/piwi3910/novastor/internal/logging"
-	"github.com/piwi3910/novastor/internal/metadata"
-	"github.com/piwi3910/novastor/internal/spdk"
+	"github.com/azrtydxb/novastor/internal/logging"
+	"github.com/azrtydxb/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/spdk"
 )
 
 // SetupReplicaBdev creates a replica bdev in the SPDK data-plane for a volume.

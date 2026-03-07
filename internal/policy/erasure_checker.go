@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/piwi3910/novastor/api/v1alpha1"
+	"github.com/azrtydxb/novastor/api/v1alpha1"
 )
 
 // ErasureCodingChecker verifies compliance for erasure-coded chunks.

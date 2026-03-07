@@ -3,7 +3,7 @@ package metadata
 import (
 	"fmt"
 
-	"github.com/piwi3910/novastor/api/v1alpha1"
+	"github.com/azrtydxb/novastor/api/v1alpha1"
 )
 
 // ProtectionMode represents the data protection mode.

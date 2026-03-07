@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/piwi3910/novastor/internal/chunk"
+	"github.com/azrtydxb/novastor/internal/chunk"
 )
 
 // seedShards encodes data and writes shards to the mock client.

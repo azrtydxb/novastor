@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // GRPCMetadataStore adapts a metadata.GRPCClient to implement MetadataStore.

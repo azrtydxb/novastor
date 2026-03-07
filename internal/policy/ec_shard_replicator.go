@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/piwi3910/novastor/internal/datamover"
-	"github.com/piwi3910/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/datamover"
+	"github.com/azrtydxb/novastor/internal/metadata"
 )
 
 // ECShardReplicator implements the policy.ShardReplicator interface using

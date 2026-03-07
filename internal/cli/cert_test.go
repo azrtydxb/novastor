@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/transport"
+	"github.com/azrtydxb/novastor/internal/transport"
 )
 
 // TestCertBootstrap verifies the cert bootstrap command generates

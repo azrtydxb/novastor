@@ -21,7 +21,7 @@
 Run:
 ```bash
 cd /Users/pascal/Documents/git/novastor
-go mod init github.com/piwi3910/novastor
+go mod init github.com/azrtydxb/novastor
 ```
 
 **Step 2: Add core dependencies**
@@ -54,7 +54,7 @@ Run: `go mod tidy`
 git add go.mod go.sum
 git commit -m "[Chore] Initialize Go module with core dependencies
 
-Set up github.com/piwi3910/novastor Go module with dependencies
+Set up github.com/azrtydxb/novastor Go module with dependencies
 for chunk engine, Raft consensus, gRPC, erasure coding, K8s operator,
 structured logging, and CLI framework."
 ```
@@ -1379,7 +1379,7 @@ syntax = "proto3";
 
 package novastor.chunk.v1;
 
-option go_package = "github.com/piwi3910/novastor/internal/proto/gen/chunkpb";
+option go_package = "github.com/azrtydxb/novastor/internal/proto/gen/chunkpb";
 
 service ChunkService {
   rpc PutChunk(PutChunkRequest) returns (PutChunkResponse);
@@ -1481,8 +1481,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/piwi3910/novastor/internal/chunk"
-	pb "github.com/piwi3910/novastor/internal/proto/gen/chunkpb"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	pb "github.com/azrtydxb/novastor/internal/proto/gen/chunkpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -1663,8 +1663,8 @@ package agent
 import (
 	"context"
 
-	"github.com/piwi3910/novastor/internal/chunk"
-	pb "github.com/piwi3910/novastor/internal/proto/gen/chunkpb"
+	"github.com/azrtydxb/novastor/internal/chunk"
+	pb "github.com/azrtydxb/novastor/internal/proto/gen/chunkpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

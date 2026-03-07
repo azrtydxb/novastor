@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/piwi3910/novastor/internal/operator"
+	"github.com/azrtydxb/novastor/internal/operator"
 )
 
 // testPlacementLookup implements operator.PlacementLookup for testing.
