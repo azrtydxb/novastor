@@ -52,3 +52,6 @@ kubeconfig
 *.pem
 *.key
 credentials.json
+
+# Worktrees
+.worktrees/
