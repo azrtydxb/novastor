@@ -83,8 +83,10 @@ meta:
   replicas: 3
   image:
     repository: novastor-meta
-  storage: 10Gi
-  storageClassName: ""
+  # hostPath -- Path on the host node for Raft logs and BadgerDB data.
+  # NovaStor cannot use PVCs for its own metadata (chicken-and-egg problem).
+  # Each meta pod is pinned to a unique node via pod anti-affinity.
+  hostPath: /var/lib/novastor/meta
   resources:
     requests:
       cpu: 200m

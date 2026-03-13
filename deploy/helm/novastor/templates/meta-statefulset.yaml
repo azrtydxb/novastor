@@ -24,8 +24,22 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if include "novastor.tls.enabled" . }}
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
       initContainers:
+        - name: fix-data-permissions
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - chown -R 65534:65534 /data && chmod -R 775 /data
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        {{- if include "novastor.tls.enabled" . }}
         - name: wait-for-certs
           image: busybox:1.36
           command: ["/bin/sh", "-c"]
@@ -40,7 +54,7 @@ spec:
             - name: tls-certs
               mountPath: {{ include "novastor.tls.mountPath" . }}
               readOnly: true
-      {{- end }}
+        {{- end }}
       containers:
         - name: meta
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.meta.image.repository }}:{{ .Values.meta.image.tag | default (include "novastor.imageTag" .) }}"
@@ -98,6 +112,10 @@ spec:
           resources:
             {{- toYaml .Values.meta.resources | nindent 12 }}
       volumes:
+        - name: data
+          hostPath:
+            path: {{ .Values.meta.hostPath | default "/var/lib/novastor/meta" }}
+            type: DirectoryOrCreate
         {{- if include "novastor.tls.enabled" . }}
         - name: tls-certs
           secret:
@@ -112,18 +130,14 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.meta.affinity }}
       affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "novastor.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: meta
+              topologyKey: kubernetes.io/hostname
+        {{- with .Values.meta.affinity }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        {{- if .Values.meta.storageClassName }}
-        storageClassName: {{ .Values.meta.storageClassName }}
         {{- end }}
-        resources:
-          requests:
-            storage: {{ .Values.meta.storage }}

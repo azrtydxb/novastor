@@ -46,3 +46,9 @@ config/
 
 # Hack / tooling scripts
 hack/
+
+# Rust dataplane build artifacts (large, rebuilt in container)
+dataplane/target/
+
+# Git worktrees
+.worktrees/
