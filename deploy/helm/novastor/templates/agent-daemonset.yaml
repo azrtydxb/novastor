@@ -28,7 +28,9 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      hostNetwork: true
       hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
       initContainers:
         - name: load-nvme-modules
           image: busybox:1.36

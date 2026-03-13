@@ -163,7 +163,7 @@ csi:
         cpu: 500m
         memory: 256Mi
   provisioner:
-    timeout: "120s"             # Increased for multi-target creation
+    timeout: "1800s"            # Large timeout: chunk-level provisioning takes ~300ms/chunk (10Gi=2560 chunks≈13min)
     image: registry.k8s.io/sig-storage/csi-provisioner:v5.0.1
     resources:
       requests:

@@ -24,13 +24,20 @@ import (
 )
 
 const (
-	defaultNFSFilerImage = "novastor/novastor-filer:v0.1.0"
-	nfsPort              = int32(2049)
+	nfsPort = int32(2049)
 )
 
 // SharedFilesystemReconciler reconciles SharedFilesystem objects.
 type SharedFilesystemReconciler struct {
 	client.Client
+	// ImageRegistry is the container image registry (e.g. "ghcr.io/azrtydxb/novastor").
+	ImageRegistry string
+	// ImageTag is the image tag to use for dynamically created pods (e.g. "latest").
+	ImageTag string
+	// ImagePullPolicy overrides the pull policy for dynamically created pods.
+	ImagePullPolicy string
+	// ImagePullSecrets are secret names for pulling images from private registries.
+	ImagePullSecrets []string
 }
 
 // +kubebuilder:rbac:groups=novastor.io,resources=sharedfilesystems,verbs=get;list;watch;create;update;patch;delete
@@ -155,7 +162,25 @@ func (r *SharedFilesystemReconciler) reconcileNFSDeployment(ctx context.Context,
 
 		image := fs.Spec.Image
 		if image == "" {
-			image = defaultNFSFilerImage
+			registry := r.ImageRegistry
+			if registry == "" {
+				registry = "ghcr.io/azrtydxb/novastor"
+			}
+			tag := r.ImageTag
+			if tag == "" {
+				tag = "latest"
+			}
+			image = fmt.Sprintf("%s/novastor-filer:%s", registry, tag)
+		}
+
+		pullPolicy := corev1.PullIfNotPresent
+		if r.ImagePullPolicy == "Always" {
+			pullPolicy = corev1.PullAlways
+		}
+
+		var pullSecrets []corev1.LocalObjectReference
+		for _, s := range r.ImagePullSecrets {
+			pullSecrets = append(pullSecrets, corev1.LocalObjectReference{Name: s})
 		}
 
 		deploy.Spec = appsv1.DeploymentSpec{
@@ -168,10 +193,12 @@ func (r *SharedFilesystemReconciler) reconcileNFSDeployment(ctx context.Context,
 					Labels: appLabels,
 				},
 				Spec: corev1.PodSpec{
+					ImagePullSecrets: pullSecrets,
 					Containers: []corev1.Container{
 						{
-							Name:  "nfs-filer",
-							Image: image,
+							Name:            "nfs-filer",
+							Image:           image,
+							ImagePullPolicy: pullPolicy,
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          "nfs",

@@ -52,6 +52,12 @@ spec:
             {{- if .Values.controller.leaderElect }}
             - --leader-elect
             {{- end }}
+            - --image-registry={{ include "novastor.imageRegistry" . }}
+            - --image-tag={{ include "novastor.imageTag" . }}
+            - --image-pull-policy={{ .Values.global.image.pullPolicy }}
+            {{- if .Values.global.imagePullSecrets }}
+            - --image-pull-secrets={{ range $i, $s := .Values.global.imagePullSecrets }}{{ if $i }},{{ end }}{{ $s.name }}{{ end }}
+            {{- end }}
             {{- if include "novastor.tls.enabled" . }}
             - --tls-ca={{ include "novastor.tls.caPath" . }}
             - --tls-cert={{ include "novastor.tls.clientCertPath" . }}

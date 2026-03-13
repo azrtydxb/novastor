@@ -404,9 +404,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 	}
 
-	// Calculate chunk count (round up).
-	chunkCount := int((requiredBytes + chunkSize - 1) / chunkSize)
-
 	// Calculate how many nodes we need for placement.
 	// For replication: each chunk needs 'replicas' nodes.
 	// For erasure coding: each chunk needs dataShards + parityShards nodes.
@@ -447,18 +444,18 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	volumeID := uuid.New().String()
 
-	chunkIDs := make([]string, chunkCount)
-	for i := range chunkCount {
-		chunkIDs[i] = fmt.Sprintf("%s-chunk-%04d", volumeID, i)
-	}
-
+	// Lazy allocation: no chunks or placement maps are written at volume
+	// creation time. The NVMe-oF target creates a sparse backing file on
+	// each replica node that provides thin provisioning at the filesystem
+	// level. Placement maps are generated deterministically from the CRUSH
+	// placement and can be reconstructed on demand.
 	profile := protCfg.toProtectionProfile()
 	vm := &metadata.VolumeMeta{
 		VolumeID:          volumeID,
 		SizeBytes:         requiredBytes,
-		ChunkIDs:          chunkIDs,
+		ChunkIDs:          nil, // Lazy: chunks allocated on demand
 		ProtectionProfile: profile,
-		DataProtection:    profile, // Same type, just different naming for backward compatibility
+		DataProtection:    profile,
 	}
 
 	// Store the pool in the volume metadata for quota tracking.
@@ -468,49 +465,13 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 	}
 
-	// Write placement maps for each chunk with multiple nodes for protection.
-	// Chunks are distributed across available nodes round-robin. Each chunk is
-	// assigned to 'nodesPerChunk' different nodes, cycling through the available
-	// node list to spread data evenly.
-	numNodes := len(nodeIDs)
-	for i, chunkID := range chunkIDs {
-		chunkNodes := make([]string, nodesPerChunk)
-		for r := range nodesPerChunk {
-			chunkNodes[r] = nodeIDs[(i+r)%numNodes]
-		}
+	logging.L.Info("CreateVolume: lazy allocation (no chunk pre-allocation)",
+		zap.String("volumeID", volumeID),
+		zap.Int("nodeCount", len(nodeIDs)),
+		zap.Int("nodesPerChunk", nodesPerChunk),
+		zap.Uint64("sizeBytes", requiredBytes))
 
-		pm := &metadata.PlacementMap{
-			ChunkID: chunkID,
-			Nodes:   chunkNodes,
-		}
-		if err := cs.meta.PutPlacementMap(ctx, pm); err != nil {
-			return nil, status.Errorf(codes.Internal, "writing placement map for chunk %s: %v", chunkID, err)
-		}
-
-		// For EC volumes, also write per-shard placement entries.
-		if protParams.IsErasureCoding() {
-			for r, node := range chunkNodes {
-				sp := &metadata.ShardPlacement{
-					ChunkID:    chunkID,
-					VolumeID:   volumeID,
-					ShardIndex: r,
-					NodeID:     node,
-				}
-				if err := cs.meta.PutShardPlacement(ctx, sp); err != nil {
-					return nil, status.Errorf(codes.Internal, "writing shard placement for chunk %s shard %d: %v", chunkID, r, err)
-				}
-			}
-		}
-
-		logging.L.Debug("placed chunk with protection",
-			zap.String("volumeID", volumeID),
-			zap.String("chunkID", chunkID),
-			zap.Strings("nodes", chunkNodes),
-			zap.Int("replicas", nodesPerChunk))
-	}
-
-	// Persist volume metadata before creating NVMe-oF target, because the
-	// agent's CreateTarget verifies volume metadata existence.
+	// Persist volume metadata before creating NVMe-oF target.
 	if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
 		return nil, status.Errorf(codes.Internal, "storing volume metadata: %v", err)
 	}
@@ -569,103 +530,52 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			}
 			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
 			return nil, status.Errorf(codes.Internal, "creating NVMe-oF targets for volume %s: %v", volumeID, err)
-		}
-
-		// Build target addresses JSON for volume context.
-		type targetInfo struct {
-			Addr    string `json:"addr"`
-			Port    string `json:"port"`
-			NQN     string `json:"nqn"`
-			IsOwner bool   `json:"is_owner"`
-		}
-		targets := make([]targetInfo, len(results))
-		for i, r := range results {
-			targets[i] = targetInfo{Addr: r.addr, Port: r.port, NQN: r.nqn, IsOwner: i == 0}
-		}
-		targetsJSON, err := json.Marshal(targets)
-		if err != nil {
-			for i := range uniqueNodes {
-				_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
-			}
-			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
-			return nil, status.Errorf(codes.Internal, "marshaling target addresses for volume %s: %v", volumeID, err)
-		}
-
-		volContext["targetAddresses"] = string(targetsJSON)
-		volContext["writeOwner"] = results[0].addr
-		volContext["subsystemNQN"] = results[0].nqn
-		volContext["targetAddress"] = results[0].addr // Backward compat
-		volContext["targetPort"] = results[0].port    // Backward compat
-
-		// Update volume metadata with primary target fields.
-		vm.TargetNodeID = uniqueNodes[0]
-		vm.TargetAddress = results[0].addr
-		vm.TargetPort = results[0].port
-		vm.SubsystemNQN = results[0].nqn
-		if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
-			for i := range uniqueNodes {
-				_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
-			}
-			return nil, status.Errorf(codes.Internal, "updating volume metadata with target info: %v", err)
-		}
-	}
-
-	// Distribute data protection: EC shard encoding or chunk replication.
-	// After CreateTarget writes all chunks on the primary node (nodeIDs[0]),
-	// we either EC-encode and distribute shards, or replicate whole chunks.
-	// Failure is logged but does NOT fail CreateVolume — the volume
-	// is usable with data on the primary. The policy engine's periodic scan
-	// will repair any missing shards/replicas.
-	if protParams.IsErasureCoding() && cs.ecDistributor == nil {
-		logging.L.Warn("erasure coding requested but EC distributor is not configured; skipping EC distribution",
-			zap.String("volumeID", volumeID))
-	} else if protParams.IsErasureCoding() && cs.ecDistributor != nil {
-		ec, ecErr := chunk.NewErasureCoder(protCfg.dataShards, protCfg.parityShards)
-		if ecErr != nil {
-			logging.L.Error("failed to create erasure coder (volume usable but not EC-encoded)",
-				zap.String("volumeID", volumeID),
-				zap.Error(ecErr))
 		} else {
-			g, gCtx := errgroup.WithContext(ctx)
-			g.SetLimit(8)
-			for i, chunkID := range chunkIDs {
-				shardNodes := make([]string, nodesPerChunk)
-				for r := range nodesPerChunk {
-					shardNodes[r] = nodeIDs[(i+r)%numNodes]
+			// Build target addresses JSON for volume context.
+			type targetInfo struct {
+				Addr    string `json:"addr"`
+				Port    string `json:"port"`
+				NQN     string `json:"nqn"`
+				IsOwner bool   `json:"is_owner"`
+			}
+			targets := make([]targetInfo, len(results))
+			for i, r := range results {
+				targets[i] = targetInfo{Addr: r.addr, Port: r.port, NQN: r.nqn, IsOwner: i == 0}
+			}
+			targetsJSON, err := json.Marshal(targets)
+			if err != nil {
+				for i := range uniqueNodes {
+					_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
 				}
-				cid, nodes := chunkID, shardNodes
-				g.Go(func() error {
-					return cs.ecDistributor.DistributeChunk(gCtx, ec, cid, nodeIDs[0], nodes, volumeID)
-				})
+				_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
+				return nil, status.Errorf(codes.Internal, "marshaling target addresses for volume %s: %v", volumeID, err)
 			}
-			if err := g.Wait(); err != nil {
-				logging.L.Error("EC shard distribution failed (volume usable but under-protected)",
-					zap.String("volumeID", volumeID),
-					zap.Error(err))
-			}
-		}
-	} else if cs.chunkReplicator != nil && nodesPerChunk > 1 {
-		primaryAddr := nodeIDs[0]
-		g, gCtx := errgroup.WithContext(ctx)
-		g.SetLimit(8) // Limit concurrent replication goroutines.
-		for i, chunkID := range chunkIDs {
-			for r := 1; r < nodesPerChunk; r++ {
-				destAddr := nodeIDs[(i+r)%numNodes]
-				if destAddr == primaryAddr {
-					continue
+
+			volContext["targetAddresses"] = string(targetsJSON)
+			volContext["writeOwner"] = results[0].addr
+			volContext["subsystemNQN"] = results[0].nqn
+			volContext["targetAddress"] = results[0].addr // Backward compat
+			volContext["targetPort"] = results[0].port    // Backward compat
+
+			// Update volume metadata with primary target fields.
+			vm.TargetNodeID = uniqueNodes[0]
+			vm.TargetAddress = results[0].addr
+			vm.TargetPort = results[0].port
+			vm.SubsystemNQN = results[0].nqn
+			if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
+				for i := range uniqueNodes {
+					_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
 				}
-				cid, dest := chunkID, destAddr
-				g.Go(func() error {
-					return cs.chunkReplicator.ReplicateChunk(gCtx, cid, primaryAddr, dest)
-				})
+				return nil, status.Errorf(codes.Internal, "updating volume metadata with target info: %v", err)
 			}
-		}
-		if err := g.Wait(); err != nil {
-			logging.L.Error("chunk replication failed (volume usable but under-protected)",
-				zap.String("volumeID", volumeID),
-				zap.Error(err))
 		}
 	}
+
+	// Data protection replication is deferred — the NVMe-oF targets on each
+	// replica node create their own sparse backing files (thin provisioned).
+	// Synchronous replication of written blocks will be handled by the
+	// policy engine's periodic compliance scan. This lazy approach means
+	// CreateVolume completes instantly regardless of volume size.
 
 	// Build accessible topology from the nodes where chunks are placed.
 	// This informs the Kubernetes scheduler where the volume is reachable.

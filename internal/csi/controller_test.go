@@ -172,8 +172,9 @@ func TestCreateVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("volume metadata not found after create: %v", err)
 	}
-	if len(vm.ChunkIDs) != 2 {
-		t.Errorf("expected 2 chunks, got %d", len(vm.ChunkIDs))
+	// Lazy allocation: chunks are allocated on demand, not at CreateVolume time.
+	if len(vm.ChunkIDs) != 0 {
+		t.Errorf("expected 0 chunks (lazy allocation), got %d", len(vm.ChunkIDs))
 	}
 }
 
@@ -199,9 +200,9 @@ func TestCreateVolumeDefaultSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("volume metadata not found: %v", err)
 	}
-	expectedChunks := int((defaultVolumeSize + chunkSize - 1) / chunkSize)
-	if len(vm.ChunkIDs) != expectedChunks {
-		t.Errorf("expected %d chunks for default 1GiB volume, got %d", expectedChunks, len(vm.ChunkIDs))
+	// Lazy allocation: chunks are allocated on demand, not at CreateVolume time.
+	if len(vm.ChunkIDs) != 0 {
+		t.Errorf("expected 0 chunks (lazy allocation), got %d", len(vm.ChunkIDs))
 	}
 }
 
@@ -396,10 +397,9 @@ func TestCreateVolume_ErasureCodingCustom(t *testing.T) {
 	if vm.DataProtection.ErasureCoding.ParityShards != 3 {
 		t.Errorf("expected parityShards 3, got %d", vm.DataProtection.ErasureCoding.ParityShards)
 	}
-	// Verify chunk count is based on volume size, not EC overhead
-	// (EC overhead is handled at chunk encoding level)
-	if len(vm.ChunkIDs) != 2 {
-		t.Errorf("expected 2 chunks for 8MiB volume, got %d", len(vm.ChunkIDs))
+	// Lazy allocation: chunks are allocated on demand, not at CreateVolume time.
+	if len(vm.ChunkIDs) != 0 {
+		t.Errorf("expected 0 chunks (lazy allocation), got %d", len(vm.ChunkIDs))
 	}
 }
 
@@ -1164,37 +1164,11 @@ func TestCreateVolume_ECDistribution(t *testing.T) {
 		t.Errorf("expected 4 data shards, got %d", vm.DataProtection.ErasureCoding.DataShards)
 	}
 
-	// Verify shard placements were written for each chunk.
-	for _, chunkID := range vm.ChunkIDs {
-		sps, err := store.GetShardPlacements(context.Background(), chunkID)
-		if err != nil {
-			t.Fatalf("GetShardPlacements for %s: %v", chunkID, err)
-		}
-		if len(sps) != 6 {
-			t.Errorf("expected 6 shard placements for chunk %s, got %d", chunkID, len(sps))
-		}
-
-		// Verify each shard index is present.
-		seen := make(map[int]bool)
-		for _, sp := range sps {
-			seen[sp.ShardIndex] = true
-			if sp.VolumeID != vol.GetVolumeId() {
-				t.Errorf("shard placement volume ID mismatch: got %s, want %s", sp.VolumeID, vol.GetVolumeId())
-			}
-		}
-		for i := range 6 {
-			if !seen[i] {
-				t.Errorf("missing shard placement for index %d in chunk %s", i, chunkID)
-			}
-		}
+	// Lazy allocation: no chunks or shard placements at CreateVolume time.
+	if len(vm.ChunkIDs) != 0 {
+		t.Errorf("expected 0 chunks (lazy allocation), got %d", len(vm.ChunkIDs))
 	}
 
-	// Note: In this test environment, EC distribution itself will fail (or no-op)
-	// gracefully because there's no primary chunk data to read: AgentTarget is
-	// mocked and does not actually create NVMe targets or write data. The
-	// ShardPlacement metadata is still written in the placement map loop
-	// regardless, so this test only verifies that the metadata path works
-	// correctly, not the full production EC distribution flow.
 	_ = client // client available for future tests with pre-seeded data
 }
 
@@ -1223,18 +1197,9 @@ func TestCreateVolume_ECMetadataWithMultipleChunks(t *testing.T) {
 		t.Fatalf("volume metadata not found: %v", err)
 	}
 
-	if len(vm.ChunkIDs) != 3 {
-		t.Errorf("expected 3 chunks, got %d", len(vm.ChunkIDs))
-	}
-
-	// Each chunk should have 6 shard placements.
-	totalPlacements := 0
-	for _, chunkID := range vm.ChunkIDs {
-		sps, _ := store.GetShardPlacements(context.Background(), chunkID)
-		totalPlacements += len(sps)
-	}
-	if totalPlacements != 18 { // 3 chunks * 6 shards
-		t.Errorf("expected 18 total shard placements, got %d", totalPlacements)
+	// Lazy allocation: no chunks pre-allocated at CreateVolume time.
+	if len(vm.ChunkIDs) != 0 {
+		t.Errorf("expected 0 chunks (lazy allocation), got %d", len(vm.ChunkIDs))
 	}
 }
 
@@ -1262,11 +1227,8 @@ func TestCreateVolume_ReplicationDoesNotWriteShardPlacements(t *testing.T) {
 		t.Fatalf("volume metadata not found: %v", err)
 	}
 
-	// Replication volumes should NOT have shard placements.
-	for _, chunkID := range vm.ChunkIDs {
-		sps, _ := store.GetShardPlacements(context.Background(), chunkID)
-		if len(sps) != 0 {
-			t.Errorf("expected 0 shard placements for replicated chunk %s, got %d", chunkID, len(sps))
-		}
+	// Lazy allocation: no chunks pre-allocated, so no shard placements to check.
+	if len(vm.ChunkIDs) != 0 {
+		t.Errorf("expected 0 chunks (lazy allocation), got %d", len(vm.ChunkIDs))
 	}
 }

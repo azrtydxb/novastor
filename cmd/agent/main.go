@@ -216,14 +216,13 @@ func main() {
 		}
 	}
 
-	// Register NVMe-oF target service via SPDK data plane.
-	if spdkClient == nil {
-		logging.L.Info("NVMe-oF target service disabled (no dataplane)")
-	} else if *hostIP == "" {
+	// Register NVMe-oF target service.
+	if *hostIP == "" {
 		logging.L.Info("NVMe-oF target service disabled (--host-ip not set)")
 	} else if metaClient == nil {
 		logging.L.Warn("NVMe-oF target service disabled: no metadata connection")
-	} else {
+	} else if spdkClient != nil {
+		// SPDK dataplane available — use SPDK for NVMe-oF targets.
 		spdkServer := agent.NewSPDKTargetServer(*hostIP, spdkClient, metaClient)
 		spdkServer.Register(srv)
 		logging.L.Info("NVMe-oF target service registered (SPDK)", zap.String("hostIP", *hostIP))
@@ -234,6 +233,11 @@ func main() {
 			logging.L.Fatal("failover controller start", zap.Error(err))
 		}
 		defer fc.Stop()
+	} else {
+		// No SPDK dataplane — use kernel nvmet for NVMe-oF targets.
+		kernelServer := agent.NewKernelTargetServer(*hostIP)
+		kernelServer.Register(srv)
+		logging.L.Info("NVMe-oF target service registered (kernel nvmet)", zap.String("hostIP", *hostIP))
 	}
 
 	// Start the garbage collector for orphan chunks.
