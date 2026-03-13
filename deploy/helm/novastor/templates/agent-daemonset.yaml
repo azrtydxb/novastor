@@ -69,8 +69,10 @@ spec:
             - --pod-ip=$(POD_IP)
             - --heartbeat-interval={{ .Values.agent.heartbeatInterval }}
             {{- if .Values.dataplane.enabled }}
-            - --data-plane=spdk
+            - --dataplane-required=true
             - --spdk-socket=/var/tmp/novastor-spdk.sock
+            {{- else }}
+            - --dataplane-required=false
             {{- end }}
             {{- if include "novastor.tls.enabled" . }}
             - --tls-ca={{ include "novastor.tls.caPath" . }}

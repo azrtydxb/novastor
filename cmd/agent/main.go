@@ -93,6 +93,7 @@ func main() {
 	tlsClientKey := flag.String("tls-client-key", "", "Path to client key for outbound mTLS connections to metadata service")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	spdkSocket := flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "Path to the SPDK JSON-RPC Unix socket")
+	dataplaneRequired := flag.Bool("dataplane-required", true, "Require SPDK data-plane socket (set false to run without dataplane)")
 	flag.Parse()
 
 	logging.Init(false)
@@ -120,26 +121,31 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Connect to the SPDK data-plane socket.
-	logging.L.Info("waiting for SPDK data-plane socket", zap.String("socket", *spdkSocket))
-	socketTimeout := 120 * time.Second
-	socketDeadline := time.Now().Add(socketTimeout)
-	for {
-		if _, statErr := os.Stat(*spdkSocket); statErr == nil {
-			break
+	// Connect to the SPDK data-plane socket (optional when dataplane is disabled).
+	var spdkClient *spdk.Client
+	if *dataplaneRequired {
+		logging.L.Info("waiting for SPDK data-plane socket", zap.String("socket", *spdkSocket))
+		socketTimeout := 120 * time.Second
+		socketDeadline := time.Now().Add(socketTimeout)
+		for {
+			if _, statErr := os.Stat(*spdkSocket); statErr == nil {
+				break
+			}
+			if time.Now().After(socketDeadline) {
+				logging.L.Fatal("timed out waiting for SPDK data-plane socket",
+					zap.String("socket", *spdkSocket),
+					zap.Duration("timeout", socketTimeout))
+			}
+			time.Sleep(2 * time.Second)
 		}
-		if time.Now().After(socketDeadline) {
-			logging.L.Fatal("timed out waiting for SPDK data-plane socket",
-				zap.String("socket", *spdkSocket),
-				zap.Duration("timeout", socketTimeout))
+		spdkClient = spdk.NewClient(*spdkSocket)
+		if err := spdkClient.Connect(); err != nil {
+			logging.L.Fatal("failed to connect to SPDK data-plane", zap.Error(err))
 		}
-		time.Sleep(2 * time.Second)
+		logging.L.Info("connected to SPDK data-plane", zap.String("socket", *spdkSocket))
+	} else {
+		logging.L.Info("dataplane not required, skipping SPDK socket wait")
 	}
-	spdkClient := spdk.NewClient(*spdkSocket)
-	if err := spdkClient.Connect(); err != nil {
-		logging.L.Fatal("failed to connect to SPDK data-plane", zap.Error(err))
-	}
-	logging.L.Info("connected to SPDK data-plane", zap.String("socket", *spdkSocket))
 
 	// Build gRPC server options.
 	var serverOpts []grpc.ServerOption
@@ -211,23 +217,23 @@ func main() {
 	}
 
 	// Register NVMe-oF target service via SPDK data plane.
-	if *hostIP != "" {
-		if metaClient == nil {
-			logging.L.Warn("NVMe-oF target service disabled: no metadata connection")
-		} else {
-			spdkServer := agent.NewSPDKTargetServer(*hostIP, spdkClient, metaClient)
-			spdkServer.Register(srv)
-			logging.L.Info("NVMe-oF target service registered (SPDK)", zap.String("hostIP", *hostIP))
-
-			// Start failover controller for ANA state management.
-			fc := failover.New(*nodeID, registrationAddr, *hostIP, metaClient, spdkClient, logging.L)
-			if err := fc.Start(ctx); err != nil {
-				logging.L.Fatal("failover controller start", zap.Error(err))
-			}
-			defer fc.Stop()
-		}
-	} else {
+	if spdkClient == nil {
+		logging.L.Info("NVMe-oF target service disabled (no dataplane)")
+	} else if *hostIP == "" {
 		logging.L.Info("NVMe-oF target service disabled (--host-ip not set)")
+	} else if metaClient == nil {
+		logging.L.Warn("NVMe-oF target service disabled: no metadata connection")
+	} else {
+		spdkServer := agent.NewSPDKTargetServer(*hostIP, spdkClient, metaClient)
+		spdkServer.Register(srv)
+		logging.L.Info("NVMe-oF target service registered (SPDK)", zap.String("hostIP", *hostIP))
+
+		// Start failover controller for ANA state management.
+		fc := failover.New(*nodeID, registrationAddr, *hostIP, metaClient, spdkClient, logging.L)
+		if err := fc.Start(ctx); err != nil {
+			logging.L.Fatal("failover controller start", zap.Error(err))
+		}
+		defer fc.Stop()
 	}
 
 	// Start the garbage collector for orphan chunks.
