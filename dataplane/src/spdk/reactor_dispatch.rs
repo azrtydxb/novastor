@@ -181,12 +181,15 @@ pub fn delete_malloc_bdev(name: &str) -> Result<()> {
         }
 
         unsafe {
+            let bdev = ffi::spdk_bdev_get_by_name(name_c.as_ptr() as *const c_char);
             let comp_ptr = Arc::into_raw(comp) as *mut std::os::raw::c_void;
-            ffi::delete_malloc_disk(
-                name_c.as_ptr() as *const c_char,
-                Some(delete_done),
-                comp_ptr,
-            );
+            if bdev.is_null() {
+                // bdev not found — treat as success (already deleted).
+                let c = Arc::from_raw(comp_ptr as *const Completion<i32>);
+                c.complete(0);
+                return;
+            }
+            ffi::delete_malloc_disk(bdev, Some(delete_done), comp_ptr);
         }
     });
 
@@ -606,9 +609,11 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
     let name = bdev_name.to_string();
     let requested_len = length as usize;
     let (completion, sender) = AsyncCompletion::<Result<Vec<u8>>>::new();
-    let sender_ptr = sender.into_ptr();
+    // Convert to usize for Send safety (raw pointers aren't Send).
+    let sender_addr = sender.into_ptr() as usize;
 
     send_to_reactor(move || unsafe {
+        let sender_ptr = sender_addr as *mut std::os::raw::c_void;
         let name_c = match std::ffi::CString::new(name.as_str()) {
             Ok(c) => c,
             Err(e) => {
@@ -702,9 +707,11 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
     let name = bdev_name.to_string();
     let data = data.to_vec();
     let (completion, sender) = AsyncCompletion::<Result<()>>::new();
-    let sender_ptr = sender.into_ptr();
+    // Convert to usize for Send safety (raw pointers aren't Send).
+    let sender_addr = sender.into_ptr() as usize;
 
     send_to_reactor(move || unsafe {
+        let sender_ptr = sender_addr as *mut std::os::raw::c_void;
         let name_c = match std::ffi::CString::new(name.as_str()) {
             Ok(c) => c,
             Err(e) => {
