@@ -1,0 +1,377 @@
+//! BdevChunkStore — chunk storage on SPDK bdevs (raw device or lvol).
+//!
+//! Uses a bitmap allocator for 4MB-aligned slot management and stores
+//! chunk_id → slot mappings in an on-disk index. Supports both raw block
+//! devices and LVM logical volumes — the BdevChunkStore doesn't care
+//! which type of bdev it operates on.
+
+use crate::backend::chunk_store::{ChunkStore, ChunkStoreStats, CHUNK_SIZE};
+use crate::error::{DataPlaneError, Result};
+use std::collections::HashMap;
+
+/// Bitmap allocator for 4MB-aligned slots on a bdev.
+///
+/// Tracks which slots are free/used. Supports allocation and deallocation
+/// (freed slots can be reused, unlike a bump allocator).
+pub struct BitmapAllocator {
+    /// One bit per slot: 1 = used, 0 = free.
+    bitmap: Vec<u8>,
+    total_slots: u64,
+    used_slots: u64,
+    /// Hint: start searching from this slot for next allocation.
+    next_search: u64,
+}
+
+impl BitmapAllocator {
+    /// Create a new allocator for `total_slots` slots.
+    pub fn new(total_slots: u64) -> Self {
+        let bitmap_bytes = ((total_slots + 7) / 8) as usize;
+        Self {
+            bitmap: vec![0u8; bitmap_bytes],
+            total_slots,
+            used_slots: 0,
+            next_search: 0,
+        }
+    }
+
+    /// Allocate a free slot. Returns the slot number, or None if full.
+    pub fn allocate(&mut self) -> Option<u64> {
+        let start = self.next_search;
+        for i in 0..self.total_slots {
+            let slot = (start + i) % self.total_slots;
+            if !self.is_allocated(slot) {
+                self.set_allocated(slot, true);
+                self.used_slots += 1;
+                self.next_search = (slot + 1) % self.total_slots;
+                return Some(slot);
+            }
+        }
+        None
+    }
+
+    /// Free a previously allocated slot.
+    pub fn free(&mut self, slot: u64) {
+        if slot >= self.total_slots {
+            return;
+        }
+        if self.is_allocated(slot) {
+            self.set_allocated(slot, false);
+            self.used_slots -= 1;
+            // Hint: start future searches from this freed slot.
+            if slot < self.next_search {
+                self.next_search = slot;
+            }
+        }
+    }
+
+    /// Check if a slot is allocated.
+    pub fn is_allocated(&self, slot: u64) -> bool {
+        if slot >= self.total_slots {
+            return false;
+        }
+        let byte_idx = (slot / 8) as usize;
+        let bit_idx = (slot % 8) as u8;
+        (self.bitmap[byte_idx] >> bit_idx) & 1 == 1
+    }
+
+    pub fn total_slots(&self) -> u64 {
+        self.total_slots
+    }
+    pub fn used_slots(&self) -> u64 {
+        self.used_slots
+    }
+    pub fn free_slots(&self) -> u64 {
+        self.total_slots - self.used_slots
+    }
+
+    /// Get the raw bitmap bytes (for persistence).
+    pub fn bitmap_bytes(&self) -> &[u8] {
+        &self.bitmap
+    }
+
+    /// Restore bitmap from persisted bytes.
+    pub fn restore_from_bytes(&mut self, bytes: &[u8]) {
+        let len = bytes.len().min(self.bitmap.len());
+        self.bitmap[..len].copy_from_slice(&bytes[..len]);
+        // Recount used slots.
+        self.used_slots = 0;
+        for slot in 0..self.total_slots {
+            if self.is_allocated(slot) {
+                self.used_slots += 1;
+            }
+        }
+        self.next_search = 0;
+    }
+
+    fn set_allocated(&mut self, slot: u64, allocated: bool) {
+        let byte_idx = (slot / 8) as usize;
+        let bit_idx = (slot % 8) as u8;
+        if allocated {
+            self.bitmap[byte_idx] |= 1 << bit_idx;
+        } else {
+            self.bitmap[byte_idx] &= !(1 << bit_idx);
+        }
+    }
+}
+
+/// On-disk superblock for BdevChunkStore.
+///
+/// Stored at offset 0 (copy A) and after the first reserved region (copy B).
+/// A/B double-buffering with a generation counter for crash recovery.
+#[derive(Debug, Clone)]
+pub struct Superblock {
+    pub magic: [u8; 8], // b"NVACHUNK"
+    pub version: u32,
+    pub generation: u64, // Monotonically increasing for A/B recovery.
+    pub chunk_size: u32,
+    pub total_slots: u64,
+    pub used_slots: u64,
+    pub bitmap_bytes: u32,  // Size of bitmap region in bytes.
+    pub index_entries: u32, // Number of chunk_id→slot entries.
+    pub checksum: u32,      // CRC-32C of all preceding fields.
+}
+
+impl Superblock {
+    /// Size of serialized superblock: 4KB (4096 bytes), matching the spec.
+    /// The first 48 bytes contain fields, followed by zero padding to 4KB.
+    pub const SIZE: usize = 4096;
+
+    /// Byte offset where fields end. CRC covers buf[0..FIELDS_END].
+    /// Checksum is stored at FIELDS_END..FIELDS_END+4.
+    const FIELDS_END: usize = 48;
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = vec![0u8; Self::SIZE];
+        let mut off = 0;
+
+        buf[off..off + 8].copy_from_slice(&self.magic);
+        off += 8;
+        buf[off..off + 4].copy_from_slice(&self.version.to_le_bytes());
+        off += 4;
+        buf[off..off + 8].copy_from_slice(&self.generation.to_le_bytes());
+        off += 8;
+        buf[off..off + 4].copy_from_slice(&self.chunk_size.to_le_bytes());
+        off += 4;
+        buf[off..off + 8].copy_from_slice(&self.total_slots.to_le_bytes());
+        off += 8;
+        buf[off..off + 8].copy_from_slice(&self.used_slots.to_le_bytes());
+        off += 8;
+        buf[off..off + 4].copy_from_slice(&self.bitmap_bytes.to_le_bytes());
+        off += 4;
+        buf[off..off + 4].copy_from_slice(&self.index_entries.to_le_bytes());
+        // off is now 48 == FIELDS_END
+        // Checksum covers bytes 0..48 (the field data only, not the checksum itself).
+        let crc = crc32c::crc32c(&buf[..Self::FIELDS_END]);
+        buf[Self::FIELDS_END..Self::FIELDS_END + 4].copy_from_slice(&crc.to_le_bytes());
+        // Remaining bytes 52..4096 are zero padding.
+
+        buf
+    }
+
+    pub fn from_bytes(buf: &[u8]) -> Result<Self> {
+        if buf.len() < Self::SIZE {
+            return Err(DataPlaneError::BdevError("superblock too short".into()));
+        }
+        if &buf[0..8] != b"NVACHUNK" {
+            return Err(DataPlaneError::BdevError("invalid Superblock magic".into()));
+        }
+
+        let mut off = 0;
+        let mut magic = [0u8; 8];
+        magic.copy_from_slice(&buf[off..off + 8]);
+        off += 8;
+        let version = u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+        off += 4;
+        let generation = u64::from_le_bytes(buf[off..off + 8].try_into().unwrap());
+        off += 8;
+        let chunk_size = u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+        off += 4;
+        let total_slots = u64::from_le_bytes(buf[off..off + 8].try_into().unwrap());
+        off += 8;
+        let used_slots = u64::from_le_bytes(buf[off..off + 8].try_into().unwrap());
+        off += 8;
+        let bitmap_bytes = u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+        off += 4;
+        let index_entries =
+            u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+        // off is now 48 == FIELDS_END. Checksum stored at bytes 48..52.
+        let _ = off; // intentional: off == FIELDS_END, use constant directly
+        let checksum = u32::from_le_bytes([
+            buf[Self::FIELDS_END],
+            buf[Self::FIELDS_END + 1],
+            buf[Self::FIELDS_END + 2],
+            buf[Self::FIELDS_END + 3],
+        ]);
+
+        // Verify checksum covers bytes 0..48 (fields only, not the checksum itself).
+        let expected_crc = crc32c::crc32c(&buf[..Self::FIELDS_END]);
+        if checksum != expected_crc {
+            return Err(DataPlaneError::BdevError(format!(
+                "superblock checksum mismatch: stored={checksum:#x}, computed={expected_crc:#x}"
+            )));
+        }
+
+        Ok(Self {
+            magic,
+            version,
+            generation,
+            chunk_size,
+            total_slots,
+            used_slots,
+            bitmap_bytes,
+            index_entries,
+            checksum,
+        })
+    }
+}
+
+/// On-disk index entry: chunk_id → slot number.
+#[derive(Debug, Clone)]
+pub struct IndexEntry {
+    pub chunk_id: String, // 64-char hex SHA-256.
+    pub slot: u64,
+}
+
+impl IndexEntry {
+    /// Serialized size: 32 bytes (SHA-256 raw) + 8 bytes (slot u64) = 40 bytes.
+    pub const SIZE: usize = 40;
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut buf = [0u8; Self::SIZE];
+        let hash_bytes = hex::decode(&self.chunk_id).unwrap_or_else(|_| vec![0u8; 32]);
+        buf[0..32].copy_from_slice(&hash_bytes[..32]);
+        buf[32..40].copy_from_slice(&self.slot.to_le_bytes());
+        buf
+    }
+
+    pub fn from_bytes(buf: &[u8; Self::SIZE]) -> Self {
+        let chunk_id = hex::encode(&buf[0..32]);
+        let slot = u64::from_le_bytes(buf[32..40].try_into().unwrap());
+        Self { chunk_id, slot }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocate_first_slot() {
+        let mut alloc = BitmapAllocator::new(100);
+        assert_eq!(alloc.allocate(), Some(0));
+        assert_eq!(alloc.used_slots(), 1);
+    }
+
+    #[test]
+    fn allocate_sequential() {
+        let mut alloc = BitmapAllocator::new(10);
+        assert_eq!(alloc.allocate(), Some(0));
+        assert_eq!(alloc.allocate(), Some(1));
+        assert_eq!(alloc.allocate(), Some(2));
+        assert_eq!(alloc.used_slots(), 3);
+    }
+
+    #[test]
+    fn free_and_reuse() {
+        let mut alloc = BitmapAllocator::new(10);
+        let s0 = alloc.allocate().unwrap();
+        let _s1 = alloc.allocate().unwrap();
+        alloc.free(s0);
+        // Next allocate should reuse freed slot.
+        let reused = alloc.allocate().unwrap();
+        assert_eq!(reused, s0);
+    }
+
+    #[test]
+    fn allocate_exhaustion() {
+        let mut alloc = BitmapAllocator::new(3);
+        assert!(alloc.allocate().is_some());
+        assert!(alloc.allocate().is_some());
+        assert!(alloc.allocate().is_some());
+        assert!(alloc.allocate().is_none()); // Full.
+    }
+
+    #[test]
+    fn free_invalid_slot_is_noop() {
+        let mut alloc = BitmapAllocator::new(10);
+        alloc.free(999); // Out of range — should not panic.
+    }
+
+    #[test]
+    fn is_allocated_check() {
+        let mut alloc = BitmapAllocator::new(10);
+        assert!(!alloc.is_allocated(0));
+        alloc.allocate();
+        assert!(alloc.is_allocated(0));
+        assert!(!alloc.is_allocated(1));
+    }
+
+    #[test]
+    fn total_and_free_slots() {
+        let mut alloc = BitmapAllocator::new(100);
+        assert_eq!(alloc.total_slots(), 100);
+        assert_eq!(alloc.free_slots(), 100);
+        alloc.allocate();
+        assert_eq!(alloc.free_slots(), 99);
+    }
+
+    #[test]
+    fn superblock_serialization_roundtrip() {
+        let sb = Superblock {
+            magic: *b"NVACHUNK",
+            version: 1,
+            generation: 42,
+            chunk_size: CHUNK_SIZE as u32,
+            total_slots: 1000,
+            used_slots: 50,
+            bitmap_bytes: 125,
+            index_entries: 50,
+            checksum: 0, // Computed in to_bytes().
+        };
+        let bytes = sb.to_bytes();
+        assert_eq!(bytes.len(), Superblock::SIZE); // 4096 bytes.
+
+        let parsed = Superblock::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.magic, *b"NVACHUNK");
+        assert_eq!(parsed.generation, 42);
+        assert_eq!(parsed.total_slots, 1000);
+    }
+
+    #[test]
+    fn superblock_invalid_magic_rejected() {
+        let mut bytes = vec![0u8; Superblock::SIZE];
+        bytes[0..8].copy_from_slice(b"BADMAGIC");
+        assert!(Superblock::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn index_entry_roundtrip() {
+        let entry = IndexEntry {
+            chunk_id: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+                .to_string(),
+            slot: 42,
+        };
+        let bytes = entry.to_bytes();
+        let parsed = IndexEntry::from_bytes(&bytes);
+        assert_eq!(parsed.chunk_id, entry.chunk_id);
+        assert_eq!(parsed.slot, 42);
+    }
+
+    #[test]
+    fn bitmap_restore_from_bytes() {
+        let mut alloc = BitmapAllocator::new(16);
+        alloc.allocate(); // slot 0
+        alloc.allocate(); // slot 1
+        alloc.allocate(); // slot 2
+
+        let bytes = alloc.bitmap_bytes().to_vec();
+
+        let mut alloc2 = BitmapAllocator::new(16);
+        alloc2.restore_from_bytes(&bytes);
+        assert_eq!(alloc2.used_slots(), 3);
+        assert!(alloc2.is_allocated(0));
+        assert!(alloc2.is_allocated(1));
+        assert!(alloc2.is_allocated(2));
+        assert!(!alloc2.is_allocated(3));
+    }
+}

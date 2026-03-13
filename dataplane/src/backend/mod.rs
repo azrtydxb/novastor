@@ -4,6 +4,7 @@
 //! `StorageBackend` trait so the Go management plane can use any backend
 //! through a single JSON-RPC interface.
 
+pub mod bdev_store;
 pub mod chunk;
 pub mod chunk_store;
 pub mod file_store;
