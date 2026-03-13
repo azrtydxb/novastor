@@ -47,6 +47,10 @@ struct Args {
     #[arg(long, default_value_t = 4420)]
     listen_port: u16,
 
+    /// gRPC inter-node listen port
+    #[arg(long, default_value_t = 9500)]
+    grpc_port: u16,
+
     /// Log level
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -91,6 +95,7 @@ fn main() {
             transport_type: args.transport_type,
             listen_address: args.listen_address,
             listen_port: args.listen_port,
+            grpc_port: args.grpc_port,
         };
 
         // spdk::run() blocks in the SPDK reactor loop on the main thread.
@@ -111,6 +116,7 @@ fn main() {
             args.transport_type,
             args.listen_address,
             args.listen_port,
+            args.grpc_port,
         );
     }
 
