@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -120,8 +121,8 @@ func TestMultipartInfo_Empty(t *testing.T) {
 func TestMultipartInfo_MultipleParts(t *testing.T) {
 	mp := &MultipartInfo{
 		UploadID: "upload-123",
-		Bucket:    "test-bucket",
-		Key:       "large-file.dat",
+		Bucket:   "test-bucket",
+		Key:      "large-file.dat",
 		Parts: []PartInfo{
 			{PartNumber: 1, Size: 5242880, ETag: "etag1", ChunkIDs: []string{"c1"}},
 			{PartNumber: 2, Size: 5242880, ETag: "etag2", ChunkIDs: []string{"c2"}},
@@ -170,12 +171,12 @@ func TestPartInfo_MaxPartNumber(t *testing.T) {
 
 // Mock implementations for interface testing
 type mockBucketStore struct {
-	putErr    error
-	getResult *BucketInfo
-	getErr    error
-	deleteErr error
+	putErr     error
+	getResult  *BucketInfo
+	getErr     error
+	deleteErr  error
 	listResult []*BucketInfo
-	listErr   error
+	listErr    error
 }
 
 func (m *mockBucketStore) PutBucket(ctx context.Context, info *BucketInfo) error {
@@ -200,12 +201,12 @@ func TestBucketStore_Interface(t *testing.T) {
 }
 
 type mockObjectStore struct {
-	putErr    error
-	getResult *ObjectInfo
-	getErr    error
-	deleteErr error
+	putErr     error
+	getResult  *ObjectInfo
+	getErr     error
+	deleteErr  error
 	listResult []*ObjectInfo
-	listErr   error
+	listErr    error
 }
 
 func (m *mockObjectStore) PutObject(ctx context.Context, info *ObjectInfo) error {
@@ -230,11 +231,11 @@ func TestObjectStore_Interface(t *testing.T) {
 }
 
 type mockChunkStore struct {
-	putResult  string
-	putErr     error
-	getResult  []byte
-	getErr     error
-	deleteErr  error
+	putResult string
+	putErr    error
+	getResult []byte
+	getErr    error
+	deleteErr error
 }
 
 func (m *mockChunkStore) PutChunkData(ctx context.Context, data []byte) (string, error) {
@@ -279,11 +280,11 @@ func TestMultipartStore_Interface(t *testing.T) {
 }
 
 type mockQuotaChecker struct {
-	checkErr   error
-	reserveErr error
-	releaseErr error
+	checkErr    error
+	reserveErr  error
+	releaseErr  error
 	usageResult int64
-	usageErr   error
+	usageErr    error
 }
 
 func (m *mockQuotaChecker) CheckStorageQuota(ctx context.Context, scope string, requestedBytes int64) error {

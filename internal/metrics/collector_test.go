@@ -132,11 +132,11 @@ func TestAgentCollector_Collect_LargeValues(t *testing.T) {
 
 	// Set up mock functions with large values
 	collector.ChunkCountFn = func() int64 {
-		return int64(1<< 50) // Very large chunk count
+		return int64(1 << 50) // Very large chunk count
 	}
 	collector.DiskStatsFn = func() []DiskStats {
 		return []DiskStats{
-			{Device: "sda1", Total: 1<< 60, Used: 1 << 59, Free: 1 << 59}, // Very large disk values
+			{Device: "sda1", Total: 1 << 60, Used: 1 << 59, Free: 1 << 59}, // Very large disk values
 		}
 	}
 

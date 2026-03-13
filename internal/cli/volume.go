@@ -7,8 +7,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/google/uuid"
 	"github.com/azrtydxb/novastor/internal/metadata"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
