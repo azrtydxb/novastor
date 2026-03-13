@@ -46,6 +46,14 @@ struct Args {
     log_level: String,
 }
 
+/// Global tokio runtime handle — available to all modules.
+static TOKIO_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
+
+/// Get the global tokio runtime handle.
+pub fn tokio_handle() -> &'static tokio::runtime::Handle {
+    TOKIO_HANDLE.get().expect("tokio runtime not initialized")
+}
+
 fn main() {
     let args = Args::parse();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&args.log_level))
@@ -56,6 +64,18 @@ fn main() {
         args.reactor_mask, args.mem_size
     );
 
+    // Start tokio runtime on background threads.
+    // SPDK requires the main thread for its reactor, so tokio runs alongside.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime");
+    TOKIO_HANDLE
+        .set(runtime.handle().clone())
+        .expect("tokio handle already set");
+    info!("tokio runtime started (2 worker threads)");
+
     let config = config::DataPlaneConfig {
         rpc_socket: args.rpc_socket,
         reactor_mask: args.reactor_mask,
@@ -65,9 +85,13 @@ fn main() {
         listen_port: args.listen_port,
     };
 
+    // spdk::run() blocks in the SPDK reactor loop on the main thread.
     if let Err(e) = spdk::run(config) {
         error!("data plane failed: {}", e);
         std::process::exit(1);
     }
+
+    // Shut down tokio runtime after SPDK exits.
+    runtime.shutdown_background();
     info!("novastor-dataplane stopped");
 }
