@@ -1,8 +1,10 @@
 //! Chunk engine — volume I/O → content-addressed chunks → CRUSH dispatch.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
+use tokio::sync::Mutex;
 
 use crate::backend::chunk_store::{ChunkHeader, ChunkStore, CHUNK_SIZE};
 use crate::error::{DataPlaneError, Result};
@@ -15,6 +17,8 @@ pub struct ChunkEngine {
     node_id: String,
     local_store: Arc<dyn ChunkStore>,
     topology: ClusterMap,
+    /// Cached gRPC connections to remote nodes, keyed by address.
+    connections: Mutex<HashMap<String, ChunkClient>>,
 }
 
 impl ChunkEngine {
@@ -23,7 +27,19 @@ impl ChunkEngine {
             node_id,
             local_store,
             topology,
+            connections: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Get or create a cached ChunkClient for the given address.
+    async fn get_client(&self, addr: &str) -> Result<ChunkClient> {
+        let mut cache = self.connections.lock().await;
+        if let Some(client) = cache.get(addr) {
+            return Ok(client.clone());
+        }
+        let client = ChunkClient::connect(addr).await?;
+        cache.insert(addr.to_string(), client.clone());
+        Ok(client)
     }
 
     /// Content-addressed chunk ID (SHA-256 hex of raw data).
@@ -96,24 +112,28 @@ impl ChunkEngine {
 
             let placements = crush::select(&chunk_id, 1, &self.topology);
 
-            if let Some((target_node, _backend)) = placements.first() {
-                if target_node == &self.node_id {
-                    self.local_store.put(&chunk_id, &prepared).await?;
-                } else {
-                    let node = self
-                        .topology
-                        .nodes()
-                        .iter()
-                        .find(|n| n.id == *target_node)
-                        .ok_or_else(|| {
-                            DataPlaneError::ChunkEngineError(format!(
-                                "node not found in topology: {target_node}"
-                            ))
-                        })?;
-                    let addr = format!("http://{}:{}", node.address, node.port);
-                    let client = ChunkClient::connect(addr).await?;
-                    client.put(&chunk_id, &prepared).await?;
-                }
+            let (target_node, _backend) = placements.first().ok_or_else(|| {
+                DataPlaneError::ChunkEngineError(format!(
+                    "CRUSH returned no placement for chunk {chunk_id}"
+                ))
+            })?;
+
+            if target_node == &self.node_id {
+                self.local_store.put(&chunk_id, &prepared).await?;
+            } else {
+                let node = self
+                    .topology
+                    .nodes()
+                    .iter()
+                    .find(|n| n.id == *target_node)
+                    .ok_or_else(|| {
+                        DataPlaneError::ChunkEngineError(format!(
+                            "node not found in topology: {target_node}"
+                        ))
+                    })?;
+                let addr = format!("http://{}:{}", node.address, node.port);
+                let client = self.get_client(&addr).await?;
+                client.put(&chunk_id, &prepared).await?;
             }
 
             entries.push(ChunkMapEntry {
@@ -153,7 +173,7 @@ impl ChunkEngine {
                             ))
                         })?;
                     let addr = format!("http://{}:{}", node.address, node.port);
-                    let client = ChunkClient::connect(addr).await?;
+                    let client = self.get_client(&addr).await?;
                     client.get(&entry.chunk_id).await?
                 }
             } else {

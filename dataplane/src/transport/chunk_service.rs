@@ -14,6 +14,9 @@ use crate::transport::chunk_proto::{
     HasChunkResponse, PutChunkRequest, PutChunkResponse,
 };
 
+/// Maximum payload size for a streaming put_chunk request (8MB — chunk + header).
+const MAX_PUT_PAYLOAD: usize = 8 * 1024 * 1024;
+
 pub struct ChunkServiceImpl {
     store: Arc<dyn ChunkStore>,
 }
@@ -42,6 +45,12 @@ impl ChunkService for ChunkServiceImpl {
                 chunk_id = msg.chunk_id;
             }
             data.extend_from_slice(&msg.data);
+            if data.len() > MAX_PUT_PAYLOAD {
+                return Err(Status::resource_exhausted(format!(
+                    "put_chunk payload exceeds {}MB limit",
+                    MAX_PUT_PAYLOAD / (1024 * 1024)
+                )));
+            }
         }
 
         if chunk_id.is_empty() {

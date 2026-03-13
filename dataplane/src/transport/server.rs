@@ -23,6 +23,21 @@ impl Default for GrpcServerConfig {
     }
 }
 
+/// Handle returned by [`GrpcServer::start`] for managing the server lifecycle.
+pub struct GrpcServerHandle {
+    /// The address the server is bound to.
+    pub addr: SocketAddr,
+    /// Join handle for the server task.
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl GrpcServerHandle {
+    /// Abort the server task, triggering a graceful shutdown.
+    pub fn shutdown(self) {
+        self.task.abort();
+    }
+}
+
 /// The gRPC server hosting all inter-node services.
 pub struct GrpcServer {
     config: GrpcServerConfig,
@@ -37,8 +52,8 @@ impl GrpcServer {
         }
     }
 
-    /// Start the gRPC server. Returns the bound address.
-    pub async fn start(&self) -> Result<SocketAddr> {
+    /// Start the gRPC server. Returns a handle with the bound address and shutdown control.
+    pub async fn start(&self) -> Result<GrpcServerHandle> {
         let addr: SocketAddr = format!("{}:{}", self.config.listen_address, self.config.port)
             .parse()
             .map_err(|e| {
@@ -57,7 +72,7 @@ impl GrpcServer {
 
         log::info!("gRPC server listening on {}", bound_addr);
 
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             tonic::transport::Server::builder()
                 .add_service(chunk_server)
                 .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
@@ -65,7 +80,10 @@ impl GrpcServer {
                 .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
         });
 
-        Ok(bound_addr)
+        Ok(GrpcServerHandle {
+            addr: bound_addr,
+            task,
+        })
     }
 }
 
@@ -95,7 +113,8 @@ mod tests {
         };
 
         let server = GrpcServer::new(config, Arc::new(store));
-        let addr = server.start().await.unwrap();
+        let handle = server.start().await.unwrap();
+        let addr = handle.addr;
         assert_ne!(addr.port(), 0);
 
         // Server should be serving — verify by connecting a client

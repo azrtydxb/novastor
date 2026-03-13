@@ -4,7 +4,11 @@ use crate::error::{DataPlaneError, Result};
 use crate::transport::chunk_proto::chunk_service_client::ChunkServiceClient;
 use crate::transport::chunk_proto::*;
 
+/// Fragment size for streaming put requests (1MB).
+const PUT_FRAGMENT_SIZE: usize = 1024 * 1024;
+
 /// Client for a remote node's ChunkService.
+#[derive(Clone)]
 pub struct ChunkClient {
     inner: ChunkServiceClient<tonic::transport::Channel>,
 }
@@ -19,16 +23,32 @@ impl ChunkClient {
 
     pub async fn put(&self, chunk_id: &str, data: &[u8]) -> Result<()> {
         let mut client = self.inner.clone();
-        let requests = vec![PutChunkRequest {
-            chunk_id: chunk_id.to_string(),
-            data: data.to_vec(),
-        }];
+        let mut requests = Vec::new();
+        for (i, fragment) in data.chunks(PUT_FRAGMENT_SIZE).enumerate() {
+            requests.push(PutChunkRequest {
+                chunk_id: if i == 0 {
+                    chunk_id.to_string()
+                } else {
+                    String::new()
+                },
+                data: fragment.to_vec(),
+            });
+        }
+        if requests.is_empty() {
+            requests.push(PutChunkRequest {
+                chunk_id: chunk_id.to_string(),
+                data: Vec::new(),
+            });
+        }
         client
             .put_chunk(tokio_stream::iter(requests))
             .await
             .map_err(|e| DataPlaneError::TransportError(format!("put_chunk: {e}")))?;
         Ok(())
     }
+
+    /// Maximum payload size for a get response (8MB — chunk + header).
+    const MAX_GET_PAYLOAD: usize = 8 * 1024 * 1024;
 
     pub async fn get(&self, chunk_id: &str) -> Result<Vec<u8>> {
         let mut client = self.inner.clone();
@@ -47,6 +67,12 @@ impl ChunkClient {
             .map_err(|e| DataPlaneError::TransportError(format!("get_chunk stream: {e}")))?
         {
             data.extend_from_slice(&msg.data);
+            if data.len() > Self::MAX_GET_PAYLOAD {
+                return Err(DataPlaneError::TransportError(format!(
+                    "get_chunk response exceeds {}MB limit",
+                    Self::MAX_GET_PAYLOAD / (1024 * 1024)
+                )));
+            }
         }
         Ok(data)
     }

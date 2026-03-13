@@ -43,6 +43,9 @@ pub trait RaftMessageHandler: Send + Sync + 'static {
 // RaftServiceImpl — tonic server
 // ---------------------------------------------------------------------------
 
+/// Maximum payload size for a streaming install_snapshot request (64MB).
+const MAX_SNAPSHOT_PAYLOAD: usize = 64 * 1024 * 1024;
+
 /// gRPC server implementation for [`RaftService`].
 ///
 /// Delegates all incoming RPCs to the provided [`RaftMessageHandler`].
@@ -86,6 +89,12 @@ impl RaftService for RaftServiceImpl {
                 shard_id = msg.shard_id;
             }
             payload.extend_from_slice(&msg.payload);
+            if payload.len() > MAX_SNAPSHOT_PAYLOAD {
+                return Err(Status::resource_exhausted(format!(
+                    "snapshot payload exceeds {}MB limit",
+                    MAX_SNAPSHOT_PAYLOAD / (1024 * 1024)
+                )));
+            }
         }
 
         let resp_payload = self
