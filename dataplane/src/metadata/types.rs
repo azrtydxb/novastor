@@ -84,9 +84,23 @@ pub enum MetadataResponse {
 ///
 /// The shard is derived from the first two hex characters of `volume_id`,
 /// giving uniform distribution across UUIDs and other hex-prefixed IDs.
-pub fn shard_for_volume(volume_id: &str) -> u8 {
-    let hex = &volume_id[..2.min(volume_id.len())];
-    u8::from_str_radix(hex, 16).unwrap_or(0)
+///
+/// Returns an error if `volume_id` is empty or does not start with two
+/// valid hex characters.
+pub fn shard_for_volume(volume_id: &str) -> Result<u8, String> {
+    if volume_id.len() < 2 {
+        return Err(format!(
+            "volume_id too short (need at least 2 hex chars): {:?}",
+            volume_id
+        ));
+    }
+    let hex = &volume_id[..2];
+    u8::from_str_radix(hex, 16).map_err(|_| {
+        format!(
+            "volume_id does not start with valid hex prefix: {:?}",
+            volume_id
+        )
+    })
 }
 
 #[cfg(test)]
@@ -150,9 +164,27 @@ mod tests {
 
     #[test]
     fn shard_id_from_volume_id() {
-        assert_eq!(shard_for_volume("ab-some-uuid"), 0xab);
-        assert_eq!(shard_for_volume("ff-some-uuid"), 0xff);
-        assert_eq!(shard_for_volume("00-some-uuid"), 0x00);
+        assert_eq!(shard_for_volume("ab-some-uuid").unwrap(), 0xab);
+        assert_eq!(shard_for_volume("ff-some-uuid").unwrap(), 0xff);
+        assert_eq!(shard_for_volume("00-some-uuid").unwrap(), 0x00);
+    }
+
+    #[test]
+    fn shard_id_rejects_empty_volume_id() {
+        let err = shard_for_volume("").unwrap_err();
+        assert!(err.contains("too short"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn shard_id_rejects_single_char_volume_id() {
+        let err = shard_for_volume("a").unwrap_err();
+        assert!(err.contains("too short"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn shard_id_rejects_non_hex_prefix() {
+        let err = shard_for_volume("zz-something").unwrap_err();
+        assert!(err.contains("valid hex prefix"), "unexpected error: {err}");
     }
 
     #[test]

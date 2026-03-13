@@ -10,6 +10,32 @@ use crate::metadata::types::{shard_for_volume, ChunkMapEntry, VolumeDefinition};
 /// Total number of shards.  One redb database per shard.
 pub const SHARD_COUNT: usize = 256;
 
+/// RAII guard that holds a shard mutex and provides access to the inner
+/// `ShardStorage`.  The `Deref` impl allows callers to use `guard.state`
+/// transparently without any `unwrap()`.
+pub struct ShardGuard<'a> {
+    _guard: MutexGuard<'a, Option<ShardStorage>>,
+}
+
+impl<'a> ShardGuard<'a> {
+    /// Build a `ShardGuard` from a `MutexGuard` that is guaranteed to contain
+    /// `Some`.  Returns an error if the inner value is unexpectedly `None`.
+    fn new(guard: MutexGuard<'a, Option<ShardStorage>>) -> Result<Self> {
+        if guard.is_none() {
+            return Err(DataPlaneError::MetadataError(
+                "shard not initialised (internal bug)".to_string(),
+            ));
+        }
+        Ok(Self { _guard: guard })
+    }
+
+    /// Return a reference to the inner `ShardStorage`.
+    pub fn storage(&self) -> &ShardStorage {
+        // Safety: `new()` verified `Some`.
+        self._guard.as_ref().unwrap()
+    }
+}
+
 /// Routes every metadata operation to one of 256 per-shard `MetadataStore`
 /// instances.  Each shard is initialised lazily on first access.
 pub struct ShardManager {
@@ -38,8 +64,11 @@ impl ShardManager {
     ///
     /// If the shard has not been initialised yet the redb database is opened
     /// (and the sub-directory created) before the guard is returned.
-    pub fn shard_for(&self, volume_id: &str) -> Result<MutexGuard<Option<ShardStorage>>> {
-        let shard_id = shard_for_volume(volume_id) as usize;
+    ///
+    /// Returns an error if `volume_id` is invalid (empty or non-hex prefix).
+    pub fn shard_for(&self, volume_id: &str) -> Result<ShardGuard<'_>> {
+        let shard_id =
+            shard_for_volume(volume_id).map_err(|e| DataPlaneError::MetadataError(e))? as usize;
 
         let mut guard = self.shards[shard_id]
             .lock()
@@ -51,7 +80,7 @@ impl ShardManager {
             *guard = Some(ShardStorage::open(&shard_dir)?);
         }
 
-        Ok(guard)
+        ShardGuard::new(guard)
     }
 
     // -------------------------------------------------------------------------
@@ -61,19 +90,19 @@ impl ShardManager {
     /// Persist a volume definition in the appropriate shard.
     pub fn put_volume(&self, vol: &VolumeDefinition) -> Result<()> {
         let guard = self.shard_for(&vol.id)?;
-        guard.as_ref().unwrap().state.put_volume(vol)
+        guard.storage().state.put_volume(vol)
     }
 
     /// Retrieve a volume by ID, returning `None` if not found.
     pub fn get_volume(&self, volume_id: &str) -> Result<Option<VolumeDefinition>> {
         let guard = self.shard_for(volume_id)?;
-        guard.as_ref().unwrap().state.get_volume(volume_id)
+        guard.storage().state.get_volume(volume_id)
     }
 
     /// Delete a volume by ID (no-op if absent).
     pub fn delete_volume(&self, volume_id: &str) -> Result<()> {
         let guard = self.shard_for(volume_id)?;
-        guard.as_ref().unwrap().state.delete_volume(volume_id)
+        guard.storage().state.delete_volume(volume_id)
     }
 
     // -------------------------------------------------------------------------
@@ -83,11 +112,7 @@ impl ShardManager {
     /// Persist a chunk-map entry, routed by `volume_id`.
     pub fn put_chunk_map(&self, volume_id: &str, entry: &ChunkMapEntry) -> Result<()> {
         let guard = self.shard_for(volume_id)?;
-        guard
-            .as_ref()
-            .unwrap()
-            .state
-            .put_chunk_map(volume_id, entry)
+        guard.storage().state.put_chunk_map(volume_id, entry)
     }
 
     /// Retrieve a single chunk-map entry by volume ID and chunk index.
@@ -97,19 +122,14 @@ impl ShardManager {
         chunk_index: u64,
     ) -> Result<Option<ChunkMapEntry>> {
         let guard = self.shard_for(volume_id)?;
-        guard
-            .as_ref()
-            .unwrap()
-            .state
-            .get_chunk_map(volume_id, chunk_index)
+        guard.storage().state.get_chunk_map(volume_id, chunk_index)
     }
 
     /// Delete a single chunk-map entry (no-op if absent).
     pub fn delete_chunk_map(&self, volume_id: &str, chunk_index: u64) -> Result<()> {
         let guard = self.shard_for(volume_id)?;
         guard
-            .as_ref()
-            .unwrap()
+            .storage()
             .state
             .delete_chunk_map(volume_id, chunk_index)
     }
@@ -117,7 +137,7 @@ impl ShardManager {
     /// Return all chunk-map entries for `volume_id` in ascending index order.
     pub fn list_chunk_map(&self, volume_id: &str) -> Result<Vec<ChunkMapEntry>> {
         let guard = self.shard_for(volume_id)?;
-        guard.as_ref().unwrap().state.list_chunk_map(volume_id)
+        guard.storage().state.list_chunk_map(volume_id)
     }
 }
 
@@ -214,5 +234,23 @@ mod tests {
     #[test]
     fn shard_count_is_256() {
         assert_eq!(SHARD_COUNT, 256);
+    }
+
+    #[test]
+    fn shard_manager_rejects_empty_volume_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = ShardManager::open(dir.path()).unwrap();
+
+        let result = mgr.get_volume("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn shard_manager_rejects_non_hex_volume_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = ShardManager::open(dir.path()).unwrap();
+
+        let result = mgr.get_volume("zz-bad-prefix");
+        assert!(result.is_err());
     }
 }

@@ -235,8 +235,8 @@ impl MetadataStore {
     // Request dispatcher
     // -------------------------------------------------------------------------
 
-    /// Apply a `MetadataRequest` and return the corresponding
-    /// `MetadataResponse`.
+    /// Apply a single `MetadataRequest` and return the corresponding
+    /// `MetadataResponse`.  Each call opens its own transaction.
     pub fn apply(&self, req: &MetadataRequest) -> Result<MetadataResponse> {
         match req {
             MetadataRequest::PutVolume(vol) => {
@@ -259,6 +259,164 @@ impl MetadataStore {
                 Ok(MetadataResponse::Ok)
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Batch / atomic operations
+    // -------------------------------------------------------------------------
+
+    /// Apply a batch of `MetadataRequest`s in a single redb write transaction.
+    ///
+    /// This guarantees atomicity: either all requests are applied or none are.
+    /// Returns one `MetadataResponse` per request, in the same order.
+    pub fn apply_batch(&self, requests: &[MetadataRequest]) -> Result<Vec<MetadataResponse>> {
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| DataPlaneError::MetadataError(format!("begin write: {e}")))?;
+
+        let mut responses = Vec::with_capacity(requests.len());
+        {
+            let mut vol_table = txn
+                .open_table(VOLUMES_TABLE)
+                .map_err(|e| DataPlaneError::MetadataError(format!("open volumes table: {e}")))?;
+            let mut chunk_table = txn
+                .open_table(CHUNK_MAP_TABLE)
+                .map_err(|e| DataPlaneError::MetadataError(format!("open chunk_map table: {e}")))?;
+
+            for req in requests {
+                match req {
+                    MetadataRequest::PutVolume(vol) => {
+                        let bytes = serde_json::to_vec(vol)?;
+                        vol_table
+                            .insert(vol.id.as_str(), bytes.as_slice())
+                            .map_err(|e| {
+                                DataPlaneError::MetadataError(format!("insert volume: {e}"))
+                            })?;
+                        responses.push(MetadataResponse::Ok);
+                    }
+                    MetadataRequest::DeleteVolume { volume_id } => {
+                        vol_table.remove(volume_id.as_str()).map_err(|e| {
+                            DataPlaneError::MetadataError(format!("remove volume: {e}"))
+                        })?;
+                        responses.push(MetadataResponse::Ok);
+                    }
+                    MetadataRequest::PutChunkMap { volume_id, entry } => {
+                        let key = Self::chunk_map_key(volume_id, entry.chunk_index);
+                        let bytes = serde_json::to_vec(entry)?;
+                        chunk_table
+                            .insert(key.as_str(), bytes.as_slice())
+                            .map_err(|e| {
+                                DataPlaneError::MetadataError(format!("insert chunk map: {e}"))
+                            })?;
+                        responses.push(MetadataResponse::Ok);
+                    }
+                    MetadataRequest::DeleteChunkMap {
+                        volume_id,
+                        chunk_index,
+                    } => {
+                        let key = Self::chunk_map_key(volume_id, *chunk_index);
+                        chunk_table.remove(key.as_str()).map_err(|e| {
+                            DataPlaneError::MetadataError(format!("remove chunk map: {e}"))
+                        })?;
+                        responses.push(MetadataResponse::Ok);
+                    }
+                }
+            }
+        }
+
+        txn.commit()
+            .map_err(|e| DataPlaneError::MetadataError(format!("commit apply_batch: {e}")))?;
+
+        Ok(responses)
+    }
+
+    /// Atomically replace all volumes and chunk-map entries from a snapshot.
+    ///
+    /// Deletes every existing volume and chunk-map entry, then inserts all
+    /// provided volumes and chunk entries, all within a single redb write
+    /// transaction.  A crash at any point either leaves the old state intact
+    /// or installs the complete new state.
+    pub fn replace_all_from_snapshot(
+        &self,
+        volumes: &[VolumeDefinition],
+        chunks: &[(String, ChunkMapEntry)],
+    ) -> Result<()> {
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| DataPlaneError::MetadataError(format!("begin write: {e}")))?;
+        {
+            // -- Clear and repopulate volumes --
+            let mut vol_table = txn
+                .open_table(VOLUMES_TABLE)
+                .map_err(|e| DataPlaneError::MetadataError(format!("open volumes table: {e}")))?;
+
+            // Collect existing keys to delete (can't mutate while iterating).
+            let existing_keys: Vec<String> = {
+                let mut keys = Vec::new();
+                for result in vol_table
+                    .iter()
+                    .map_err(|e| DataPlaneError::MetadataError(format!("iter volumes: {e}")))?
+                {
+                    let (key, _) = result
+                        .map_err(|e| DataPlaneError::MetadataError(format!("iter item: {e}")))?;
+                    keys.push(key.value().to_string());
+                }
+                keys
+            };
+            for key in &existing_keys {
+                vol_table
+                    .remove(key.as_str())
+                    .map_err(|e| DataPlaneError::MetadataError(format!("remove volume: {e}")))?;
+            }
+
+            // Insert snapshot volumes.
+            for vol in volumes {
+                let bytes = serde_json::to_vec(vol)?;
+                vol_table
+                    .insert(vol.id.as_str(), bytes.as_slice())
+                    .map_err(|e| DataPlaneError::MetadataError(format!("insert volume: {e}")))?;
+            }
+
+            // -- Clear and repopulate chunk maps --
+            let mut chunk_table = txn
+                .open_table(CHUNK_MAP_TABLE)
+                .map_err(|e| DataPlaneError::MetadataError(format!("open chunk_map table: {e}")))?;
+
+            let existing_chunk_keys: Vec<String> = {
+                let mut keys = Vec::new();
+                for result in chunk_table
+                    .iter()
+                    .map_err(|e| DataPlaneError::MetadataError(format!("iter chunk_map: {e}")))?
+                {
+                    let (key, _) = result
+                        .map_err(|e| DataPlaneError::MetadataError(format!("iter item: {e}")))?;
+                    keys.push(key.value().to_string());
+                }
+                keys
+            };
+            for key in &existing_chunk_keys {
+                chunk_table
+                    .remove(key.as_str())
+                    .map_err(|e| DataPlaneError::MetadataError(format!("remove chunk map: {e}")))?;
+            }
+
+            // Insert snapshot chunk maps.
+            for (vol_id, entry) in chunks {
+                let key = Self::chunk_map_key(vol_id, entry.chunk_index);
+                let bytes = serde_json::to_vec(entry)?;
+                chunk_table
+                    .insert(key.as_str(), bytes.as_slice())
+                    .map_err(|e| DataPlaneError::MetadataError(format!("insert chunk map: {e}")))?;
+            }
+        }
+
+        txn.commit().map_err(|e| {
+            DataPlaneError::MetadataError(format!("commit replace_all_from_snapshot: {e}"))
+        })?;
+
+        Ok(())
     }
 }
 
@@ -382,5 +540,125 @@ mod tests {
         assert!(store.get_chunk_map("vol-del", 7).unwrap().is_some());
         store.delete_chunk_map("vol-del", 7).unwrap();
         assert!(store.get_chunk_map("vol-del", 7).unwrap().is_none());
+    }
+
+    #[test]
+    fn apply_batch_atomically() {
+        let store = temp_store();
+        let vol_a = sample_volume("batch-vol-a");
+        let vol_b = sample_volume("batch-vol-b");
+        let chunk = sample_chunk_entry(3);
+
+        let requests = vec![
+            MetadataRequest::PutVolume(vol_a.clone()),
+            MetadataRequest::PutVolume(vol_b.clone()),
+            MetadataRequest::PutChunkMap {
+                volume_id: "batch-vol-a".to_string(),
+                entry: chunk.clone(),
+            },
+        ];
+
+        let responses = store.apply_batch(&requests).unwrap();
+        assert_eq!(responses.len(), 3);
+        for resp in &responses {
+            assert!(matches!(resp, MetadataResponse::Ok));
+        }
+
+        // Verify all writes landed.
+        assert!(store.get_volume("batch-vol-a").unwrap().is_some());
+        assert!(store.get_volume("batch-vol-b").unwrap().is_some());
+        assert!(store.get_chunk_map("batch-vol-a", 3).unwrap().is_some());
+    }
+
+    #[test]
+    fn apply_batch_with_delete() {
+        let store = temp_store();
+        store.put_volume(&sample_volume("del-batch-vol")).unwrap();
+        store
+            .put_chunk_map("del-batch-vol", &sample_chunk_entry(0))
+            .unwrap();
+
+        let requests = vec![
+            MetadataRequest::DeleteChunkMap {
+                volume_id: "del-batch-vol".to_string(),
+                chunk_index: 0,
+            },
+            MetadataRequest::DeleteVolume {
+                volume_id: "del-batch-vol".to_string(),
+            },
+        ];
+
+        let responses = store.apply_batch(&requests).unwrap();
+        assert_eq!(responses.len(), 2);
+
+        assert!(store.get_volume("del-batch-vol").unwrap().is_none());
+        assert!(store.get_chunk_map("del-batch-vol", 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn apply_batch_empty() {
+        let store = temp_store();
+        let responses = store.apply_batch(&[]).unwrap();
+        assert!(responses.is_empty());
+    }
+
+    #[test]
+    fn replace_all_from_snapshot_replaces_everything() {
+        let store = temp_store();
+
+        // Pre-populate with some data that should be wiped.
+        store.put_volume(&sample_volume("old-vol-1")).unwrap();
+        store.put_volume(&sample_volume("old-vol-2")).unwrap();
+        store
+            .put_chunk_map("old-vol-1", &sample_chunk_entry(0))
+            .unwrap();
+
+        // Snapshot data — completely different volumes and chunks.
+        let new_vols = vec![sample_volume("new-vol-x"), sample_volume("new-vol-y")];
+        let new_chunks = vec![
+            ("new-vol-x".to_string(), sample_chunk_entry(10)),
+            ("new-vol-y".to_string(), sample_chunk_entry(20)),
+        ];
+
+        store
+            .replace_all_from_snapshot(&new_vols, &new_chunks)
+            .unwrap();
+
+        // Old data must be gone.
+        assert!(store.get_volume("old-vol-1").unwrap().is_none());
+        assert!(store.get_volume("old-vol-2").unwrap().is_none());
+        assert!(store.get_chunk_map("old-vol-1", 0).unwrap().is_none());
+
+        // New data must be present.
+        assert_eq!(
+            store.get_volume("new-vol-x").unwrap().unwrap().id,
+            "new-vol-x"
+        );
+        assert_eq!(
+            store.get_volume("new-vol-y").unwrap().unwrap().id,
+            "new-vol-y"
+        );
+        assert!(store.get_chunk_map("new-vol-x", 10).unwrap().is_some());
+        assert!(store.get_chunk_map("new-vol-y", 20).unwrap().is_some());
+
+        // Total volume count must be exactly 2.
+        assert_eq!(store.list_volumes().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn replace_all_from_snapshot_with_empty_snapshot() {
+        let store = temp_store();
+
+        // Pre-populate.
+        store.put_volume(&sample_volume("wipe-vol")).unwrap();
+        store
+            .put_chunk_map("wipe-vol", &sample_chunk_entry(0))
+            .unwrap();
+
+        // Replace with empty snapshot.
+        store.replace_all_from_snapshot(&[], &[]).unwrap();
+
+        assert!(store.list_volumes().unwrap().is_empty());
+        assert!(store.list_chunk_map("wipe-vol").unwrap().is_empty());
     }
 }

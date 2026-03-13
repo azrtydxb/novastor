@@ -525,30 +525,77 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         I::IntoIter: Send,
     {
         let guard = self.shared.read().await;
-        let mut responses = Vec::new();
 
-        for entry in entries {
-            let log_id = entry.log_id;
+        // Separate entries into normal requests (batched atomically) and
+        // membership/blank entries that only touch raft metadata.
+        let entries: Vec<Entry<TypeConfig>> = entries.into_iter().collect();
 
-            match entry.payload {
+        // Collect normal requests for batch application.
+        let mut normal_requests = Vec::new();
+        // Track the entry types in order so we can reassemble responses.
+        enum EntryKind {
+            Blank,
+            Normal(usize), // index into normal_requests
+            Membership(openraft::Membership<u64, RaftNode>),
+        }
+        let mut entry_kinds = Vec::with_capacity(entries.len());
+        let mut last_log_id = None;
+
+        for entry in &entries {
+            last_log_id = Some(entry.log_id);
+            match &entry.payload {
                 EntryPayload::Blank => {
-                    responses.push(MetadataResponse::Ok);
+                    entry_kinds.push(EntryKind::Blank);
                 }
                 EntryPayload::Normal(req) => {
-                    let resp = guard.state.apply(&req).map_err(|e| StorageError::IO {
-                        source: StorageIOError::apply(log_id, anyerror::AnyError::new(&e)),
-                    })?;
-                    responses.push(resp);
+                    let idx = normal_requests.len();
+                    normal_requests.push(req.clone());
+                    entry_kinds.push(EntryKind::Normal(idx));
                 }
                 EntryPayload::Membership(membership) => {
-                    let stored = StoredMembership::new(Some(log_id), membership);
-                    write_sm_meta(&guard.log_db, "sm_last_membership", &stored)
-                        .map_err(|e| StorageError::IO { source: e })?;
+                    entry_kinds.push(EntryKind::Membership(membership.clone()));
+                }
+            }
+        }
+
+        // Apply all normal requests in a single atomic transaction.
+        let batch_responses = if !normal_requests.is_empty() {
+            guard
+                .state
+                .apply_batch(&normal_requests)
+                .map_err(|e| StorageError::IO {
+                    source: StorageIOError::write(anyerror::AnyError::new(&e)),
+                })?
+        } else {
+            Vec::new()
+        };
+
+        // Reassemble responses in entry order.
+        let mut responses = Vec::with_capacity(entry_kinds.len());
+        for kind in &entry_kinds {
+            match kind {
+                EntryKind::Blank => responses.push(MetadataResponse::Ok),
+                EntryKind::Normal(idx) => responses.push(batch_responses[*idx].clone()),
+                EntryKind::Membership(_) => {
+                    // Membership metadata is written below, after the batch.
                     responses.push(MetadataResponse::Ok);
                 }
             }
+        }
 
-            // Update last applied log id.
+        // Write membership and last_applied_log metadata.
+        // These go to the raft_meta table (separate db), so we write them
+        // after the state batch succeeds.
+        for (entry, kind) in entries.iter().zip(entry_kinds.iter()) {
+            if let EntryKind::Membership(membership) = kind {
+                let stored = StoredMembership::new(Some(entry.log_id), membership.clone());
+                write_sm_meta(&guard.log_db, "sm_last_membership", &stored)
+                    .map_err(|e| StorageError::IO { source: e })?;
+            }
+        }
+
+        // Update last applied log id once for the entire batch.
+        if let Some(log_id) = last_log_id {
             write_sm_meta(&guard.log_db, "sm_last_applied_log", &log_id)
                 .map_err(|e| StorageError::IO { source: e })?;
         }
@@ -581,49 +628,14 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
                 source: to_sto_err(e),
             })?;
 
-        // Clear existing state and rebuild from snapshot.
-        let existing_volumes = guard.state.list_volumes().map_err(|e| StorageError::IO {
-            source: to_sto_write_err(e),
-        })?;
-        for vol in &existing_volumes {
-            let chunks = guard
-                .state
-                .list_chunk_map(&vol.id)
-                .map_err(|e| StorageError::IO {
-                    source: to_sto_write_err(e),
-                })?;
-            for chunk in &chunks {
-                guard
-                    .state
-                    .delete_chunk_map(&vol.id, chunk.chunk_index)
-                    .map_err(|e| StorageError::IO {
-                        source: to_sto_write_err(e),
-                    })?;
-            }
-            guard
-                .state
-                .delete_volume(&vol.id)
-                .map_err(|e| StorageError::IO {
-                    source: to_sto_write_err(e),
-                })?;
-        }
-
-        // Insert volumes from snapshot.
-        for vol in &snap.volumes {
-            guard.state.put_volume(vol).map_err(|e| StorageError::IO {
+        // Atomically replace all state from the snapshot in a single
+        // redb write transaction.
+        guard
+            .state
+            .replace_all_from_snapshot(&snap.volumes, &snap.chunk_maps)
+            .map_err(|e| StorageError::IO {
                 source: to_sto_write_err(e),
             })?;
-        }
-
-        // Insert chunk maps from snapshot.
-        for (vol_id, entry) in &snap.chunk_maps {
-            guard
-                .state
-                .put_chunk_map(vol_id, entry)
-                .map_err(|e| StorageError::IO {
-                    source: to_sto_write_err(e),
-                })?;
-        }
 
         // Update state machine metadata.
         write_sm_meta(&guard.log_db, "sm_last_applied_log", &snap.last_applied_log)
