@@ -63,3 +63,9 @@ void vbdev_lvol_resize(struct spdk_lvol *lvol, uint64_t sz,
 
 void vbdev_lvol_destroy(struct spdk_lvol *lvol,
 			void (*cb_fn)(void *cb_arg, int lvolerrno), void *cb_arg);
+
+/* Thin C wrapper around SPDK's create_uring_bdev (defined in uring_wrapper.c).
+ * Needed here so bindgen can generate the Rust FFI binding. */
+struct spdk_bdev *novastor_create_uring_bdev(const char *name,
+                                              const char *filename,
+                                              uint32_t block_size);

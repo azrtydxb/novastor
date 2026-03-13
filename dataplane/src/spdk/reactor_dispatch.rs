@@ -617,7 +617,8 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
         let name_c = match std::ffi::CString::new(name.as_str()) {
             Ok(c) => c,
             Err(e) => {
-                let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+                let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
+                    AsyncCompletionSender::from_ptr(sender_ptr);
                 s.complete(Err(DataPlaneError::BdevError(format!("invalid name: {e}"))));
                 return;
             }
@@ -715,7 +716,8 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
         let name_c = match std::ffi::CString::new(name.as_str()) {
             Ok(c) => c,
             Err(e) => {
-                let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+                let mut s: AsyncCompletionSender<Result<()>> =
+                    AsyncCompletionSender::from_ptr(sender_ptr);
                 s.complete(Err(DataPlaneError::BdevError(format!("invalid name: {e}"))));
                 return;
             }
