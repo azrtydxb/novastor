@@ -6,7 +6,7 @@
 //! I/O uses std::fs wrapped in tokio::task::spawn_blocking.
 //! Writes use atomic rename: write to temp file, then rename.
 
-use crate::backend::chunk_store::{ChunkHeader, ChunkStore, ChunkStoreStats};
+use crate::backend::chunk_store::{ChunkStore, ChunkStoreStats};
 use crate::error::{DataPlaneError, Result};
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -36,6 +36,11 @@ impl FileChunkStore {
 
     /// Build the file path for a chunk: `<chunks_dir>/<ab>/<cd>/<chunk_id>`
     fn chunk_path(&self, chunk_id: &str) -> PathBuf {
+        debug_assert!(
+            chunk_id.len() >= 4,
+            "chunk_id must be at least 4 chars (got {})",
+            chunk_id.len()
+        );
         let p1 = &chunk_id[0..2];
         let p2 = &chunk_id[2..4];
         self.chunks_dir.join(p1).join(p2).join(chunk_id)
