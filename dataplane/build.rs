@@ -2,6 +2,16 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    // Compile gRPC proto files for tonic.
+    tonic_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .compile_protos(
+            &["proto/chunk_service.proto", "proto/raft_service.proto"],
+            &["proto/"],
+        )
+        .expect("failed to compile proto files");
+
     // Only compile SPDK/uring C code when the spdk-sys feature is enabled.
     // Without this gate, `cargo test` on a machine without SPDK headers fails.
     // We still emit an empty bindings stub so that the include!() call in

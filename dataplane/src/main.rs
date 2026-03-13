@@ -6,11 +6,13 @@
 
 mod backend;
 mod bdev;
+mod chunk;
 mod config;
 mod error;
 mod jsonrpc;
 mod metadata;
 mod spdk;
+mod transport;
 
 use clap::Parser;
 use log::{error, info};

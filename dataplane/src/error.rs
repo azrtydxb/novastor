@@ -30,6 +30,25 @@ pub enum DataPlaneError {
     IoError(#[from] std::io::Error),
     #[error("serialization error: {0}")]
     SerdeError(#[from] serde_json::Error),
+    #[error("transport error: {0}")]
+    TransportError(String),
+    #[error("chunk engine error: {0}")]
+    ChunkEngineError(String),
+}
+
+impl From<tonic::Status> for DataPlaneError {
+    fn from(status: tonic::Status) -> Self {
+        DataPlaneError::TransportError(format!("gRPC error: {}", status.message()))
+    }
+}
+
+impl From<DataPlaneError> for tonic::Status {
+    fn from(err: DataPlaneError) -> Self {
+        match &err {
+            DataPlaneError::TransportError(msg) => tonic::Status::internal(msg.clone()),
+            _ => tonic::Status::internal(err.to_string()),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, DataPlaneError>;

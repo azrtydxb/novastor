@@ -1,0 +1,42 @@
+syntax = "proto3";
+package novastor.chunk;
+
+service ChunkService {
+  rpc PutChunk(stream PutChunkRequest) returns (PutChunkResponse);
+  rpc GetChunk(GetChunkRequest) returns (stream GetChunkResponse);
+  rpc DeleteChunk(DeleteChunkRequest) returns (DeleteChunkResponse);
+  rpc HasChunk(HasChunkRequest) returns (HasChunkResponse);
+}
+
+message PutChunkRequest {
+  string chunk_id = 1;
+  bytes data = 2;
+}
+
+message PutChunkResponse {
+  string chunk_id = 1;
+  uint64 bytes_written = 2;
+}
+
+message GetChunkRequest {
+  string chunk_id = 1;
+}
+
+message GetChunkResponse {
+  string chunk_id = 1;
+  bytes data = 2;
+}
+
+message DeleteChunkRequest {
+  string chunk_id = 1;
+}
+
+message DeleteChunkResponse {}
+
+message HasChunkRequest {
+  string chunk_id = 1;
+}
+
+message HasChunkResponse {
+  bool exists = 1;
+}

@@ -1,0 +1,26 @@
+syntax = "proto3";
+package novastor.raft;
+
+service RaftService {
+  rpc Forward(RaftRequest) returns (RaftResponse);
+  rpc InstallSnapshot(stream SnapshotRequest) returns (SnapshotResponse);
+}
+
+message RaftRequest {
+  uint32 shard_id = 1;
+  string rpc_type = 2;
+  bytes payload = 3;
+}
+
+message RaftResponse {
+  bytes payload = 1;
+}
+
+message SnapshotRequest {
+  uint32 shard_id = 1;
+  bytes payload = 2;
+}
+
+message SnapshotResponse {
+  bytes payload = 1;
+}
