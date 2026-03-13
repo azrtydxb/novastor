@@ -50,8 +50,8 @@
 
 Add to `[dependencies]`:
 ```toml
-openraft = { version = "0.10", features = ["serde", "storage-v3"] }
-redb = "2"
+openraft = { version = "0.9", features = ["serde"] }
+redb = "3"
 rand = { version = "0.8", features = ["small_rng"] }
 ```
 
