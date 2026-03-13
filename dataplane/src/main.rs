@@ -9,6 +9,7 @@ mod bdev;
 mod config;
 mod error;
 mod jsonrpc;
+mod metadata;
 mod spdk;
 
 use clap::Parser;

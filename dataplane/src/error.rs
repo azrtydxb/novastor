@@ -22,6 +22,10 @@ pub enum DataPlaneError {
     ReplicaError(String),
     #[error("erasure coding error: {0}")]
     ErasureError(String),
+    #[error("metadata error: {0}")]
+    MetadataError(String),
+    #[error("raft error: {0}")]
+    RaftError(String),
     #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),
     #[error("serialization error: {0}")]
