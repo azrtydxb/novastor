@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/azrtydxb/novastor/internal/agent"
-	"github.com/azrtydxb/novastor/internal/chunk"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -20,11 +19,7 @@ import (
 func startServer(t *testing.T) (addr string, cleanup func()) {
 	t.Helper()
 
-	dir := t.TempDir()
-	store, err := chunk.NewLocalStore(dir)
-	if err != nil {
-		t.Fatalf("creating local store: %v", err)
-	}
+	store := newTestStore()
 
 	lc := net.ListenConfig{}
 	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")

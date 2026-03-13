@@ -3,8 +3,10 @@ package agent_test
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"net"
+	"sync"
 	"testing"
 
 	pb "github.com/azrtydxb/novastor/api/proto/chunk"
@@ -15,6 +17,61 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
+
+// testStore is a minimal in-memory chunk.Store for testing the gRPC server.
+type testStore struct {
+	mu     sync.RWMutex
+	chunks map[chunk.ChunkID]*chunk.Chunk
+}
+
+func newTestStore() *testStore {
+	return &testStore{chunks: make(map[chunk.ChunkID]*chunk.Chunk)}
+}
+
+func (s *testStore) Put(_ context.Context, c *chunk.Chunk) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := &chunk.Chunk{ID: c.ID, Data: make([]byte, len(c.Data)), Checksum: c.Checksum}
+	copy(cp.Data, c.Data)
+	s.chunks[c.ID] = cp
+	return nil
+}
+
+func (s *testStore) Get(_ context.Context, id chunk.ChunkID) (*chunk.Chunk, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c, ok := s.chunks[id]
+	if !ok {
+		return nil, fmt.Errorf("chunk %s not found", id)
+	}
+	cp := &chunk.Chunk{ID: c.ID, Data: make([]byte, len(c.Data)), Checksum: c.Checksum}
+	copy(cp.Data, c.Data)
+	return cp, nil
+}
+
+func (s *testStore) Delete(_ context.Context, id chunk.ChunkID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.chunks, id)
+	return nil
+}
+
+func (s *testStore) Has(_ context.Context, id chunk.ChunkID) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.chunks[id]
+	return ok, nil
+}
+
+func (s *testStore) List(_ context.Context) ([]chunk.ChunkID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids := make([]chunk.ChunkID, 0, len(s.chunks))
+	for id := range s.chunks {
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
 
 // testEnv bundles a running gRPC server, a connected client, and a cleanup
 // function. Every test should call cleanup when done.
@@ -28,11 +85,7 @@ type testEnv struct {
 func setupTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 
-	dir := t.TempDir()
-	store, err := chunk.NewLocalStore(dir)
-	if err != nil {
-		t.Fatalf("creating local store: %v", err)
-	}
+	store := newTestStore()
 
 	lc := net.ListenConfig{}
 	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")

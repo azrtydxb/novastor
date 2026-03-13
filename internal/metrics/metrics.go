@@ -40,30 +40,6 @@ var (
 		Help:      "Free disk space in bytes",
 	}, []string{"device"})
 
-	// ChunkOpsTotal counts chunk operations by type (read, write, delete).
-	ChunkOpsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "novastor",
-		Subsystem: "agent",
-		Name:      "chunk_ops_total",
-		Help:      "Total chunk operations",
-	}, []string{"operation"})
-
-	// ChunkBytesTotal counts bytes transferred by direction (read, write).
-	ChunkBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "novastor",
-		Subsystem: "agent",
-		Name:      "chunk_bytes_total",
-		Help:      "Total chunk bytes transferred",
-	}, []string{"direction"})
-
-	// ScrubErrors counts chunks with checksum errors found by the scrubber.
-	ScrubErrors = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: "novastor",
-		Subsystem: "agent",
-		Name:      "scrub_errors_total",
-		Help:      "Total chunks with checksum errors found by scrubber",
-	})
-
 	// GCOrphanChunksDeleted counts orphan chunks deleted by agent GC.
 	GCOrphanChunksDeleted = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: "novastor",
@@ -78,63 +54,6 @@ var (
 		Subsystem: "agent",
 		Name:      "gc_last_run_timestamp",
 		Help:      "Unix timestamp of the last successful GC run",
-	})
-
-	// DedupRatio is the ratio of logical bytes to physical bytes after deduplication.
-	// A value of 2.0 means 2x space savings (50% reduction).
-	DedupRatio = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: "novastor",
-		Subsystem: "agent",
-		Name:      "dedup_ratio",
-		Help:      "Deduplication ratio (logical bytes / physical bytes)",
-	})
-
-	// DedupChunksSaved counts chunks that were not written due to deduplication.
-	DedupChunksSaved = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: "novastor",
-		Subsystem: "agent",
-		Name:      "dedup_chunks_saved_total",
-		Help:      "Total chunks not written due to deduplication",
-	})
-
-	// DedupBytesSaved counts bytes saved through deduplication.
-	DedupBytesSaved = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: "novastor",
-		Subsystem: "agent",
-		Name:      "dedup_bytes_saved_total",
-		Help:      "Total bytes saved through deduplication",
-	})
-
-	// DedupReferences is the current total reference count across all chunks.
-	DedupReferences = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: "novastor",
-		Subsystem: "agent",
-		Name:      "dedup_references",
-		Help:      "Current total chunk reference count",
-	})
-
-	// DedupRefOpsTotal counts reference counter operations by type.
-	DedupRefOpsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "novastor",
-		Subsystem: "agent",
-		Name:      "dedup_ref_ops_total",
-		Help:      "Total reference counter operations",
-	}, []string{"operation"})
-
-	// DedupLogicalBytes is the total logical bytes stored (before deduplication).
-	DedupLogicalBytes = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: "novastor",
-		Subsystem: "agent",
-		Name:      "dedup_logical_bytes",
-		Help:      "Total logical bytes stored (before deduplication)",
-	})
-
-	// DedupPhysicalBytes is the total physical bytes stored (after deduplication).
-	DedupPhysicalBytes = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: "novastor",
-		Subsystem: "agent",
-		Name:      "dedup_physical_bytes",
-		Help:      "Total physical bytes stored (after deduplication)",
 	})
 
 	// --------------- Metadata / Raft metrics ---------------
@@ -611,18 +530,8 @@ func Register() {
 	prometheus.MustRegister(DiskBytesTotal)
 	prometheus.MustRegister(DiskBytesUsed)
 	prometheus.MustRegister(DiskBytesFree)
-	prometheus.MustRegister(ChunkOpsTotal)
-	prometheus.MustRegister(ChunkBytesTotal)
-	prometheus.MustRegister(ScrubErrors)
 	prometheus.MustRegister(GCOrphanChunksDeleted)
 	prometheus.MustRegister(GCLastRunTimestamp)
-	prometheus.MustRegister(DedupRatio)
-	prometheus.MustRegister(DedupChunksSaved)
-	prometheus.MustRegister(DedupBytesSaved)
-	prometheus.MustRegister(DedupReferences)
-	prometheus.MustRegister(DedupRefOpsTotal)
-	prometheus.MustRegister(DedupLogicalBytes)
-	prometheus.MustRegister(DedupPhysicalBytes)
 
 	// Metadata / Raft metrics
 	prometheus.MustRegister(RaftState)

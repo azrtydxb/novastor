@@ -1,11 +1,12 @@
 // Package main provides the NovaStor storage agent binary.
-// The agent runs on each storage node and manages local chunk storage,
-// NVMe-oF target services, and coordination with the metadata service.
+// The agent runs on each storage node as a management plane: it coordinates
+// with the metadata service, manages NVMe-oF targets via the SPDK data plane,
+// and exposes Prometheus metrics. All data-path I/O is handled by the Rust
+// SPDK data-plane process.
 package main
 
 import (
 	"context"
-	"encoding/base64"
 	"flag"
 	"net"
 	"net/http"
@@ -20,7 +21,6 @@ import (
 
 	"github.com/azrtydxb/novastor/internal/agent"
 	"github.com/azrtydxb/novastor/internal/agent/failover"
-	"github.com/azrtydxb/novastor/internal/chunk"
 	"github.com/azrtydxb/novastor/internal/logging"
 	"github.com/azrtydxb/novastor/internal/metadata"
 	"github.com/azrtydxb/novastor/internal/metrics"
@@ -34,45 +34,22 @@ var (
 	date    = "unknown"
 )
 
-// logReporter is a simple ScrubReporter that logs corrupt chunk IDs via zap.
-type logReporter struct{}
-
-func (logReporter) ReportCorruptChunk(_ context.Context, chunkID chunk.ChunkID) error {
-	logging.L.Error("scrub: corrupt chunk detected", zap.String("chunkID", string(chunkID)))
-	metrics.ScrubErrors.Inc()
-	return nil
-}
-
-// buildNodeMeta constructs current NodeMeta from the store state.
-// It uses the CapacityStore interface when available to get capacity information.
-func buildNodeMeta(ctx context.Context, nodeID, listenAddr string, store chunk.Store, status string) *metadata.NodeMeta {
-	meta := &metadata.NodeMeta{
+// buildNodeMeta constructs current NodeMeta from SPDK data-plane stats.
+func buildNodeMeta(nodeID, listenAddr, status string) *metadata.NodeMeta {
+	return &metadata.NodeMeta{
 		NodeID:        nodeID,
 		Address:       listenAddr,
 		DiskCount:     1,
 		LastHeartbeat: time.Now().Unix(),
 		Status:        status,
 	}
-
-	// If the store implements CapacityStore, use it to get capacity information.
-	if cs, ok := store.(chunk.CapacityStore); ok {
-		stats, err := cs.Stats(ctx)
-		if err != nil {
-			logging.L.Warn("failed to get store stats", zap.Error(err))
-		} else {
-			meta.TotalCapacity = stats.TotalBytes
-			meta.AvailableCapacity = stats.AvailableBytes
-		}
-	}
-
-	return meta
 }
 
 // registerNode sends the initial NodeMeta registration and then periodically
 // sends heartbeats until the context is cancelled.
-func registerNode(ctx context.Context, client *metadata.GRPCClient, nodeID, listenAddr string, store chunk.Store, heartbeatInterval time.Duration) {
+func registerNode(ctx context.Context, client *metadata.GRPCClient, nodeID, listenAddr string, heartbeatInterval time.Duration) {
 	// Initial registration.
-	if err := client.PutNodeMeta(ctx, buildNodeMeta(ctx, nodeID, listenAddr, store, "ready")); err != nil {
+	if err := client.PutNodeMeta(ctx, buildNodeMeta(nodeID, listenAddr, "ready")); err != nil {
 		logging.L.Warn("node registration failed; will retry on next heartbeat", zap.Error(err))
 	} else {
 		logging.L.Info("node registered with metadata service", zap.String("nodeID", nodeID))
@@ -84,15 +61,14 @@ func registerNode(ctx context.Context, client *metadata.GRPCClient, nodeID, list
 		select {
 		case <-ctx.Done():
 			// Mark node as offline on graceful shutdown.
-			offlineMeta := buildNodeMeta(context.Background(), nodeID, listenAddr, store, "offline")
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := client.PutNodeMeta(shutdownCtx, offlineMeta); err != nil {
+			if err := client.PutNodeMeta(shutdownCtx, buildNodeMeta(nodeID, listenAddr, "offline")); err != nil {
 				logging.L.Warn("failed to mark node offline on shutdown", zap.Error(err))
 			}
+			cancel()
 			return
 		case <-ticker.C:
-			if err := client.PutNodeMeta(ctx, buildNodeMeta(ctx, nodeID, listenAddr, store, "ready")); err != nil {
+			if err := client.PutNodeMeta(ctx, buildNodeMeta(nodeID, listenAddr, "ready")); err != nil {
 				logging.L.Warn("heartbeat failed", zap.String("nodeID", nodeID), zap.Error(err))
 			} else {
 				logging.L.Debug("heartbeat sent", zap.String("nodeID", nodeID))
@@ -103,13 +79,10 @@ func registerNode(ctx context.Context, client *metadata.GRPCClient, nodeID, list
 
 func main() {
 	listenAddr := flag.String("listen", ":9100", "gRPC listen address")
-	hostIP := flag.String("host-ip", "", "Host IP address advertised to NVMe-oF initiators (required for NVMe-oF targets)")
+	hostIP := flag.String("host-ip", "", "Host IP address advertised to NVMe-oF initiators (required)")
 	podIP := flag.String("pod-ip", "", "Pod IP address used for gRPC registration (pod-network routable)")
-	backendType := flag.String("backend", "local", "Storage backend type (local, memory)")
-	dataDir := flag.String("data-dir", "/var/lib/novastor/chunks", "Chunk storage directory (for local backend)")
 	metaAddr := flag.String("meta-addr", "localhost:7001", "Metadata service address")
 	metricsAddr := flag.String("metrics-addr", ":9101", "Prometheus metrics listen address")
-	scrubInterval := flag.Duration("scrub-interval", 24*time.Hour, "Interval between scrub runs")
 	gcInterval := flag.Duration("gc-interval", 1*time.Hour, "Interval between garbage collection runs")
 	heartbeatInterval := flag.Duration("heartbeat-interval", 30*time.Second, "Interval between metadata heartbeats")
 	nodeID := flag.String("node-id", "", "Unique node ID (defaults to hostname)")
@@ -119,11 +92,6 @@ func main() {
 	tlsClientCert := flag.String("tls-client-cert", "", "Path to client certificate for outbound mTLS connections to metadata service")
 	tlsClientKey := flag.String("tls-client-key", "", "Path to client key for outbound mTLS connections to metadata service")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
-	encryptionEnabled := flag.Bool("encryption-enabled", false, "Enable chunk encryption at rest")
-	encryptionKeyDir := flag.String("encryption-key-dir", "", "Path to directory containing encryption key files (file-based key management)")
-	encryptionMasterKey := flag.String("encryption-master-key", "", "Base64-encoded 32-byte master key for derived key management")
-	dataPlane := flag.String("data-plane", "legacy", "Data plane mode: 'legacy' (chunk-backed loop) or 'spdk' (SPDK user-space)")
-	_ = flag.String("spdk-binary", "/usr/local/bin/novastor-dataplane", "Path to the SPDK data-plane binary (unused: dataplane runs as separate DaemonSet)")
 	spdkSocket := flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "Path to the SPDK JSON-RPC Unix socket")
 	flag.Parse()
 
@@ -148,109 +116,30 @@ func main() {
 	// Register Prometheus metrics.
 	metrics.Register()
 
-	// Create chunk store using the backend factory.
-	backendConfig := map[string]string{}
-	if *dataDir != "" {
-		backendConfig["dir"] = *dataDir
-	}
-	backendStore, err := chunk.CreateBackend(*backendType, backendConfig)
-	if err != nil {
-		logging.L.Fatal("failed to create chunk store",
-			zap.String("backend", *backendType),
-			zap.Error(err),
-		)
-	}
-
-	// Optionally wrap the backend store with encryption.
-	store := backendStore
-	if *encryptionEnabled {
-		var km chunk.KeyManager
-		switch {
-		case *encryptionKeyDir != "":
-			km, err = chunk.NewFileKeyManager(*encryptionKeyDir)
-			if err != nil {
-				logging.L.Fatal("failed to create file key manager", zap.Error(err))
-			}
-			logging.L.Info("chunk encryption enabled (file-based key management)",
-				zap.String("keyDir", *encryptionKeyDir))
-		case *encryptionMasterKey != "":
-			masterKeyBytes, decodeErr := base64.StdEncoding.DecodeString(*encryptionMasterKey)
-			if decodeErr != nil {
-				logging.L.Fatal("failed to decode master key", zap.Error(decodeErr))
-			}
-			km, err = chunk.NewDerivedKeyManager(masterKeyBytes)
-			if err != nil {
-				logging.L.Fatal("failed to create derived key manager", zap.Error(err))
-			}
-			logging.L.Info("chunk encryption enabled (derived key management)")
-		default:
-			logging.L.Fatal("encryption enabled but no key source specified; set --encryption-key-dir or --encryption-master-key")
-		}
-		store = chunk.NewKeyedEncryptedStore(backendStore, km)
-	}
-
-	// Wire the AgentCollector to real data sources.
-	collector := metrics.NewAgentCollector()
-	collector.ChunkCountFn = func() int64 {
-		ids, listErr := store.List(context.Background())
-		if listErr != nil {
-			logging.L.Warn("metrics: listing chunks failed", zap.Error(listErr))
-			return 0
-		}
-		return int64(len(ids))
-	}
-	// Disk stats are only available for local backend.
-	collector.DiskStatsFn = func() []metrics.DiskStats {
-		// Use CapacityStore interface if available.
-		if cs, ok := store.(chunk.CapacityStore); ok {
-			stats, err := cs.Stats(context.Background())
-			if err != nil {
-				logging.L.Warn("metrics: getting store stats failed", zap.Error(err))
-				return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
-			}
-			total := stats.TotalBytes
-			if total < 0 {
-				total = 0
-			}
-			used := stats.UsedBytes
-			if used < 0 {
-				used = 0
-			}
-			free := stats.AvailableBytes
-			if free < 0 {
-				free = 0
-			}
-			return []metrics.DiskStats{
-				{
-					Device: *dataDir,
-					Total:  uint64(total),
-					Used:   uint64(used),
-					Free:   uint64(free),
-				},
-			}
-		}
-		// If CapacityStore is not implemented, return zeros.
-		logging.L.Warn("metrics: store does not support capacity stats")
-		return []metrics.DiskStats{{Device: *dataDir, Total: 0, Used: 0, Free: 0}}
-	}
-
 	// Main context for the agent lifetime.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start the periodic metrics collection loop.
-	go func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				collector.Collect()
-			}
+	// Connect to the SPDK data-plane socket.
+	logging.L.Info("waiting for SPDK data-plane socket", zap.String("socket", *spdkSocket))
+	socketTimeout := 120 * time.Second
+	socketDeadline := time.Now().Add(socketTimeout)
+	for {
+		if _, statErr := os.Stat(*spdkSocket); statErr == nil {
+			break
 		}
-	}()
+		if time.Now().After(socketDeadline) {
+			logging.L.Fatal("timed out waiting for SPDK data-plane socket",
+				zap.String("socket", *spdkSocket),
+				zap.Duration("timeout", socketTimeout))
+		}
+		time.Sleep(2 * time.Second)
+	}
+	spdkClient := spdk.NewClient(*spdkSocket)
+	if err := spdkClient.Connect(); err != nil {
+		logging.L.Fatal("failed to connect to SPDK data-plane", zap.Error(err))
+	}
+	logging.L.Info("connected to SPDK data-plane", zap.String("socket", *spdkSocket))
 
 	// Build gRPC server options.
 	var serverOpts []grpc.ServerOption
@@ -274,10 +163,6 @@ func main() {
 	}
 
 	srv := grpc.NewServer(serverOpts...)
-
-	// Create and register the chunk server.
-	chunkServer := agent.NewChunkServer(store)
-	chunkServer.Register(srv)
 
 	// Build TLS dial options for outbound metadata connections.
 	var dialOpts []grpc.DialOption
@@ -303,7 +188,7 @@ func main() {
 		dialOpts = append(dialOpts, clientTLSOpt)
 	}
 
-	// Connect to the metadata service early (needed for NVMe-oF target server).
+	// Connect to the metadata service.
 	var metaClient *metadata.GRPCClient
 	if *metaAddr != "" {
 		var metaErr error
@@ -316,8 +201,7 @@ func main() {
 		}
 	}
 
-	// Compute registrationAddr early so it can be used by both the failover
-	// controller and the node registration goroutine.
+	// Compute registrationAddr for metadata and failover.
 	registrationAddr := *listenAddr
 	if *podIP != "" {
 		_, port, splitErr := net.SplitHostPort(*listenAddr)
@@ -326,31 +210,11 @@ func main() {
 		}
 	}
 
-	// Create and register the NVMe target server when a host IP is provided.
+	// Register NVMe-oF target service via SPDK data plane.
 	if *hostIP != "" {
 		if metaClient == nil {
 			logging.L.Warn("NVMe-oF target service disabled: no metadata connection")
-		} else if *dataPlane == "spdk" {
-			// SPDK mode: connect to the data-plane socket provided by the
-			// dataplane DaemonSet (shared via hostPath volume).
-			logging.L.Info("waiting for SPDK data-plane socket", zap.String("socket", *spdkSocket))
-			socketTimeout := 120 * time.Second
-			socketDeadline := time.Now().Add(socketTimeout)
-			for {
-				if _, statErr := os.Stat(*spdkSocket); statErr == nil {
-					break
-				}
-				if time.Now().After(socketDeadline) {
-					logging.L.Fatal("timed out waiting for SPDK data-plane socket",
-						zap.String("socket", *spdkSocket),
-						zap.Duration("timeout", socketTimeout))
-				}
-				time.Sleep(2 * time.Second)
-			}
-			spdkClient := spdk.NewClient(*spdkSocket)
-			if err := spdkClient.Connect(); err != nil {
-				logging.L.Fatal("failed to connect to SPDK data-plane", zap.Error(err))
-			}
+		} else {
 			spdkServer := agent.NewSPDKTargetServer(*hostIP, spdkClient, metaClient)
 			spdkServer.Register(srv)
 			logging.L.Info("NVMe-oF target service registered (SPDK)", zap.String("hostIP", *hostIP))
@@ -361,33 +225,23 @@ func main() {
 				logging.L.Fatal("failover controller start", zap.Error(err))
 			}
 			defer fc.Stop()
-		} else {
-			// Legacy mode: chunk-backed block devices with loop/nvmet.
-			nvmeServer := agent.NewNVMeTargetServer(*hostIP, store, metaClient)
-			nvmeServer.Register(srv)
-			logging.L.Info("NVMe-oF target service registered (chunk-backed)", zap.String("hostIP", *hostIP))
 		}
 	} else {
 		logging.L.Info("NVMe-oF target service disabled (--host-ip not set)")
 	}
 
-	// Start the scrubber.
-	scrubber := chunk.NewScrubber(store, logReporter{}, *scrubInterval)
-	scrubber.Start(ctx)
-
 	// Start the garbage collector for orphan chunks.
 	if metaClient != nil {
-		agentGC := agent.NewGarbageCollector(store, metaClient, *gcInterval)
-		agentGC.Start(ctx)
-		logging.L.Info("agent garbage collector started", zap.Duration("interval", *gcInterval))
-	} else {
-		logging.L.Info("agent garbage collector disabled: no metadata connection")
+		// TODO: GC needs to be reimplemented to work via SPDK data plane
+		// instead of the chunk.Store interface.
+		_ = gcInterval
+		logging.L.Info("agent garbage collector: pending SPDK integration")
 	}
 
 	// Register this node with the metadata service.
 	if metaClient != nil {
 		defer metaClient.Close()
-		go registerNode(ctx, metaClient, *nodeID, registrationAddr, store, *heartbeatInterval)
+		go registerNode(ctx, metaClient, *nodeID, registrationAddr, *heartbeatInterval)
 	}
 
 	// Start Prometheus metrics HTTP server.
@@ -422,12 +276,11 @@ func main() {
 	go func() {
 		<-stop
 		logging.L.Info("shutting down agent")
-		cancel() // cancels ctx: stops scrubber loop, heartbeat loop, metrics loop
-		scrubber.Stop()
+		cancel()
 		srv.GracefulStop()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		metricsServer.Shutdown(shutdownCtx)
+		_ = metricsServer.Shutdown(shutdownCtx)
 	}()
 
 	if err := srv.Serve(listener); err != nil {
