@@ -6,6 +6,7 @@
 
 pub mod chunk;
 pub mod chunk_store;
+pub mod file_store;
 pub mod lvm;
 pub mod raw_disk;
 pub mod traits;

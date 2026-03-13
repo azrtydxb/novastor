@@ -226,6 +226,75 @@ struct WriteIoCtx {
 
 unsafe impl Send for WriteIoCtx {}
 
+// ---------------------------------------------------------------------------
+// Async I/O contexts (for tokio oneshot completion)
+// ---------------------------------------------------------------------------
+
+struct AsyncReadIoCtx {
+    desc: *mut ffi::spdk_bdev_desc,
+    channel: *mut ffi::spdk_io_channel,
+    buf: *mut std::os::raw::c_void,
+    buf_len: usize,
+    sender_ptr: *mut std::os::raw::c_void,
+}
+
+unsafe impl Send for AsyncReadIoCtx {}
+
+struct AsyncWriteIoCtx {
+    desc: *mut ffi::spdk_bdev_desc,
+    channel: *mut ffi::spdk_io_channel,
+    buf: *mut std::os::raw::c_void,
+    sender_ptr: *mut std::os::raw::c_void,
+}
+
+unsafe impl Send for AsyncWriteIoCtx {}
+
+unsafe extern "C" fn async_read_io_done_cb(
+    bdev_io: *mut ffi::spdk_bdev_io,
+    success: bool,
+    ctx: *mut std::os::raw::c_void,
+) {
+    let io_ctx = Box::from_raw(ctx as *mut AsyncReadIoCtx);
+
+    let result = if success {
+        let mut data = vec![0u8; io_ctx.buf_len];
+        std::ptr::copy_nonoverlapping(io_ctx.buf as *const u8, data.as_mut_ptr(), io_ctx.buf_len);
+        Ok(data)
+    } else {
+        Err(DataPlaneError::BdevError("bdev read I/O failed".into()))
+    };
+
+    ffi::spdk_bdev_free_io(bdev_io);
+    ffi::spdk_dma_free(io_ctx.buf);
+    ffi::spdk_put_io_channel(io_ctx.channel);
+    ffi::spdk_bdev_close(io_ctx.desc);
+
+    let mut sender = AsyncCompletionSender::from_ptr(io_ctx.sender_ptr);
+    sender.complete(result);
+}
+
+unsafe extern "C" fn async_write_io_done_cb(
+    bdev_io: *mut ffi::spdk_bdev_io,
+    success: bool,
+    ctx: *mut std::os::raw::c_void,
+) {
+    let io_ctx = Box::from_raw(ctx as *mut AsyncWriteIoCtx);
+
+    let result = if success {
+        Ok(())
+    } else {
+        Err(DataPlaneError::BdevError("bdev write I/O failed".into()))
+    };
+
+    ffi::spdk_bdev_free_io(bdev_io);
+    ffi::spdk_dma_free(io_ctx.buf);
+    ffi::spdk_put_io_channel(io_ctx.channel);
+    ffi::spdk_bdev_close(io_ctx.desc);
+
+    let mut sender = AsyncCompletionSender::from_ptr(io_ctx.sender_ptr);
+    sender.complete(result);
+}
+
 /// Round up `val` to the next multiple of `align`.
 fn align_up(val: u64, align: u64) -> u64 {
     if align == 0 {
@@ -501,4 +570,226 @@ unsafe extern "C" fn write_io_done_cb(
     ffi::spdk_bdev_close(io_ctx.desc);
 
     io_ctx.completion.complete(result);
+}
+
+// ---------------------------------------------------------------------------
+// Async dispatch and bdev I/O (using tokio oneshot via AsyncCompletion)
+// ---------------------------------------------------------------------------
+
+use super::context::{AsyncCompletion, AsyncCompletionSender};
+
+/// Dispatch a closure to the SPDK reactor and return a future for the result.
+/// This is the async equivalent of [`dispatch_sync`].
+pub async fn dispatch_async<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    // If already on SPDK thread, run directly.
+    let on_spdk = unsafe { !ffi::spdk_get_thread().is_null() };
+    if on_spdk {
+        return f();
+    }
+
+    let (completion, mut sender) = AsyncCompletion::<R>::new();
+
+    send_to_reactor(move || {
+        let result = f();
+        sender.complete(result);
+    });
+
+    completion.wait().await
+}
+
+/// Async version of [`bdev_read`]. Returns a future instead of blocking.
+pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+    let name = bdev_name.to_string();
+    let requested_len = length as usize;
+    let (completion, sender) = AsyncCompletion::<Result<Vec<u8>>>::new();
+    let sender_ptr = sender.into_ptr();
+
+    send_to_reactor(move || unsafe {
+        let name_c = match std::ffi::CString::new(name.as_str()) {
+            Ok(c) => c,
+            Err(e) => {
+                let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+                s.complete(Err(DataPlaneError::BdevError(format!("invalid name: {e}"))));
+                return;
+            }
+        };
+
+        let mut desc: *mut ffi::spdk_bdev_desc = std::ptr::null_mut();
+        let rc = ffi::spdk_bdev_open_ext(
+            name_c.as_ptr() as *const c_char,
+            false,
+            Some(bdev_event_cb),
+            std::ptr::null_mut(),
+            &mut desc,
+        );
+        if rc != 0 {
+            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            s.complete(Err(DataPlaneError::BdevError(format!(
+                "spdk_bdev_open_ext('{}') failed: rc={rc}",
+                name
+            ))));
+            return;
+        }
+
+        let bdev = ffi::spdk_bdev_desc_get_bdev(desc);
+        let block_size = if bdev.is_null() {
+            512
+        } else {
+            ffi::spdk_bdev_get_block_size(bdev)
+        } as u64;
+        let aligned_len = align_up(length, block_size);
+
+        let channel = ffi::spdk_bdev_get_io_channel(desc);
+        if channel.is_null() {
+            ffi::spdk_bdev_close(desc);
+            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            s.complete(Err(DataPlaneError::BdevError(
+                "spdk_bdev_get_io_channel null".into(),
+            )));
+            return;
+        }
+
+        let buf = ffi::spdk_dma_malloc(aligned_len as usize, 0x1000, std::ptr::null_mut());
+        if buf.is_null() {
+            ffi::spdk_put_io_channel(channel);
+            ffi::spdk_bdev_close(desc);
+            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            s.complete(Err(DataPlaneError::BdevError(
+                "spdk_dma_malloc failed".into(),
+            )));
+            return;
+        }
+
+        let io_ctx = Box::new(AsyncReadIoCtx {
+            desc,
+            channel,
+            buf,
+            buf_len: requested_len,
+            sender_ptr,
+        });
+        let io_ctx_ptr = Box::into_raw(io_ctx) as *mut std::os::raw::c_void;
+
+        let rc = ffi::spdk_bdev_read(
+            desc,
+            channel,
+            buf,
+            offset,
+            aligned_len,
+            Some(async_read_io_done_cb),
+            io_ctx_ptr,
+        );
+        if rc != 0 {
+            let ctx = Box::from_raw(io_ctx_ptr as *mut AsyncReadIoCtx);
+            ffi::spdk_dma_free(ctx.buf);
+            ffi::spdk_put_io_channel(ctx.channel);
+            ffi::spdk_bdev_close(ctx.desc);
+            let mut s = AsyncCompletionSender::from_ptr(ctx.sender_ptr);
+            s.complete(Err(DataPlaneError::BdevError(format!(
+                "spdk_bdev_read submit failed: rc={rc}"
+            ))));
+        }
+    });
+
+    completion.wait().await
+}
+
+/// Async version of [`bdev_write`]. Returns a future instead of blocking.
+pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Result<()> {
+    let name = bdev_name.to_string();
+    let data = data.to_vec();
+    let (completion, sender) = AsyncCompletion::<Result<()>>::new();
+    let sender_ptr = sender.into_ptr();
+
+    send_to_reactor(move || unsafe {
+        let name_c = match std::ffi::CString::new(name.as_str()) {
+            Ok(c) => c,
+            Err(e) => {
+                let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+                s.complete(Err(DataPlaneError::BdevError(format!("invalid name: {e}"))));
+                return;
+            }
+        };
+
+        let mut desc: *mut ffi::spdk_bdev_desc = std::ptr::null_mut();
+        let rc = ffi::spdk_bdev_open_ext(
+            name_c.as_ptr() as *const c_char,
+            true,
+            Some(bdev_event_cb),
+            std::ptr::null_mut(),
+            &mut desc,
+        );
+        if rc != 0 {
+            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            s.complete(Err(DataPlaneError::BdevError(format!(
+                "spdk_bdev_open_ext('{}') failed: rc={rc}",
+                name
+            ))));
+            return;
+        }
+
+        let bdev = ffi::spdk_bdev_desc_get_bdev(desc);
+        let block_size = if bdev.is_null() {
+            512
+        } else {
+            ffi::spdk_bdev_get_block_size(bdev)
+        } as u64;
+        let aligned_len = align_up(data.len() as u64, block_size);
+
+        let channel = ffi::spdk_bdev_get_io_channel(desc);
+        if channel.is_null() {
+            ffi::spdk_bdev_close(desc);
+            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            s.complete(Err(DataPlaneError::BdevError(
+                "spdk_bdev_get_io_channel null".into(),
+            )));
+            return;
+        }
+
+        let buf = ffi::spdk_dma_malloc(aligned_len as usize, 0x1000, std::ptr::null_mut());
+        if buf.is_null() {
+            ffi::spdk_put_io_channel(channel);
+            ffi::spdk_bdev_close(desc);
+            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            s.complete(Err(DataPlaneError::BdevError(
+                "spdk_dma_malloc failed".into(),
+            )));
+            return;
+        }
+        std::ptr::write_bytes(buf as *mut u8, 0, aligned_len as usize);
+        std::ptr::copy_nonoverlapping(data.as_ptr(), buf as *mut u8, data.len());
+
+        let io_ctx = Box::new(AsyncWriteIoCtx {
+            desc,
+            channel,
+            buf,
+            sender_ptr,
+        });
+        let io_ctx_ptr = Box::into_raw(io_ctx) as *mut std::os::raw::c_void;
+
+        let rc = ffi::spdk_bdev_write(
+            desc,
+            channel,
+            buf,
+            offset,
+            aligned_len,
+            Some(async_write_io_done_cb),
+            io_ctx_ptr,
+        );
+        if rc != 0 {
+            let ctx = Box::from_raw(io_ctx_ptr as *mut AsyncWriteIoCtx);
+            ffi::spdk_dma_free(ctx.buf);
+            ffi::spdk_put_io_channel(ctx.channel);
+            ffi::spdk_bdev_close(ctx.desc);
+            let mut s = AsyncCompletionSender::from_ptr(ctx.sender_ptr);
+            s.complete(Err(DataPlaneError::BdevError(format!(
+                "spdk_bdev_write submit failed: rc={rc}"
+            ))));
+        }
+    });
+
+    completion.wait().await
 }
