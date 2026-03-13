@@ -272,7 +272,8 @@ unsafe extern "C" fn async_read_io_done_cb(
     ffi::spdk_put_io_channel(io_ctx.channel);
     ffi::spdk_bdev_close(io_ctx.desc);
 
-    let mut sender = AsyncCompletionSender::from_ptr(io_ctx.sender_ptr);
+    let mut sender: AsyncCompletionSender<Result<Vec<u8>>> =
+        AsyncCompletionSender::from_ptr(io_ctx.sender_ptr);
     sender.complete(result);
 }
 
@@ -294,7 +295,8 @@ unsafe extern "C" fn async_write_io_done_cb(
     ffi::spdk_put_io_channel(io_ctx.channel);
     ffi::spdk_bdev_close(io_ctx.desc);
 
-    let mut sender = AsyncCompletionSender::from_ptr(io_ctx.sender_ptr);
+    let mut sender: AsyncCompletionSender<Result<()>> =
+        AsyncCompletionSender::from_ptr(io_ctx.sender_ptr);
     sender.complete(result);
 }
 
@@ -653,7 +655,8 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
         let channel = ffi::spdk_bdev_get_io_channel(desc);
         if channel.is_null() {
             ffi::spdk_bdev_close(desc);
-            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
+                AsyncCompletionSender::from_ptr(sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(
                 "spdk_bdev_get_io_channel null".into(),
             )));
@@ -664,7 +667,8 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
         if buf.is_null() {
             ffi::spdk_put_io_channel(channel);
             ffi::spdk_bdev_close(desc);
-            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
+                AsyncCompletionSender::from_ptr(sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(
                 "spdk_dma_malloc failed".into(),
             )));
@@ -694,7 +698,8 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
             ffi::spdk_dma_free(ctx.buf);
             ffi::spdk_put_io_channel(ctx.channel);
             ffi::spdk_bdev_close(ctx.desc);
-            let mut s = AsyncCompletionSender::from_ptr(ctx.sender_ptr);
+            let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
+                AsyncCompletionSender::from_ptr(ctx.sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(format!(
                 "spdk_bdev_read submit failed: rc={rc}"
             ))));
@@ -753,7 +758,8 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
         let channel = ffi::spdk_bdev_get_io_channel(desc);
         if channel.is_null() {
             ffi::spdk_bdev_close(desc);
-            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            let mut s: AsyncCompletionSender<Result<()>> =
+                AsyncCompletionSender::from_ptr(sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(
                 "spdk_bdev_get_io_channel null".into(),
             )));
@@ -764,7 +770,8 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
         if buf.is_null() {
             ffi::spdk_put_io_channel(channel);
             ffi::spdk_bdev_close(desc);
-            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            let mut s: AsyncCompletionSender<Result<()>> =
+                AsyncCompletionSender::from_ptr(sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(
                 "spdk_dma_malloc failed".into(),
             )));
@@ -795,7 +802,8 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
             ffi::spdk_dma_free(ctx.buf);
             ffi::spdk_put_io_channel(ctx.channel);
             ffi::spdk_bdev_close(ctx.desc);
-            let mut s = AsyncCompletionSender::from_ptr(ctx.sender_ptr);
+            let mut s: AsyncCompletionSender<Result<()>> =
+                AsyncCompletionSender::from_ptr(ctx.sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(format!(
                 "spdk_bdev_write submit failed: rc={rc}"
             ))));
