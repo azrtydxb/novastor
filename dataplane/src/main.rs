@@ -13,6 +13,7 @@ mod error;
 #[cfg(feature = "spdk-sys")]
 mod jsonrpc;
 mod metadata;
+mod policy;
 #[cfg(feature = "spdk-sys")]
 mod spdk;
 mod transport;

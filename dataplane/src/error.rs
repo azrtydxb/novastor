@@ -34,6 +34,8 @@ pub enum DataPlaneError {
     TransportError(String),
     #[error("chunk engine error: {0}")]
     ChunkEngineError(String),
+    #[error("policy error: {0}")]
+    PolicyError(String),
 }
 
 impl From<tonic::Status> for DataPlaneError {
