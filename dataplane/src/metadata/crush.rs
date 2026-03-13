@@ -19,6 +19,7 @@ pub fn select(chunk_id: &str, count: usize, topology: &ClusterMap) -> Vec<Placem
     // Collect online nodes that have positive total weight.
     let mut candidates: Vec<&Node> = topology
         .nodes()
+        .iter()
         .filter(|n| n.status == NodeStatus::Online && total_backend_weight(n) > 0)
         .collect();
 
@@ -35,7 +36,9 @@ pub fn select(chunk_id: &str, count: usize, topology: &ClusterMap) -> Vec<Placem
                 let draw = straw2_draw(chunk_id, &node.id, replica, w);
                 (idx, draw)
             })
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            .max_by(|(_, a): &(usize, f64), (_, b): &(usize, f64)| {
+                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+            });
 
         if let Some((best_idx, _)) = best {
             let node = candidates.remove(best_idx);

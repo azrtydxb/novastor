@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
 use crate::error::{DataPlaneError, Result};
 use crate::metadata::types::{ChunkMapEntry, MetadataRequest, MetadataResponse, VolumeDefinition};
@@ -77,7 +77,8 @@ impl MetadataStore {
         {
             None => Ok(None),
             Some(guard) => {
-                let vol: VolumeDefinition = serde_json::from_slice(guard.value())?;
+                let bytes: &[u8] = guard.value();
+                let vol: VolumeDefinition = serde_json::from_slice(bytes)?;
                 Ok(Some(vol))
             }
         }
@@ -118,7 +119,8 @@ impl MetadataStore {
         {
             let (_key, value) =
                 result.map_err(|e| DataPlaneError::MetadataError(format!("iter item: {e}")))?;
-            let vol: VolumeDefinition = serde_json::from_slice(value.value())?;
+            let bytes: &[u8] = value.value();
+            let vol: VolumeDefinition = serde_json::from_slice(bytes)?;
             volumes.push(vol);
         }
         Ok(volumes)
@@ -174,7 +176,8 @@ impl MetadataStore {
         {
             None => Ok(None),
             Some(guard) => {
-                let entry: ChunkMapEntry = serde_json::from_slice(guard.value())?;
+                let bytes: &[u8] = guard.value();
+                let entry: ChunkMapEntry = serde_json::from_slice(bytes)?;
                 Ok(Some(entry))
             }
         }
@@ -221,7 +224,8 @@ impl MetadataStore {
         {
             let (_key, value) =
                 result.map_err(|e| DataPlaneError::MetadataError(format!("range item: {e}")))?;
-            let entry: ChunkMapEntry = serde_json::from_slice(value.value())?;
+            let bytes: &[u8] = value.value();
+            let entry: ChunkMapEntry = serde_json::from_slice(bytes)?;
             entries.push(entry);
         }
         Ok(entries)
