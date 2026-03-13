@@ -5,12 +5,15 @@
 //! Controlled by the Go agent via JSON-RPC over a Unix domain socket.
 
 mod backend;
+#[cfg(feature = "spdk-sys")]
 mod bdev;
 mod chunk;
 mod config;
 mod error;
+#[cfg(feature = "spdk-sys")]
 mod jsonrpc;
 mod metadata;
+#[cfg(feature = "spdk-sys")]
 mod spdk;
 mod transport;
 
@@ -79,19 +82,36 @@ fn main() {
         .expect("tokio handle already set");
     info!("tokio runtime started (2 worker threads)");
 
-    let config = config::DataPlaneConfig {
-        rpc_socket: args.rpc_socket,
-        reactor_mask: args.reactor_mask,
-        mem_size: args.mem_size,
-        transport_type: args.transport_type,
-        listen_address: args.listen_address,
-        listen_port: args.listen_port,
-    };
+    #[cfg(feature = "spdk-sys")]
+    {
+        let config = config::DataPlaneConfig {
+            rpc_socket: args.rpc_socket,
+            reactor_mask: args.reactor_mask,
+            mem_size: args.mem_size,
+            transport_type: args.transport_type,
+            listen_address: args.listen_address,
+            listen_port: args.listen_port,
+        };
 
-    // spdk::run() blocks in the SPDK reactor loop on the main thread.
-    if let Err(e) = spdk::run(config) {
-        error!("data plane failed: {}", e);
-        std::process::exit(1);
+        // spdk::run() blocks in the SPDK reactor loop on the main thread.
+        if let Err(e) = spdk::run(config) {
+            error!("data plane failed: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(not(feature = "spdk-sys"))]
+    {
+        info!("SPDK not available (spdk-sys feature not enabled). Exiting.");
+        // Suppress unused variable warnings
+        let _ = (
+            args.rpc_socket,
+            args.reactor_mask,
+            args.mem_size,
+            args.transport_type,
+            args.listen_address,
+            args.listen_port,
+        );
     }
 
     // Shut down tokio runtime after SPDK exits.
