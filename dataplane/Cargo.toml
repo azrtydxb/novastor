@@ -20,6 +20,8 @@ reed-solomon-simd = "3"
 crc32c = "0.6"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "fs", "macros"] }
+async-trait = "0.1"
 ctrlc = "3"
 
 [build-dependencies]
