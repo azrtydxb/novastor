@@ -66,6 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libaio-dev libssl-dev libnuma-dev liburing-dev \
     libfuse3-dev libjson-c-dev uuid-dev \
     libclang-dev clang llvm \
+    protobuf-compiler \
     curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -85,6 +86,7 @@ ENV SPDK_DIR=/usr/local
 
 # Copy manifests first for dependency caching.
 COPY Cargo.toml Cargo.lock build.rs ./
+COPY proto/ proto/
 COPY src/ src/
 
 RUN cargo build --release --features spdk-sys
