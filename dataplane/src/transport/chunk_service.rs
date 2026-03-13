@@ -156,8 +156,7 @@ mod tests {
     #[tokio::test]
     async fn get_chunk_streams_data() {
         let (svc, _dir) = setup().await;
-        let chunk_id =
-            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let chunk_id = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
         let data = make_chunk_data(b"hello world");
 
         // Put data directly via the store.
@@ -185,8 +184,7 @@ mod tests {
     #[tokio::test]
     async fn has_chunk_returns_false_then_true() {
         let (svc, _dir) = setup().await;
-        let chunk_id =
-            "1111111111111111111111111111111111111111111111111111111111111111";
+        let chunk_id = "1111111111111111111111111111111111111111111111111111111111111111";
 
         // Should not exist initially.
         let resp = svc
@@ -214,8 +212,7 @@ mod tests {
     #[tokio::test]
     async fn delete_chunk_removes_data() {
         let (svc, _dir) = setup().await;
-        let chunk_id =
-            "2222222222222222222222222222222222222222222222222222222222222222";
+        let chunk_id = "2222222222222222222222222222222222222222222222222222222222222222";
         let data = make_chunk_data(b"delete me");
 
         // Put data via the store.

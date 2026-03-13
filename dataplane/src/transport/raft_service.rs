@@ -13,9 +13,7 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::metadata::raft_types::RaftNode;
 use crate::transport::raft_proto::raft_service_server::RaftService;
-use crate::transport::raft_proto::{
-    RaftRequest, RaftResponse, SnapshotRequest, SnapshotResponse,
-};
+use crate::transport::raft_proto::{RaftRequest, RaftResponse, SnapshotRequest, SnapshotResponse};
 
 // ---------------------------------------------------------------------------
 // Handler trait
@@ -38,11 +36,7 @@ pub trait RaftMessageHandler: Send + Sync + 'static {
     ) -> Result<Vec<u8>, String>;
 
     /// Handle an incoming snapshot stream (already fully assembled).
-    async fn handle_snapshot(
-        &self,
-        shard_id: u32,
-        payload: Vec<u8>,
-    ) -> Result<Vec<u8>, String>;
+    async fn handle_snapshot(&self, shard_id: u32, payload: Vec<u8>) -> Result<Vec<u8>, String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +275,9 @@ mod tests {
             payload: vec![],
         });
 
-        let err = RaftServiceTrait::forward(&service, request).await.unwrap_err();
+        let err = RaftServiceTrait::forward(&service, request)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), tonic::Code::Internal);
         assert!(err.message().contains("forward failed"));
     }
