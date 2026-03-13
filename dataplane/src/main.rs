@@ -1,25 +1,7 @@
-//! NovaStor SPDK Data Plane
-//!
-//! High-performance storage data plane built on SPDK. Provides NVMe-oF/TCP
-//! targets with custom bdev modules for replication and erasure coding.
-//! Controlled by the Go agent via JSON-RPC over a Unix domain socket.
-
-mod backend;
-#[cfg(feature = "spdk-sys")]
-mod bdev;
-mod chunk;
-mod config;
-mod error;
-#[cfg(feature = "spdk-sys")]
-mod jsonrpc;
-mod metadata;
-mod policy;
-#[cfg(feature = "spdk-sys")]
-mod spdk;
-mod transport;
+//! NovaStor SPDK Data Plane — binary entry point.
 
 use clap::Parser;
-use log::{error, info};
+use log::info;
 
 #[derive(Parser, Debug)]
 #[command(name = "novastor-dataplane", version, about)]
@@ -89,7 +71,10 @@ fn main() {
 
     #[cfg(feature = "spdk-sys")]
     {
-        let config = config::DataPlaneConfig {
+        use log::error;
+        use novastor_dataplane::config::DataPlaneConfig;
+
+        let config = DataPlaneConfig {
             rpc_socket: args.rpc_socket,
             reactor_mask: args.reactor_mask,
             mem_size: args.mem_size,
@@ -100,7 +85,7 @@ fn main() {
         };
 
         // spdk::run() blocks in the SPDK reactor loop on the main thread.
-        if let Err(e) = spdk::run(config) {
+        if let Err(e) = novastor_dataplane::spdk::run(config) {
             error!("data plane failed: {}", e);
             std::process::exit(1);
         }
@@ -109,7 +94,6 @@ fn main() {
     #[cfg(not(feature = "spdk-sys"))]
     {
         info!("SPDK not available (spdk-sys feature not enabled). Exiting.");
-        // Suppress unused variable warnings
         let _ = (
             args.rpc_socket,
             args.reactor_mask,
