@@ -17,12 +17,14 @@ impl std::fmt::Display for RaftNode {
 
 // Use the declare_raft_types! macro to set up TypeConfig.
 // Configures: D = MetadataRequest, R = MetadataResponse, Node = RaftNode.
+// SnapshotData is std::io::Cursor<Vec<u8>> (the openraft default).
 // NodeId defaults to u64, Entry defaults to Entry<Self>, etc.
 openraft::declare_raft_types!(
     pub TypeConfig:
         D = MetadataRequest,
         R = MetadataResponse,
         Node = RaftNode,
+        SnapshotData = std::io::Cursor<Vec<u8>>,
 );
 
 /// Return a validated openraft `Config` with reasonable defaults for NovaStor.
