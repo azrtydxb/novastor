@@ -37,6 +37,8 @@ pub fn default_raft_config() -> openraft::Config {
         heartbeat_interval: 500,
         election_timeout_min: 1500,
         election_timeout_max: 3000,
+        max_payload_entries: 100,
+        snapshot_policy: openraft::SnapshotPolicy::LogsSinceLast(1000),
         ..Default::default()
     }
 }

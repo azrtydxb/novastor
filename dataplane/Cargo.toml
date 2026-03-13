@@ -25,7 +25,8 @@ async-trait = "0.1"
 ctrlc = "3"
 hex = "0.4"
 sha2 = "0.10"
-openraft = { version = "0.9", features = ["serde"] }
+openraft = { version = "0.9", features = ["serde", "storage-v2"] }
+anyerror = "0.1"
 redb = "3"
 rand = { version = "0.8", features = ["small_rng"] }
 base64 = "0.22"

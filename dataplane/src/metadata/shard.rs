@@ -1,33 +1,14 @@
 //! Shard manager — routes metadata operations to the correct shard.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 
 use crate::error::{DataPlaneError, Result};
-use crate::metadata::store::MetadataStore;
+use crate::metadata::raft_store::ShardStorage;
 use crate::metadata::types::{shard_for_volume, ChunkMapEntry, VolumeDefinition};
 
 /// Total number of shards.  One redb database per shard.
 pub const SHARD_COUNT: usize = 256;
-
-/// Thin wrapper that couples a shard directory path with its open
-/// `MetadataStore`.  Mirrors the `ShardStorage` interface used by the Raft
-/// layer so that the shard manager can be used independently of openraft.
-pub struct ShardStorage {
-    /// Underlying redb-backed store for this shard.
-    pub state: Arc<MetadataStore>,
-}
-
-impl ShardStorage {
-    /// Open (or create) the shard database at `data_dir/shard.redb`.
-    pub fn open(data_dir: impl AsRef<Path>) -> Result<Self> {
-        let db_path = data_dir.as_ref().join("shard.redb");
-        let store = MetadataStore::open(db_path)?;
-        Ok(Self {
-            state: Arc::new(store),
-        })
-    }
-}
 
 /// Routes every metadata operation to one of 256 per-shard `MetadataStore`
 /// instances.  Each shard is initialised lazily on first access.

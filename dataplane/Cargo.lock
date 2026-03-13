@@ -859,6 +859,7 @@ dependencies = [
 name = "novastor-dataplane"
 version = "0.1.0"
 dependencies = [
+ "anyerror",
  "async-trait",
  "base64",
  "bindgen",
