@@ -11,6 +11,7 @@ use crate::error::{DataPlaneError, Result};
 use crate::metadata::crush;
 use crate::metadata::topology::ClusterMap;
 use crate::metadata::types::ChunkMapEntry;
+use crate::policy::engine::PolicyEngine;
 use crate::transport::chunk_client::ChunkClient;
 
 pub struct ChunkEngine {
@@ -19,6 +20,8 @@ pub struct ChunkEngine {
     topology: ClusterMap,
     /// Cached gRPC connections to remote nodes, keyed by address.
     connections: Mutex<HashMap<String, ChunkClient>>,
+    /// Optional policy engine for tracking chunk locations and references.
+    policy: Option<Arc<PolicyEngine>>,
 }
 
 impl ChunkEngine {
@@ -28,6 +31,23 @@ impl ChunkEngine {
             local_store,
             topology,
             connections: Mutex::new(HashMap::new()),
+            policy: None,
+        }
+    }
+
+    /// Create a ChunkEngine with policy tracking enabled.
+    pub fn with_policy(
+        node_id: String,
+        local_store: Arc<dyn ChunkStore>,
+        topology: ClusterMap,
+        policy: Arc<PolicyEngine>,
+    ) -> Self {
+        Self {
+            node_id,
+            local_store,
+            topology,
+            connections: Mutex::new(HashMap::new()),
+            policy: Some(policy),
         }
     }
 
@@ -97,7 +117,7 @@ impl ChunkEngine {
     /// Write volume data, returning chunk map entries.
     pub async fn write(
         &self,
-        _volume_id: &str,
+        volume_id: &str,
         offset: u64,
         data: &[u8],
     ) -> Result<Vec<ChunkMapEntry>> {
@@ -134,6 +154,12 @@ impl ChunkEngine {
                 let addr = format!("http://{}:{}", node.address, node.port);
                 let client = self.get_client(&addr).await?;
                 client.put(&chunk_id, &prepared).await?;
+            }
+
+            // Record chunk location and volume reference in policy engine.
+            if let Some(policy) = &self.policy {
+                let _ = policy.record_chunk_location(&chunk_id, target_node);
+                let _ = policy.record_chunk_ref(&chunk_id, volume_id);
             }
 
             entries.push(ChunkMapEntry {
@@ -275,6 +301,52 @@ mod tests {
 
         let read_data = engine.read(volume_id, 0, &chunk_map).await.unwrap();
         assert_eq!(read_data, data);
+    }
+
+    #[tokio::test]
+    async fn write_records_policy_location_and_ref() {
+        use crate::policy::engine::PolicyEngine;
+        use crate::policy::location_store::ChunkLocationStore;
+
+        let chunk_dir = tempfile::tempdir().unwrap();
+        let policy_dir = tempfile::tempdir().unwrap();
+
+        let store = Arc::new(
+            FileChunkStore::new(chunk_dir.path().to_path_buf())
+                .await
+                .unwrap(),
+        );
+        let loc_store =
+            Arc::new(ChunkLocationStore::open(policy_dir.path().join("policy.redb")).unwrap());
+        let topology = local_topology("node-1");
+
+        let policy_engine = Arc::new(PolicyEngine::new(
+            "node-1".to_string(),
+            loc_store.clone(),
+            store.clone(),
+            topology.clone(),
+        ));
+
+        let engine = ChunkEngine::with_policy("node-1".to_string(), store, topology, policy_engine);
+
+        let volume_id = "aabb000000000000";
+        let data = vec![0x42u8; 4 * 1024 * 1024]; // 1 chunk
+        let chunk_map = engine.write(volume_id, 0, &data).await.unwrap();
+        assert_eq!(chunk_map.len(), 1);
+
+        // Verify policy engine recorded the chunk location
+        let loc = loc_store
+            .get_location(&chunk_map[0].chunk_id)
+            .unwrap()
+            .expect("location should be recorded");
+        assert!(loc.node_ids.contains(&"node-1".to_string()));
+
+        // Verify policy engine recorded the volume reference
+        let chunk_ref = loc_store
+            .get_ref(&chunk_map[0].chunk_id)
+            .unwrap()
+            .expect("ref should be recorded");
+        assert!(chunk_ref.volume_ids.contains(&volume_id.to_string()));
     }
 
     #[tokio::test]
