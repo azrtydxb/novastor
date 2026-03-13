@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dataplane-debug
+  namespace: default
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: worker-21
+  hostPID: true
+  imagePullSecrets:
+    - name: ghcr-pull-secret
+  containers:
+    - name: debug
+      image: ghcr.io/piwi3910/novastor/dataplane:dev
+      imagePullPolicy: Always
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          /usr/local/bin/entrypoint.sh --reactor-mask 0x1 --mem-size 1024 &
+          sleep 8
+          echo "=== SPDK started, testing RPC ==="
+          # Test with a simple method first
+          echo '{"jsonrpc":"2.0","id":1,"method":"novastor_io_stats","params":{}}' | socat -t 5 - UNIX-CONNECT:/var/tmp/novastor-spdk.sock
+          echo ""
+          echo "=== Testing bdev_malloc_create ==="
+          echo '{"jsonrpc":"2.0","id":2,"method":"bdev_malloc_create","params":{"name":"test_malloc","size_mb":64,"block_size":512}}' | socat -t 5 - UNIX-CONNECT:/var/tmp/novastor-spdk.sock
+          echo ""
+          echo "=== Testing bdev_aio_create on /dev/nvme0n1 ==="
+          # First try with the whole device
+          echo '{"jsonrpc":"2.0","id":3,"method":"bdev_aio_create","params":{"name":"test_aio","device_path":"/dev/nvme0n1","block_size":512}}' | socat -t 30 - UNIX-CONNECT:/var/tmp/novastor-spdk.sock
+          echo ""
+          echo "=== Checking if reactor is still alive ==="
+          echo '{"jsonrpc":"2.0","id":4,"method":"novastor_io_stats","params":{}}' | socat -t 5 - UNIX-CONNECT:/var/tmp/novastor-spdk.sock
+          echo ""
+          echo "=== Debug complete, sleeping 300s ==="
+          sleep 300
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: hugepages
+          mountPath: /dev/hugepages
+        - name: shm
+          mountPath: /dev/shm
+        - name: dev
+          mountPath: /dev
+        - name: modules
+          mountPath: /lib/modules
+          readOnly: true
+      resources:
+        requests:
+          memory: "1Gi"
+          hugepages-2Mi: "1Gi"
+        limits:
+          memory: "2Gi"
+          hugepages-2Mi: "1Gi"
+  volumes:
+    - name: hugepages
+      hostPath:
+        path: /dev/hugepages
+        type: Directory
+    - name: shm
+      hostPath:
+        path: /dev/shm
+        type: Directory
+    - name: dev
+      hostPath:
+        path: /dev
+        type: Directory
+    - name: modules
+      hostPath:
+        path: /lib/modules
+        type: Directory

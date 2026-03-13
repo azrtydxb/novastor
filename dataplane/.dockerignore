@@ -1,0 +1,5 @@
+target/
+novastor-dataplane
+*.swp
+*.swo
+.git

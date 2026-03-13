@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dataplane-real-nvme-test
+  namespace: default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: dataplane-real-nvme-test
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: worker-21
+      hostPID: true
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: dataplane-test
+          image: ghcr.io/piwi3910/novastor/dataplane:dev
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              /usr/local/bin/entrypoint.sh --reactor-mask 0x1 --mem-size 512 &
+              sleep 8
+              /usr/local/bin/test_real_nvme.sh
+              rc=$?
+              kill %1 2>/dev/null
+              exit $rc
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: hugepages
+              mountPath: /dev/hugepages
+            - name: shm
+              mountPath: /dev/shm
+            - name: dev
+              mountPath: /dev
+            - name: modules
+              mountPath: /lib/modules
+              readOnly: true
+          resources:
+            requests:
+              memory: "1Gi"
+              hugepages-2Mi: "512Mi"
+            limits:
+              memory: "2Gi"
+              hugepages-2Mi: "512Mi"
+      volumes:
+        - name: hugepages
+          hostPath:
+            path: /dev/hugepages
+            type: Directory
+        - name: shm
+          hostPath:
+            path: /dev/shm
+            type: Directory
+        - name: dev
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: modules
+          hostPath:
+            path: /lib/modules
+            type: Directory

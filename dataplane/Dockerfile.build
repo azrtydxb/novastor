@@ -1,0 +1,118 @@
+# syntax=docker/dockerfile:1
+#
+# Multi-stage build for the NovaStor SPDK dataplane.
+# Stage 1: Build SPDK from source and install into /usr/local.
+# Stage 2: Build the Rust dataplane binary against those SPDK libraries.
+# Stage 3: Minimal runtime image.
+#
+# Usage:
+#   docker build -f Dockerfile.build -t novastor-dataplane .
+#
+# To run (requires hugepages on the host):
+#   docker run --privileged \
+#     -v /dev/hugepages:/dev/hugepages \
+#     -v /dev/shm:/dev/shm \
+#     novastor-dataplane
+
+# ---------------------------------------------------------------------------
+# Stage 1 — Build SPDK
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS spdk-builder
+
+ARG SPDK_VERSION=v24.09
+ARG SPDK_REPO=https://github.com/spdk/spdk.git
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates build-essential pkg-config \
+    python3 python3-pip python3-setuptools python3-wheel python3-pyelftools \
+    meson ninja-build nasm cmake autoconf automake libtool \
+    libaio-dev libssl-dev libnuma-dev \
+    liburing-dev libfuse3-dev libjson-c-dev uuid-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN git clone --depth 1 --branch ${SPDK_VERSION} --recurse-submodules ${SPDK_REPO} spdk
+
+WORKDIR /build/spdk
+RUN ./scripts/pkgdep.sh --all || true
+RUN ./configure \
+    --prefix=/usr/local \
+    --disable-tests \
+    --disable-unit-tests \
+    --disable-examples \
+    --disable-apps \
+    --without-shared \
+    --with-fuse \
+    --with-uring \
+    --without-crypto \
+    --without-vhost \
+    --without-virtio \
+    --without-rbd \
+    --without-rdma \
+    --without-iscsi-initiator \
+    --without-vtune
+
+RUN make -j"$(nproc)"
+RUN make install DESTDIR=/spdk-install
+
+# ---------------------------------------------------------------------------
+# Stage 2 — Build the Rust dataplane
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS rust-builder
+
+# Install build dependencies.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config \
+    libaio-dev libssl-dev libnuma-dev liburing-dev \
+    libfuse3-dev libjson-c-dev uuid-dev \
+    libclang-dev clang llvm \
+    curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+
+# Copy SPDK install from stage 1.
+COPY --from=spdk-builder /spdk-install/usr/local /usr/local
+RUN ldconfig
+
+# Build the dataplane.
+WORKDIR /build/dataplane
+ENV SPDK_DIR=/usr/local
+
+# Copy manifests first for dependency caching.
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY src/ src/
+
+RUN cargo build --release
+
+# Test target — run unit tests (erasure, replica — pure logic, no SPDK runtime).
+# Usage: docker build -f Dockerfile.build --target test .
+FROM rust-builder AS test
+RUN cargo test --release -- --test-threads=1
+
+# ---------------------------------------------------------------------------
+# Stage 3 — Minimal runtime image
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libaio1 libnuma1 liburing2 libfuse3-3 libjson-c5 \
+    libssl3 openssl uuid-runtime \
+    socat python3 \
+    nvme-cli e2fsprogs kmod fdisk parted \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy SPDK shared libraries (if any) and the binary.
+COPY --from=spdk-builder /spdk-install/usr/local/lib /usr/local/lib
+COPY --from=rust-builder /build/dataplane/target/release/novastor-dataplane /usr/local/bin/novastor-dataplane
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY test_backends.sh /usr/local/bin/test_backends.sh
+COPY test_nvmeof.sh /usr/local/bin/test_nvmeof.sh
+COPY test_real_nvme.sh /usr/local/bin/test_real_nvme.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/test_backends.sh /usr/local/bin/test_nvmeof.sh /usr/local/bin/test_real_nvme.sh && ldconfig
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
