@@ -7,7 +7,10 @@
 
 use crate::backend::chunk_store::{ChunkStore, ChunkStoreStats, CHUNK_SIZE};
 use crate::error::{DataPlaneError, Result};
+use crate::spdk::reactor_dispatch;
+use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 /// Bitmap allocator for 4MB-aligned slots on a bdev.
 ///
@@ -248,6 +251,151 @@ impl IndexEntry {
         let chunk_id = hex::encode(&buf[0..32]);
         let slot = u64::from_le_bytes(buf[32..40].try_into().unwrap());
         Self { chunk_id, slot }
+    }
+}
+
+/// Round up `val` to the next multiple of `align`.
+fn align_up(val: u64, align: u64) -> u64 {
+    if align == 0 {
+        return val;
+    }
+    (val + align - 1) / align * align
+}
+
+/// A chunk store backed by an SPDK bdev (raw device or lvol).
+///
+/// Uses a bitmap allocator for 4MB slot management. The bdev descriptor
+/// is opened per-I/O currently (matching existing reactor_dispatch behavior).
+/// A future optimization will hold a persistent descriptor.
+///
+/// The index (chunk_id → slot) and bitmap are kept in memory. On-disk
+/// persistence via the Superblock is implemented separately.
+pub struct BdevChunkStore {
+    bdev_name: String,
+    capacity_bytes: u64,
+    allocator: std::sync::Mutex<BitmapAllocator>,
+    /// chunk_id → slot number.
+    index: RwLock<HashMap<String, u64>>,
+    /// Byte offset where the data region starts (after superblock + bitmap + index).
+    data_region_offset: u64,
+}
+
+impl BdevChunkStore {
+    /// Create a new BdevChunkStore on the named bdev.
+    ///
+    /// `capacity_bytes` is the total bdev size. The first portion is reserved
+    /// for A/B superblock copies, bitmap, and index. The rest is the data region.
+    pub fn new(bdev_name: &str, capacity_bytes: u64) -> Self {
+        // Calculate reserved region dynamically based on device size.
+        // A/B double-buffering: TWO copies of (superblock + bitmap + index).
+        //
+        // We need total_slots to size bitmap+index, but total_slots depends on
+        // the reserved region. Solve iteratively: estimate slots from full capacity,
+        // compute reserved, then recalculate slots from remaining space.
+        let estimated_slots = capacity_bytes / CHUNK_SIZE as u64;
+        let bitmap_size = (estimated_slots + 7) / 8;
+        let index_size = estimated_slots * IndexEntry::SIZE as u64;
+        let per_copy = Superblock::SIZE as u64 + bitmap_size + index_size;
+        // Align total reserved (2 copies) up to 4MB boundary for clean data region start.
+        let reserved = align_up(per_copy * 2, CHUNK_SIZE as u64);
+
+        let data_capacity = capacity_bytes.saturating_sub(reserved);
+        let total_slots = data_capacity / CHUNK_SIZE as u64;
+
+        Self {
+            bdev_name: bdev_name.to_string(),
+            capacity_bytes,
+            allocator: std::sync::Mutex::new(BitmapAllocator::new(total_slots)),
+            index: RwLock::new(HashMap::new()),
+            data_region_offset: reserved,
+        }
+    }
+
+    /// Convert a slot number to a byte offset on the bdev.
+    fn slot_to_offset(&self, slot: u64) -> u64 {
+        self.data_region_offset + slot * CHUNK_SIZE as u64
+    }
+
+    /// Get the bdev name.
+    pub fn bdev_name(&self) -> &str {
+        &self.bdev_name
+    }
+}
+
+#[async_trait]
+impl ChunkStore for BdevChunkStore {
+    async fn put(&self, chunk_id: &str, data: &[u8]) -> Result<()> {
+        // Deduplication: if chunk already exists, skip.
+        if self.index.read().unwrap().contains_key(chunk_id) {
+            return Ok(());
+        }
+
+        // Allocate a slot.
+        let slot = self.allocator.lock().unwrap().allocate().ok_or_else(|| {
+            DataPlaneError::BdevError(format!("bdev {} out of space", self.bdev_name))
+        })?;
+
+        let offset = self.slot_to_offset(slot);
+
+        // Write data to the bdev via async reactor dispatch.
+        if let Err(e) = reactor_dispatch::bdev_write_async(&self.bdev_name, offset, data).await {
+            // Roll back allocation on failure.
+            self.allocator.lock().unwrap().free(slot);
+            return Err(e);
+        }
+
+        // Record in index.
+        self.index
+            .write()
+            .unwrap()
+            .insert(chunk_id.to_string(), slot);
+        Ok(())
+    }
+
+    async fn get(&self, chunk_id: &str) -> Result<Vec<u8>> {
+        let slot = {
+            let index = self.index.read().unwrap();
+            *index.get(chunk_id).ok_or_else(|| {
+                DataPlaneError::BdevError(format!(
+                    "chunk not found: {}",
+                    &chunk_id[..16.min(chunk_id.len())]
+                ))
+            })?
+        };
+
+        let offset = self.slot_to_offset(slot);
+        reactor_dispatch::bdev_read_async(&self.bdev_name, offset, CHUNK_SIZE as u64).await
+    }
+
+    async fn delete(&self, chunk_id: &str) -> Result<()> {
+        let slot = {
+            let mut index = self.index.write().unwrap();
+            index.remove(chunk_id).ok_or_else(|| {
+                DataPlaneError::BdevError(format!(
+                    "chunk not found: {}",
+                    &chunk_id[..16.min(chunk_id.len())]
+                ))
+            })?
+        };
+
+        self.allocator.lock().unwrap().free(slot);
+        Ok(())
+    }
+
+    async fn exists(&self, chunk_id: &str) -> Result<bool> {
+        Ok(self.index.read().unwrap().contains_key(chunk_id))
+    }
+
+    async fn stats(&self) -> Result<ChunkStoreStats> {
+        let alloc = self.allocator.lock().unwrap();
+        let index = self.index.read().unwrap();
+        Ok(ChunkStoreStats {
+            backend_name: self.bdev_name.clone(),
+            total_bytes: self.capacity_bytes,
+            used_bytes: alloc.used_slots() * CHUNK_SIZE as u64,
+            data_bytes: index.len() as u64 * CHUNK_SIZE as u64,
+            chunk_count: index.len() as u64,
+        })
     }
 }
 
