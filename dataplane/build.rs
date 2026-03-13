@@ -2,6 +2,20 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    // Only compile SPDK/uring C code when the spdk-sys feature is enabled.
+    // Without this gate, `cargo test` on a machine without SPDK headers fails.
+    // We still emit an empty bindings stub so that the include!() call in
+    // backend/lvm.rs resolves without SPDK headers present.
+    if env::var("CARGO_FEATURE_SPDK_SYS").is_err() {
+        let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+        std::fs::write(
+            out_path.join("spdk_bindings.rs"),
+            b"// stub: spdk-sys feature not enabled\n",
+        )
+        .expect("write stub bindings");
+        return;
+    }
+
     let spdk_dir = env::var("SPDK_DIR").unwrap_or_else(|_| "/usr/local".to_string());
     println!("cargo:rustc-link-search=native={}/lib", spdk_dir);
     println!("cargo:rerun-if-env-changed=SPDK_DIR");

@@ -87,12 +87,12 @@ ENV SPDK_DIR=/usr/local
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
 
-RUN cargo build --release
+RUN cargo build --release --features spdk-sys
 
 # Test target — run unit tests (erasure, replica — pure logic, no SPDK runtime).
 # Usage: docker build -f Dockerfile.build --target test .
 FROM rust-builder AS test
-RUN cargo test --release -- --test-threads=1
+RUN cargo test --release --features spdk-sys -- --test-threads=1
 
 # ---------------------------------------------------------------------------
 # Stage 3 — Minimal runtime image
