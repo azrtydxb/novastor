@@ -3,6 +3,7 @@
 
 use crate::config::{ReadPolicy, ReplicaBdevConfig, ReplicaTarget};
 use crate::error::{DataPlaneError, Result};
+use crate::spdk::reactor_dispatch;
 use log::{debug, info, warn};
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
@@ -64,17 +65,20 @@ impl Replica {
     }
 
     pub fn mark_degraded(&self) {
-        self.state.store(ReplicaState::Degraded as u8, Ordering::Release);
+        self.state
+            .store(ReplicaState::Degraded as u8, Ordering::Release);
         warn!("replica {} marked degraded", self.target.address);
     }
 
     pub fn mark_offline(&self) {
-        self.state.store(ReplicaState::Offline as u8, Ordering::Release);
+        self.state
+            .store(ReplicaState::Offline as u8, Ordering::Release);
         warn!("replica {} marked offline", self.target.address);
     }
 
     pub fn mark_healthy(&self) {
-        self.state.store(ReplicaState::Healthy as u8, Ordering::Release);
+        self.state
+            .store(ReplicaState::Healthy as u8, Ordering::Release);
         info!("replica {} marked healthy", self.target.address);
     }
 
@@ -87,7 +91,9 @@ impl Replica {
             // EMA: new = alpha * sample + (1 - alpha) * old
             (EMA_ALPHA_NUM * latency_us + (EMA_ALPHA_DEN - EMA_ALPHA_NUM) * old) / EMA_ALPHA_DEN
         };
-        self.stats.avg_read_latency_us.store(new_avg, Ordering::Relaxed);
+        self.stats
+            .avg_read_latency_us
+            .store(new_avg, Ordering::Relaxed);
     }
 
     /// Returns a snapshot of this replica's status information.
@@ -114,6 +120,9 @@ pub struct ReplicaBdev {
     read_index: AtomicU32,
     pub bdev_name: String,
     created_at: Instant,
+    /// When true, submit_write/submit_read perform real SPDK bdev I/O.
+    /// When false (default), only stats are updated (for unit tests).
+    use_spdk_io: bool,
     /// Tracks cumulative write quorum latency in microseconds for averaging.
     write_quorum_latency_sum_us: AtomicU64,
     write_quorum_count: AtomicU64,
@@ -127,7 +136,10 @@ impl ReplicaBdev {
             .iter()
             .enumerate()
             .map(|(i, target)| {
-                let initiator_bdev = format!("nvme_{}_{}_n1", config.volume_id, i);
+                let initiator_bdev = target
+                    .bdev_name
+                    .clone()
+                    .unwrap_or_else(|| format!("nvme_{}_{}_n1", config.volume_id, i));
                 Arc::new(Replica::new(target.clone(), initiator_bdev))
             })
             .collect();
@@ -140,20 +152,32 @@ impl ReplicaBdev {
             read_index: AtomicU32::new(0),
             bdev_name,
             created_at: Instant::now(),
+            use_spdk_io: false,
             write_quorum_latency_sum_us: AtomicU64::new(0),
             write_quorum_count: AtomicU64::new(0),
         }
     }
 
+    /// Enable real SPDK bdev I/O for submit_write/submit_read.
+    pub fn enable_spdk_io(&mut self) {
+        self.use_spdk_io = true;
+    }
+
     pub fn healthy_replicas(&self) -> Vec<Arc<Replica>> {
         let replicas = self.replicas.read().unwrap();
-        replicas.iter().filter(|r| r.is_healthy()).cloned().collect()
+        replicas
+            .iter()
+            .filter(|r| r.is_healthy())
+            .cloned()
+            .collect()
     }
 
     pub fn select_read_replica(&self) -> Result<Arc<Replica>> {
         let healthy = self.healthy_replicas();
         if healthy.is_empty() {
-            return Err(DataPlaneError::ReplicaError("no healthy replicas".to_string()));
+            return Err(DataPlaneError::ReplicaError(
+                "no healthy replicas".to_string(),
+            ));
         }
         match &self.read_policy {
             ReadPolicy::RoundRobin => {
@@ -167,9 +191,7 @@ impl ReplicaBdev {
                 let idx = self.read_index.fetch_add(1, Ordering::Relaxed);
                 Ok(healthy[idx as usize % healthy.len()].clone())
             }
-            ReadPolicy::LatencyAware => {
-                self.select_latency_aware(&healthy)
-            }
+            ReadPolicy::LatencyAware => self.select_latency_aware(&healthy),
         }
     }
 
@@ -229,7 +251,7 @@ impl ReplicaBdev {
         Ok(healthy[healthy.len() - 1].clone())
     }
 
-    pub fn submit_write(&self, _offset: u64, data: &[u8]) -> Result<()> {
+    pub fn submit_write(&self, offset: u64, data: &[u8]) -> Result<()> {
         let healthy = self.healthy_replicas();
         let healthy_count = healthy.len() as u32;
         if healthy_count < self.write_quorum {
@@ -242,32 +264,100 @@ impl ReplicaBdev {
         let start = Instant::now();
         let data_len = data.len() as u64;
 
-        // Production SPDK: spdk_bdev_write() to each replica bdev descriptor,
-        // track completions, ACK on quorum.
-        debug!("write submitted to {} replicas (quorum={})", healthy_count, self.write_quorum);
-        for replica in &healthy {
-            replica.stats.writes_completed.fetch_add(1, Ordering::Relaxed);
-            replica.stats.write_bytes.fetch_add(data_len, Ordering::Relaxed);
+        debug!(
+            "write submitted to {} replicas (quorum={})",
+            healthy_count, self.write_quorum
+        );
+
+        if self.use_spdk_io {
+            // Write to each healthy replica bdev, track successes for quorum.
+            let mut successes = 0u32;
+            let mut last_err = None;
+            for replica in &healthy {
+                match reactor_dispatch::bdev_write(&replica.bdev_name, offset, data) {
+                    Ok(()) => {
+                        successes += 1;
+                        replica
+                            .stats
+                            .writes_completed
+                            .fetch_add(1, Ordering::Relaxed);
+                        replica
+                            .stats
+                            .write_bytes
+                            .fetch_add(data_len, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        warn!("write to replica {} failed: {}", replica.bdev_name, e);
+                        replica.stats.write_errors.fetch_add(1, Ordering::Relaxed);
+                        replica.mark_degraded();
+                        last_err = Some(e);
+                    }
+                }
+            }
+            if successes < self.write_quorum {
+                return Err(last_err.unwrap_or_else(|| {
+                    DataPlaneError::ReplicaError("write quorum not met".into())
+                }));
+            }
+        } else {
+            // Stats-only mode (unit tests without SPDK reactor).
+            for replica in &healthy {
+                replica
+                    .stats
+                    .writes_completed
+                    .fetch_add(1, Ordering::Relaxed);
+                replica
+                    .stats
+                    .write_bytes
+                    .fetch_add(data_len, Ordering::Relaxed);
+            }
         }
 
         let elapsed_us = start.elapsed().as_micros() as u64;
-        self.write_quorum_latency_sum_us.fetch_add(elapsed_us, Ordering::Relaxed);
+        self.write_quorum_latency_sum_us
+            .fetch_add(elapsed_us, Ordering::Relaxed);
         self.write_quorum_count.fetch_add(1, Ordering::Relaxed);
 
         Ok(())
     }
 
-    pub fn submit_read(&self, _offset: u64, length: u64) -> Result<Vec<u8>> {
+    pub fn submit_read(&self, offset: u64, length: u64) -> Result<Vec<u8>> {
         let start = Instant::now();
         let replica = self.select_read_replica()?;
-        // Production SPDK: spdk_bdev_read() on selected replica bdev descriptor.
         debug!("read submitted to replica {}", replica.target.address);
-        replica.stats.reads_completed.fetch_add(1, Ordering::Relaxed);
-        replica.stats.read_bytes.fetch_add(length, Ordering::Relaxed);
 
-        let result = vec![0u8; length as usize];
+        let result = if self.use_spdk_io {
+            match reactor_dispatch::bdev_read(&replica.bdev_name, offset, length) {
+                Ok(data) => {
+                    replica
+                        .stats
+                        .reads_completed
+                        .fetch_add(1, Ordering::Relaxed);
+                    replica
+                        .stats
+                        .read_bytes
+                        .fetch_add(length, Ordering::Relaxed);
+                    data
+                }
+                Err(e) => {
+                    replica.stats.read_errors.fetch_add(1, Ordering::Relaxed);
+                    replica.mark_degraded();
+                    return Err(e);
+                }
+            }
+        } else {
+            // Stats-only mode (unit tests without SPDK reactor).
+            replica
+                .stats
+                .reads_completed
+                .fetch_add(1, Ordering::Relaxed);
+            replica
+                .stats
+                .read_bytes
+                .fetch_add(length, Ordering::Relaxed);
+            vec![0u8; length as usize]
+        };
 
-        // Record read latency for this replica
         let elapsed_us = start.elapsed().as_micros() as u64;
         replica.record_read_latency(elapsed_us);
 
@@ -283,15 +373,24 @@ impl ReplicaBdev {
     pub fn add_replica(&self, target: ReplicaTarget) -> Result<()> {
         let mut replicas = self.replicas.write().unwrap();
         // Check for duplicate address
-        if replicas.iter().any(|r| r.target.address == target.address && r.target.port == target.port) {
+        if replicas
+            .iter()
+            .any(|r| r.target.address == target.address && r.target.port == target.port)
+        {
             return Err(DataPlaneError::ReplicaError(format!(
                 "replica {}:{} already exists",
                 target.address, target.port,
             )));
         }
         let idx = replicas.len();
-        let bdev_name = format!("nvme_{}_{}_n1", self.volume_id, idx);
-        info!("adding replica {}:{} as {}", target.address, target.port, bdev_name);
+        let bdev_name = target
+            .bdev_name
+            .clone()
+            .unwrap_or_else(|| format!("nvme_{}_{}_n1", self.volume_id, idx));
+        info!(
+            "adding replica {}:{} as {}",
+            target.address, target.port, bdev_name
+        );
         replicas.push(Arc::new(Replica::new(target, bdev_name)));
         Ok(())
     }
@@ -319,11 +418,15 @@ impl ReplicaBdev {
     /// Returns full status information for this replica bdev.
     pub fn full_status(&self) -> ReplicaBdevStatus {
         let replicas = self.replicas.read().unwrap();
-        let replica_infos: Vec<ReplicaStatusInfo> = replicas.iter().map(|r| r.status_info()).collect();
+        let replica_infos: Vec<ReplicaStatusInfo> =
+            replicas.iter().map(|r| r.status_info()).collect();
         let healthy_count = replicas.iter().filter(|r| r.is_healthy()).count() as u32;
 
         let total_read_iops: u64 = replica_infos.iter().map(|r| r.reads_completed as u64).sum();
-        let total_write_iops: u64 = replica_infos.iter().map(|r| r.writes_completed as u64).sum();
+        let total_write_iops: u64 = replica_infos
+            .iter()
+            .map(|r| r.writes_completed as u64)
+            .sum();
 
         let wq_count = self.write_quorum_count.load(Ordering::Relaxed);
         let write_quorum_latency_us = if wq_count > 0 {
@@ -346,15 +449,16 @@ impl ReplicaBdev {
     /// Returns I/O statistics for this replica bdev.
     pub fn io_stats(&self) -> IoStats {
         let replicas = self.replicas.read().unwrap();
-        let replica_stats: Vec<ReplicaIoStats> = replicas.iter().map(|r| {
-            ReplicaIoStats {
+        let replica_stats: Vec<ReplicaIoStats> = replicas
+            .iter()
+            .map(|r| ReplicaIoStats {
                 address: r.target.address.clone(),
                 port: r.target.port,
                 reads_completed: r.stats.reads_completed.load(Ordering::Relaxed) as u64,
                 read_bytes: r.stats.read_bytes.load(Ordering::Relaxed),
                 avg_read_latency_us: r.stats.avg_read_latency_us.load(Ordering::Relaxed),
-            }
-        }).collect();
+            })
+            .collect();
 
         let total_read_iops: u64 = replica_stats.iter().map(|r| r.reads_completed).sum();
         let total_write_iops: u64 = replicas
@@ -434,11 +538,13 @@ mod tests {
                 address: "10.0.0.1".into(),
                 port: 4420,
                 nqn: "nqn-1".into(),
+                bdev_name: None,
             },
             ReplicaTarget {
                 address: "10.0.0.2".into(),
                 port: 4420,
                 nqn: "nqn-2".into(),
+                bdev_name: None,
             },
         ]
     }
@@ -472,6 +578,7 @@ mod tests {
             address: "10.0.0.3".into(),
             port: 4420,
             nqn: "nqn-3".into(),
+            bdev_name: None,
         };
         bdev.add_replica(new_target).unwrap();
         assert_eq!(bdev.replicas.read().unwrap().len(), 3);
@@ -484,6 +591,7 @@ mod tests {
             address: "10.0.0.1".into(),
             port: 4420,
             nqn: "nqn-dup".into(),
+            bdev_name: None,
         };
         let result = bdev.add_replica(dup_target);
         assert!(result.is_err());
@@ -504,6 +612,7 @@ mod tests {
             address: "10.0.0.1".into(),
             port: 4420,
             nqn: "nqn-1".into(),
+            bdev_name: None,
         }];
         let bdev = make_bdev(single_target);
         let result = bdev.remove_replica("10.0.0.1");
@@ -543,6 +652,7 @@ mod tests {
             address: "10.0.0.1".into(),
             port: 4420,
             nqn: "nqn-1".into(),
+            bdev_name: None,
         };
         let replica = Replica::new(target, "test-bdev".into());
         replica.stats.reads_completed.store(5, Ordering::Relaxed);
@@ -562,20 +672,30 @@ mod tests {
             address: "10.0.0.1".into(),
             port: 4420,
             nqn: "nqn-1".into(),
+            bdev_name: None,
         };
         let replica = Replica::new(target, "test-bdev".into());
 
         // First sample — becomes the initial value
         replica.record_read_latency(1000);
-        assert_eq!(replica.stats.avg_read_latency_us.load(Ordering::Relaxed), 1000);
+        assert_eq!(
+            replica.stats.avg_read_latency_us.load(Ordering::Relaxed),
+            1000
+        );
 
         // Second sample — EMA: 0.1 * 2000 + 0.9 * 1000 = 200 + 900 = 1100
         replica.record_read_latency(2000);
-        assert_eq!(replica.stats.avg_read_latency_us.load(Ordering::Relaxed), 1100);
+        assert_eq!(
+            replica.stats.avg_read_latency_us.load(Ordering::Relaxed),
+            1100
+        );
 
         // Third sample — EMA: 0.1 * 500 + 0.9 * 1100 = 50 + 990 = 1040
         replica.record_read_latency(500);
-        assert_eq!(replica.stats.avg_read_latency_us.load(Ordering::Relaxed), 1040);
+        assert_eq!(
+            replica.stats.avg_read_latency_us.load(Ordering::Relaxed),
+            1040
+        );
     }
 
     #[test]
@@ -606,8 +726,14 @@ mod tests {
         // Total weight = 5, so replica 0 gets 4/5 = 80%, replica 1 gets 1/5 = 20%
         {
             let replicas = bdev.replicas.read().unwrap();
-            replicas[0].stats.avg_read_latency_us.store(100, Ordering::Relaxed);
-            replicas[1].stats.avg_read_latency_us.store(400, Ordering::Relaxed);
+            replicas[0]
+                .stats
+                .avg_read_latency_us
+                .store(100, Ordering::Relaxed);
+            replicas[1]
+                .stats
+                .avg_read_latency_us
+                .store(400, Ordering::Relaxed);
         }
 
         let mut counts = [0u32; 2];
@@ -632,8 +758,14 @@ mod tests {
         // Set equal latencies
         {
             let replicas = bdev.replicas.read().unwrap();
-            replicas[0].stats.avg_read_latency_us.store(200, Ordering::Relaxed);
-            replicas[1].stats.avg_read_latency_us.store(200, Ordering::Relaxed);
+            replicas[0]
+                .stats
+                .avg_read_latency_us
+                .store(200, Ordering::Relaxed);
+            replicas[1]
+                .stats
+                .avg_read_latency_us
+                .store(200, Ordering::Relaxed);
         }
 
         let mut counts = [0u32; 2];

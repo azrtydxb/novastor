@@ -20,7 +20,9 @@ pub struct LocalBdevConfig {
     pub block_size: u32,
 }
 
-fn default_block_size() -> u32 { 512 }
+fn default_block_size() -> u32 {
+    512
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobstoreConfig {
@@ -29,7 +31,9 @@ pub struct BlobstoreConfig {
     pub cluster_size: u32,
 }
 
-fn default_cluster_size() -> u32 { 1024 * 1024 }
+fn default_cluster_size() -> u32 {
+    1024 * 1024
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LvolConfig {
@@ -40,7 +44,9 @@ pub struct LvolConfig {
     pub thin_provision: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NvmfTargetConfig {
@@ -54,7 +60,9 @@ pub struct NvmfTargetConfig {
     pub ana_state: String,
 }
 
-fn default_ana_state() -> String { "optimized".to_string() }
+fn default_ana_state() -> String {
+    "optimized".to_string()
+}
 
 impl NvmfTargetConfig {
     pub fn nqn(&self) -> String {
@@ -84,6 +92,10 @@ pub struct ReplicaTarget {
     pub address: String,
     pub port: u16,
     pub nqn: String,
+    /// Optional explicit bdev name for this target (used for local malloc bdev testing).
+    /// If absent, the bdev name is auto-generated from the volume ID and index.
+    #[serde(default)]
+    pub bdev_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -91,7 +103,9 @@ pub struct ReplicaTarget {
 pub enum ReadPolicy {
     #[default]
     RoundRobin,
-    LocalFirst { local_address: String },
+    LocalFirst {
+        local_address: String,
+    },
     LatencyAware,
 }
 

@@ -4,6 +4,7 @@
 //! targets with custom bdev modules for replication and erasure coding.
 //! Controlled by the Go agent via JSON-RPC over a Unix domain socket.
 
+mod backend;
 mod bdev;
 mod config;
 mod error;
@@ -47,10 +48,8 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or(&args.log_level),
-    )
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&args.log_level))
+        .init();
 
     info!(
         "novastor-dataplane starting (reactor_mask={}, mem={}MB)",

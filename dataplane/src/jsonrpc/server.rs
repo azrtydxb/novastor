@@ -57,7 +57,8 @@ impl Response {
 }
 
 /// Method handler function signature.
-pub type MethodHandler = Arc<dyn Fn(serde_json::Value) -> Result<serde_json::Value, DataPlaneError> + Send + Sync>;
+pub type MethodHandler =
+    Arc<dyn Fn(serde_json::Value) -> Result<serde_json::Value, DataPlaneError> + Send + Sync>;
 
 /// Router dispatches JSON-RPC methods to their handlers.
 pub struct Router {
@@ -102,14 +103,12 @@ pub fn start_server(
     // Remove stale socket if it exists.
     let path = Path::new(socket_path);
     if path.exists() {
-        std::fs::remove_file(path).map_err(|e| {
-            DataPlaneError::JsonRpcError(format!("removing stale socket: {e}"))
-        })?;
+        std::fs::remove_file(path)
+            .map_err(|e| DataPlaneError::JsonRpcError(format!("removing stale socket: {e}")))?;
     }
 
-    let listener = UnixListener::bind(path).map_err(|e| {
-        DataPlaneError::JsonRpcError(format!("binding socket {socket_path}: {e}"))
-    })?;
+    let listener = UnixListener::bind(path)
+        .map_err(|e| DataPlaneError::JsonRpcError(format!("binding socket {socket_path}: {e}")))?;
 
     let handle = thread::spawn(move || {
         for stream in listener.incoming() {
@@ -143,11 +142,7 @@ fn handle_connection(stream: std::os::unix::net::UnixStream, router: &Router) {
 
         let response = match serde_json::from_str::<Request>(&line) {
             Ok(req) => router.dispatch(&req),
-            Err(e) => Response::error(
-                serde_json::Value::Null,
-                -32700,
-                format!("parse error: {e}"),
-            ),
+            Err(e) => Response::error(serde_json::Value::Null, -32700, format!("parse error: {e}")),
         };
 
         let mut out = serde_json::to_vec(&response).unwrap_or_default();
