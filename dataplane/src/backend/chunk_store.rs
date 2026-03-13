@@ -118,8 +118,10 @@ mod tests {
         let bytes = header.to_bytes();
         let parsed = ChunkHeader::from_bytes(&bytes).unwrap();
         assert_eq!(parsed.magic, *b"NVAC");
-        assert_eq!(parsed.checksum, 0xDEADBEEF);
-        assert_eq!(parsed.data_len, 4 * 1024 * 1024);
+        let checksum = parsed.checksum;
+        assert_eq!(checksum, 0xDEADBEEF);
+        let data_len = parsed.data_len;
+        assert_eq!(data_len, 4 * 1024 * 1024);
     }
 
     #[test]
