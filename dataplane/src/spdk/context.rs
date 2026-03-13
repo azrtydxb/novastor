@@ -127,3 +127,56 @@ where
 
     completion.wait()
 }
+
+/// An async-compatible one-shot completion channel using tokio::sync::oneshot.
+///
+/// Unlike [`Completion`] (which blocks OS threads via Condvar), this can be
+/// `.await`ed without blocking tokio worker threads.
+pub struct AsyncCompletion<T> {
+    rx: tokio::sync::oneshot::Receiver<T>,
+}
+
+/// The sender half of an async completion, passed to SPDK callbacks.
+pub struct AsyncCompletionSender<T> {
+    tx: Option<tokio::sync::oneshot::Sender<T>>,
+}
+
+impl<T> AsyncCompletion<T> {
+    /// Create a new async completion pair (receiver, sender).
+    pub fn new() -> (Self, AsyncCompletionSender<T>) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        (
+            AsyncCompletion { rx },
+            AsyncCompletionSender { tx: Some(tx) },
+        )
+    }
+
+    /// Await the completion result.
+    pub async fn wait(self) -> T {
+        self.rx
+            .await
+            .expect("AsyncCompletion sender dropped without sending")
+    }
+}
+
+impl<T> AsyncCompletionSender<T> {
+    /// Signal the completion with a value.
+    pub fn complete(&mut self, value: T) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(value);
+        }
+    }
+
+    /// Convert to a raw pointer for passing through SPDK's `void *cb_arg`.
+    pub fn into_ptr(self) -> *mut std::os::raw::c_void {
+        Box::into_raw(Box::new(self)) as *mut std::os::raw::c_void
+    }
+
+    /// Recover from a raw pointer.
+    ///
+    /// # Safety
+    /// The pointer must have been created by [`into_ptr`] and not yet consumed.
+    pub unsafe fn from_ptr(ptr: *mut std::os::raw::c_void) -> Self {
+        *Box::from_raw(ptr as *mut Self)
+    }
+}
