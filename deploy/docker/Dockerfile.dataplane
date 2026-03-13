@@ -50,7 +50,7 @@ FROM rust:1.93-bookworm AS rust-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libaio-dev libssl-dev libnuma-dev uuid-dev \
     clang libclang-dev liburing-dev libfuse3-dev libjson-c-dev \
-    libatomic1 gcc \
+    libatomic1 gcc protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build

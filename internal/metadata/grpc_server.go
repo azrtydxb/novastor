@@ -586,12 +586,18 @@ func (s *GRPCServer) JoinCluster(_ context.Context, req *pb.JoinClusterRequest) 
 		return nil, status.Error(codes.InvalidArgument, "node_id and raft_address required")
 	}
 
-	// Check if the node is already a cluster member.
+	// Check if the node is already a cluster member. If it exists at the
+	// same address, return immediately. If the address changed (pod restart
+	// with a new IP), fall through to AddVoter to update it.
 	configFuture := s.store.raft.GetConfiguration()
 	if err := configFuture.Error(); err == nil {
 		for _, srv := range configFuture.Configuration().Servers {
 			if string(srv.ID) == req.NodeId {
-				return &pb.JoinClusterResponse{Success: true}, nil
+				if string(srv.Address) == req.RaftAddress {
+					return &pb.JoinClusterResponse{Success: true}, nil
+				}
+				// Address changed — fall through to AddVoter which updates it.
+				break
 			}
 		}
 	}

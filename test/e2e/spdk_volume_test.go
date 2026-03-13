@@ -18,7 +18,6 @@ import (
 const (
 	spdkSocketPath = "/var/tmp/novastor-spdk.sock"
 	testVolumeID   = "e2e-test-vol-001"
-	testNQN        = "novastor-" + testVolumeID
 	testListenAddr = "127.0.0.1"
 	testPort       = uint16(4420)
 )
@@ -58,15 +57,15 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 
 	// Step 2: Create an lvol store on the malloc bdev.
 	t.Log("creating lvol store")
-	lvsUUID, err := client.CreateLvolStore("e2e-base", "e2e-lvs")
+	lvsName, err := client.CreateLvolStore("e2e-base")
 	if err != nil {
 		t.Fatalf("CreateLvolStore failed: %v", err)
 	}
-	t.Logf("lvol store UUID: %s", lvsUUID)
+	t.Logf("lvol store name: %s", lvsName)
 
 	// Step 3: Create a logical volume.
 	t.Log("creating logical volume")
-	lvolName, err := client.CreateLvol("e2e-lvs", testVolumeID, 128*1024*1024)
+	lvolName, err := client.CreateLvol(lvsName, testVolumeID, 128*1024*1024)
 	if err != nil {
 		t.Fatalf("CreateLvol failed: %v", err)
 	}
@@ -74,17 +73,19 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 
 	// Step 4: Create an NVMe-oF target exposing the lvol.
 	t.Log("creating NVMe-oF target")
-	if err := client.CreateNvmfTarget(testNQN, testListenAddr, testPort, lvolName); err != nil {
+	nqn, err := client.CreateNvmfTarget(testVolumeID, testListenAddr, testPort, lvolName)
+	if err != nil {
 		t.Fatalf("CreateNvmfTarget failed: %v", err)
 	}
+	t.Logf("target NQN: %s", nqn)
 
 	// Step 5: Verify target is listening (try to connect with nvme-cli).
 	t.Log("verifying NVMe-oF target reachability")
-	verifyTarget(t, ctx, testListenAddr, testPort, testNQN)
+	verifyTarget(t, ctx, testListenAddr, testPort, nqn)
 
 	// Step 6: Clean up - delete target, then bdev.
 	t.Log("cleaning up NVMe-oF target")
-	if err := client.DeleteNvmfTarget(testNQN); err != nil {
+	if err := client.DeleteNvmfTarget(testVolumeID); err != nil {
 		t.Errorf("DeleteNvmfTarget failed: %v", err)
 	}
 

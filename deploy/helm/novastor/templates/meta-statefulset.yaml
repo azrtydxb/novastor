@@ -63,6 +63,7 @@ spec:
             - --node-id=$(POD_NAME)
             - --data-dir=/data
             - --raft-addr=0.0.0.0:7000
+            - --raft-advertise=$(POD_NAME).{{ include "novastor.fullname" . }}-meta-headless.{{ .Release.Namespace }}.svc.cluster.local:7000
             - --grpc-addr=0.0.0.0:7001
             - --metrics-addr=0.0.0.0:7002
             - --bootstrap-expect={{ .Values.meta.replicas }}

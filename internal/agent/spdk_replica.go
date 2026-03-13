@@ -40,7 +40,7 @@ func SetupReplicaBdev(ctx context.Context, spdkClient *spdk.Client, metaClient *
 		}
 		target := spdk.ReplicaTarget{
 			Addr:    nodeAddr,
-			Port:    4420,
+			Port:    4430,
 			NQN:     nqn,
 			IsLocal: isLocal,
 		}

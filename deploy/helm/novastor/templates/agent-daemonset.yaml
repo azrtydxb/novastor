@@ -32,17 +32,6 @@ spec:
       hostPID: true
       dnsPolicy: ClusterFirstWithHostNet
       initContainers:
-        - name: load-nvme-modules
-          image: busybox:1.36
-          command: ["sh", "-c", "modprobe nvmet || true; modprobe nvmet-tcp || true"]
-          securityContext:
-            privileged: true
-          volumeMounts:
-            - name: sys
-              mountPath: /sys
-            - name: lib-modules
-              mountPath: /lib/modules
-              readOnly: true
         {{- if include "novastor.tls.enabled" . }}
         - name: wait-for-certs
           image: busybox:1.36
@@ -70,12 +59,8 @@ spec:
             - --host-ip=$(HOST_IP)
             - --pod-ip=$(POD_IP)
             - --heartbeat-interval={{ .Values.agent.heartbeatInterval }}
-            {{- if .Values.dataplane.enabled }}
-            - --dataplane-required=true
             - --spdk-socket=/var/tmp/novastor-spdk.sock
-            {{- else }}
-            - --dataplane-required=false
-            {{- end }}
+            - --spdk-base-bdev={{ .Values.agent.spdkBaseBdev | default "NVMe0n1" }}
             {{- if include "novastor.tls.enabled" . }}
             - --tls-ca={{ include "novastor.tls.caPath" . }}
             - --tls-cert={{ include "novastor.tls.serverCertPath" . }}
@@ -92,12 +77,6 @@ spec:
               protocol: TCP
             - name: metrics
               containerPort: 9101
-              protocol: TCP
-            - name: nvmeof
-              containerPort: 4420
-              # hostPort 4420 is required to be free on each node; if another
-              # process is using this port on the host, the agent pod will fail to start.
-              hostPort: 4420
               protocol: TCP
           env:
             - name: NODE_NAME
@@ -117,14 +96,8 @@ spec:
               mountPath: /dev
             - name: sys
               mountPath: /sys
-            - name: chunks
-              mountPath: /var/lib/novastor/chunks
-            - name: volumes
-              mountPath: /var/lib/novastor/volumes
-            {{- if .Values.dataplane.enabled }}
             - name: spdk-socket
               mountPath: /var/tmp
-            {{- end }}
             {{- if include "novastor.tls.enabled" . }}
             - name: tls-certs
               mountPath: {{ include "novastor.tls.mountPath" . }}
@@ -149,24 +122,10 @@ spec:
         - name: sys
           hostPath:
             path: /sys
-        - name: chunks
-          hostPath:
-            path: /var/lib/novastor/chunks
-            type: DirectoryOrCreate
-        - name: volumes
-          hostPath:
-            path: /var/lib/novastor/volumes
-            type: DirectoryOrCreate
-        - name: lib-modules
-          hostPath:
-            path: /lib/modules
-            type: Directory
-        {{- if .Values.dataplane.enabled }}
         - name: spdk-socket
           hostPath:
             path: /var/tmp
             type: DirectoryOrCreate
-        {{- end }}
         {{- if include "novastor.tls.enabled" . }}
         - name: tls-certs
           secret:

@@ -79,6 +79,10 @@ type RaftConfig struct {
 	DataDir string
 	// RaftAddr is the TCP address this node listens on for Raft consensus traffic (e.g. ":7000").
 	RaftAddr string
+	// RaftAdvertise is the address advertised to other Raft peers. When set,
+	// this overrides the automatic IP detection. Use a stable DNS name (e.g.
+	// the StatefulSet pod FQDN) to survive pod restarts that change pod IPs.
+	RaftAdvertise string
 	// JoinAddrs is a comma-separated list of existing Raft peer addresses to join.
 	// When empty, the node bootstraps as a single-node cluster.
 	JoinAddrs string
@@ -113,9 +117,16 @@ func NewRaftStore(cfg RaftConfig) (*RaftStore, error) {
 	}
 
 	// Raft requires an advertisable address; 0.0.0.0 is not valid.
-	// When bound to all interfaces, find a non-loopback IP from network interfaces.
+	// When RaftAdvertise is set (e.g. a stable DNS name from a StatefulSet),
+	// use it directly. Otherwise fall back to finding a non-loopback IP.
 	advertise := addr
-	if addr.IP.IsUnspecified() {
+	if cfg.RaftAdvertise != "" {
+		advAddr, advErr := net.ResolveTCPAddr("tcp", cfg.RaftAdvertise)
+		if advErr != nil {
+			return nil, fmt.Errorf("resolving advertise address %q: %w", cfg.RaftAdvertise, advErr)
+		}
+		advertise = advAddr
+	} else if addr.IP.IsUnspecified() {
 		if ifaces, ifErr := net.InterfaceAddrs(); ifErr == nil {
 			for _, a := range ifaces {
 				if ipNet, ok := a.(*net.IPNet); ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {

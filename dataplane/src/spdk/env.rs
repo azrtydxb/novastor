@@ -42,7 +42,10 @@ pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
         opts.reactor_mask = reactor_mask.as_ptr();
         opts.mem_size = config.mem_size as i32;
         opts.hugedir = hugedir.as_ptr();
-        opts.rpc_addr = std::ptr::null();
+        // Enable SPDK's built-in JSON-RPC server for diagnostics.
+        // This provides access to SPDK's own nvmf_* methods.
+        let rpc_sock = std::ffi::CString::new("/var/tmp/spdk.sock").unwrap();
+        opts.rpc_addr = rpc_sock.as_ptr();
 
         // Right-size iobuf pools for NVMe-oF TCP transport.
         // NVMe-oF TCP needs ~383 large buffers; 512 gives headroom.

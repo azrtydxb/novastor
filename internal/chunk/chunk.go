@@ -1,3 +1,7 @@
+// Package chunk provides chunk type definitions and utilities for the NovaStor
+// storage system. All actual chunk I/O is handled by the Rust SPDK data-plane;
+// this package provides only Go-side type definitions used by management-plane
+// components (CSI controller, metadata, operator).
 package chunk
 
 import (

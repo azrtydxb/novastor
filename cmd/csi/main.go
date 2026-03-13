@@ -24,7 +24,6 @@ import (
 	novcsi "github.com/azrtydxb/novastor/internal/csi"
 	"github.com/azrtydxb/novastor/internal/metadata"
 	"github.com/azrtydxb/novastor/internal/placement"
-	spdkPkg "github.com/azrtydxb/novastor/internal/spdk"
 	"github.com/azrtydxb/novastor/internal/transport"
 )
 
@@ -189,8 +188,8 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "Path to client certificate for mTLS")
 	tlsKey := flag.String("tls-key", "", "Path to client key for mTLS")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
-	dataPlane := flag.String("data-plane", "legacy", "Data plane mode: 'legacy' (kernel NVMe) or 'spdk' (SPDK user-space)")
-	spdkSocket := flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "Path to the SPDK JSON-RPC Unix socket (only used with --data-plane=spdk)")
+	_ = flag.String("data-plane", "legacy", "Data plane mode (currently unused — kernel NVMe initiator is always used)")
+	_ = flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "SPDK JSON-RPC socket (currently unused)")
 	flag.Parse()
 
 	log.Printf("novastor-csi %s (commit: %s, built: %s)", version, commit, date)
@@ -452,20 +451,13 @@ func main() {
 	if *nodeID != "" {
 		mounter := &novcsi.RealMounter{}
 
-		// Select NVMe-oF initiator based on data-plane mode.
-		var initiator novcsi.NVMeInitiator
-		if *dataPlane == "spdk" {
-			spdkClient := spdkPkg.NewClient(*spdkSocket)
-			if connErr := spdkClient.Connect(); connErr != nil {
-				log.Printf("WARNING: failed to connect to SPDK data-plane at %s: %v (falling back to kernel initiator)", *spdkSocket, connErr)
-				initiator = &novcsi.LinuxInitiator{}
-			} else {
-				initiator = novcsi.NewSPDKInitiator(spdkClient)
-				log.Printf("CSI node using SPDK initiator (socket: %s)", *spdkSocket)
-			}
-		} else {
-			initiator = &novcsi.LinuxInitiator{}
-		}
+		// Use the kernel NVMe-oF initiator (nvme-cli) for connecting to
+		// remote targets. The SPDK user-space initiator (spdk_nvme_connect)
+		// blocks the single reactor thread, preventing it from servicing
+		// its own NVMe-oF target simultaneously. The kernel initiator runs
+		// independently and avoids this deadlock.
+		initiator := &novcsi.LinuxInitiator{}
+		log.Printf("CSI node using kernel NVMe-oF initiator (nvme-cli)")
 
 		// Use topology-aware constructor if zone/region provided.
 		var node *novcsi.NodeService

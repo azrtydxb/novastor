@@ -73,6 +73,6 @@ EXPOSE 9100
 # Prometheus metrics
 EXPOSE 9101
 # NVMe-oF/TCP target port
-EXPOSE 4420
+EXPOSE 4430
 
 ENTRYPOINT ["/usr/local/bin/novastor-agent"]

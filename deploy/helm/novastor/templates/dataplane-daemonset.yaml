@@ -39,6 +39,10 @@ spec:
             - {{ .Values.dataplane.reactorMask | quote }}
             - --mem-size
             - {{ .Values.dataplane.memSize | quote }}
+          ports:
+            - name: nvmeof
+              containerPort: 4430
+              protocol: TCP
           securityContext:
             privileged: true
           volumeMounts:

@@ -17,6 +17,8 @@ spec:
         {{- include "novastor.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: csi-node
     spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       serviceAccountName: {{ include "novastor.serviceAccountName" . }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
@@ -83,6 +85,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.labels['topology.kubernetes.io/region']
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
           securityContext:
             privileged: true
           ports:

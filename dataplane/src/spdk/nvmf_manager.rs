@@ -11,7 +11,7 @@ use crate::error::{DataPlaneError, Result};
 use log::{error, info};
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_void};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use super::context::Completion;
 use super::reactor_dispatch::{self, SendPtr};
@@ -51,6 +51,9 @@ pub struct NvmfManager {
     next_local_port: Mutex<u16>,
     /// Cached NVMe-oF target pointer (set after init_transport).
     tgt_ptr: Mutex<Option<SendPtr>>,
+    /// Ensures TCP transport is initialised exactly once.
+    transport_once: Once,
+    transport_err: Mutex<Option<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +87,25 @@ impl NvmfManager {
             initiators: Mutex::new(HashMap::new()),
             next_local_port: Mutex::new(base_port),
             tgt_ptr: Mutex::new(None),
+            transport_once: Once::new(),
+            transport_err: Mutex::new(None),
         }
+    }
+
+    /// Ensure the NVMe-oF TCP transport is initialised. Safe to call multiple
+    /// times — the actual initialisation runs exactly once.
+    pub fn ensure_transport(&self) -> Result<()> {
+        self.transport_once.call_once(|| {
+            if let Err(e) = self.init_transport() {
+                *self.transport_err.lock().unwrap() = Some(e.to_string());
+            }
+        });
+        if let Some(ref err_msg) = *self.transport_err.lock().unwrap() {
+            return Err(DataPlaneError::NvmfTargetError(format!(
+                "transport init failed: {err_msg}"
+            )));
+        }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -178,6 +199,26 @@ impl NvmfManager {
             )));
         }
 
+        // Create a poll group on the reactor thread. Without a poll group,
+        // SPDK never calls accept() on the listen socket and incoming NVMe-oF
+        // connections time out. The poll group must be created after the
+        // transport is added but before any listeners are registered.
+        let tgt_send_pg = tgt_send;
+        let pg = reactor_dispatch::dispatch_sync(move || -> Result<SendPtr> {
+            unsafe {
+                let tgt = tgt_send_pg.as_ptr() as *mut ffi::spdk_nvmf_tgt;
+                let poll_group = ffi::spdk_nvmf_poll_group_create(tgt);
+                if poll_group.is_null() {
+                    return Err(DataPlaneError::NvmfTargetError(
+                        "spdk_nvmf_poll_group_create failed".to_string(),
+                    ));
+                }
+                info!("NVMe-oF poll group created on reactor thread");
+                Ok(SendPtr::new(poll_group as *mut c_void))
+            }
+        })?;
+        let _ = pg; // Poll group is owned by SPDK target; keep alive.
+
         // Cache the target pointer for later use.
         *self.tgt_ptr.lock().unwrap() = Some(tgt_send);
         info!("NVMe-oF TCP transport initialised successfully");
@@ -218,6 +259,9 @@ impl NvmfManager {
             nqn, config.bdev_name, config.listen_address, config.listen_port
         );
 
+        // Lazily initialise TCP transport on first target creation.
+        self.ensure_transport()?;
+
         let tgt_ptr = self.get_tgt_ptr()?;
 
         let nqn_c = std::ffi::CString::new(nqn.as_str())
@@ -250,8 +294,9 @@ impl NvmfManager {
                         )));
                     }
 
-                    // Allow any host to connect.
+                    // Allow any host to connect from any listener address.
                     ffi::spdk_nvmf_subsystem_set_allow_any_host(subsystem, true);
+                    ffi::spdk_nvmf_subsystem_allow_any_listener(subsystem, true);
 
                     // Enable ANA reporting if ana_group_id is set.
                     if ana_group_id > 0 {
@@ -313,7 +358,9 @@ impl NvmfManager {
         )?;
 
         // Phase 2a: Register transport-level listener via spdk_nvmf_tgt_listen_ext.
-        // This must happen before spdk_nvmf_subsystem_add_listener.
+        // Both transport and subsystem listeners must use the same address (SPDK
+        // requires exact match). The host IP is passed from the Go agent so the
+        // kernel NVMe-oF initiator's connection address matches the subsystem ACL.
         {
             // Copy the trid for the listen call; trid_box is used later in phase 2b.
             let trid_copy: ffi::spdk_nvme_transport_id = unsafe { std::ptr::read(&*trid_box) };
@@ -337,7 +384,9 @@ impl NvmfManager {
                     Ok(rc)
                 }
             })?;
-            if rc != 0 {
+            // rc=-17 (EEXIST) is expected when multiple targets share the same
+            // transport listener address:port. The listener persists across targets.
+            if rc != 0 && rc != -17 {
                 return Err(DataPlaneError::NvmfTargetError(format!(
                     "spdk_nvmf_tgt_listen_ext failed: rc={rc}"
                 )));
@@ -434,7 +483,14 @@ impl NvmfManager {
             unsafe {
                 let dctx = &*(ctx_ptr as *const TargetDeleteCtx);
                 let subsystem = dctx.subsystem.as_ptr() as *mut ffi::spdk_nvmf_subsystem;
-                ffi::spdk_nvmf_subsystem_stop(subsystem, Some(delete_stop_done_cb), ctx_ptr);
+                let rc =
+                    ffi::spdk_nvmf_subsystem_stop(subsystem, Some(delete_stop_done_cb), ctx_ptr);
+                if rc != 0 {
+                    // Synchronous failure — callback will NOT be invoked.
+                    error!("spdk_nvmf_subsystem_stop synchronous failure: rc={}", rc);
+                    let dctx = Box::from_raw(ctx_ptr as *mut TargetDeleteCtx);
+                    dctx.completion.complete(rc);
+                }
             }
         });
 
@@ -624,26 +680,38 @@ impl NvmfManager {
             }
         };
 
-        reactor_dispatch::dispatch_sync(move || unsafe {
-            let tgt = tgt_ptr.as_ptr() as *mut ffi::spdk_nvmf_tgt;
-            let subsystem = ffi::spdk_nvmf_tgt_find_subsystem(tgt, nqn_c.as_ptr() as *const c_char);
-            if !subsystem.is_null() {
-                let state = match ana_state_owned.as_str() {
-                    "optimized" => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_OPTIMIZED_STATE,
-                    "non_optimized" => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_NON_OPTIMIZED_STATE,
-                    "inaccessible" => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_INACCESSIBLE_STATE,
-                    _ => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_OPTIMIZED_STATE,
-                };
-                ffi::spdk_nvmf_subsystem_set_ana_state(
-                    subsystem,
-                    std::ptr::null(),
-                    state,
-                    ana_group_id,
-                    None,
-                    std::ptr::null_mut(),
-                );
-            }
-        });
+        // Look up whether this subsystem was created with ANA enabled.
+        let ana_enabled = sub_info.ana_group_id > 0;
+
+        if ana_enabled {
+            reactor_dispatch::dispatch_sync(move || unsafe {
+                let tgt = tgt_ptr.as_ptr() as *mut ffi::spdk_nvmf_tgt;
+                let subsystem =
+                    ffi::spdk_nvmf_tgt_find_subsystem(tgt, nqn_c.as_ptr() as *const c_char);
+                if !subsystem.is_null() {
+                    let state = match ana_state_owned.as_str() {
+                        "optimized" => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_OPTIMIZED_STATE,
+                        "non_optimized" => {
+                            ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_NON_OPTIMIZED_STATE
+                        }
+                        "inaccessible" => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_INACCESSIBLE_STATE,
+                        _ => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_OPTIMIZED_STATE,
+                    };
+                    ffi::spdk_nvmf_subsystem_set_ana_state(
+                        subsystem,
+                        std::ptr::null(),
+                        state,
+                        ana_group_id,
+                        None,
+                        std::ptr::null_mut(),
+                    );
+                }
+            });
+        } else {
+            error!(
+                "ANA reporting not enabled on subsystem (ana_group_id=0), skipping set_ana_state"
+            );
+        }
 
         sub_info.ana_group_id = ana_group_id;
         sub_info.ana_state = ana_state.to_string();
@@ -679,7 +747,13 @@ unsafe extern "C" fn listener_done_cb(cb_arg: *mut c_void, status: i32) {
 
     // Chain: start the subsystem.
     let subsystem = ctx.subsystem.as_ptr() as *mut ffi::spdk_nvmf_subsystem;
-    ffi::spdk_nvmf_subsystem_start(subsystem, Some(create_start_done_cb), ctx_ptr);
+    let rc = ffi::spdk_nvmf_subsystem_start(subsystem, Some(create_start_done_cb), ctx_ptr);
+    if rc != 0 {
+        // Synchronous failure — callback will NOT be invoked.
+        error!("spdk_nvmf_subsystem_start synchronous failure: rc={}", rc);
+        let ctx = Box::from_raw(ctx_ptr as *mut TargetCreateCtx);
+        ctx.completion.complete(rc);
+    }
 }
 
 /// Callback after `spdk_nvmf_subsystem_start` completes during create_target.
@@ -718,7 +792,13 @@ unsafe extern "C" fn delete_stop_done_cb(
     }
 
     let subsystem = ctx.subsystem.as_ptr() as *mut ffi::spdk_nvmf_subsystem;
-    ffi::spdk_nvmf_subsystem_destroy(subsystem, Some(delete_destroy_done_cb), ctx_ptr);
+    let rc = ffi::spdk_nvmf_subsystem_destroy(subsystem, Some(delete_destroy_done_cb), ctx_ptr);
+    if rc != 0 {
+        // Synchronous failure — callback will NOT be invoked.
+        error!("spdk_nvmf_subsystem_destroy synchronous failure: rc={}", rc);
+        let ctx = Box::from_raw(ctx_ptr as *mut TargetDeleteCtx);
+        ctx.completion.complete(rc);
+    }
 }
 
 /// Callback after `spdk_nvmf_subsystem_destroy` completes during delete_target.

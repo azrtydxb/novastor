@@ -158,12 +158,15 @@ impl BdevManager {
         let comp = completion.clone();
 
         // Use vbdev_lvs_create which registers the lvs-bdev pair needed
-        // by vbdev_lvol_create later.
+        // by vbdev_lvol_create later. The SPDK function returns 0 on success
+        // and fires the callback asynchronously. On synchronous failure (e.g.
+        // base bdev not found), it returns non-zero WITHOUT calling the
+        // callback, so we must complete the channel ourselves.
         reactor_dispatch::send_to_reactor(move || {
             let base_bdev_c = std::ffi::CString::new(base_bdev.as_str()).unwrap();
             let lvs_name_c = std::ffi::CString::new(lvs_name_for_closure.as_str()).unwrap();
             unsafe {
-                ffi::vbdev_lvs_create(
+                let rc = ffi::vbdev_lvs_create(
                     base_bdev_c.as_ptr() as *const c_char,
                     lvs_name_c.as_ptr() as *const c_char,
                     cluster_size,
@@ -172,6 +175,16 @@ impl BdevManager {
                     Some(lvs_init_cb),
                     comp.as_ptr(),
                 );
+                if rc != 0 {
+                    // Synchronous failure — callback will NOT be invoked.
+                    comp.complete(LvsInitResult {
+                        rc,
+                        uuid: None,
+                        total_clusters: 0,
+                        free_clusters: 0,
+                        lvs_ptr: reactor_dispatch::SendPtr::new(std::ptr::null_mut()),
+                    });
+                }
             }
         });
 
@@ -236,7 +249,7 @@ impl BdevManager {
         reactor_dispatch::send_to_reactor(move || {
             let lvol_name = std::ffi::CString::new(volume_id.as_str()).unwrap();
             unsafe {
-                ffi::vbdev_lvol_create(
+                let rc = ffi::vbdev_lvol_create(
                     lvs_ptr.as_ptr() as *mut ffi::spdk_lvol_store,
                     lvol_name.as_ptr() as *const c_char,
                     size_bytes,
@@ -245,6 +258,10 @@ impl BdevManager {
                     Some(lvol_create_cb),
                     comp.as_ptr(),
                 );
+                if rc != 0 {
+                    // Synchronous failure — callback will NOT be invoked.
+                    comp.complete(rc);
+                }
             }
         });
 

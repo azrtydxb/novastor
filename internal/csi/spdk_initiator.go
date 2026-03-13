@@ -8,23 +8,20 @@ import (
 	"github.com/azrtydxb/novastor/internal/spdk"
 )
 
-// localLoopbackAddr is the address used for local NVMe-oF loopback exports.
-const localLoopbackAddr = "127.0.0.1"
-
-// localLoopbackPort is the port used for local NVMe-oF loopback exports.
-const localLoopbackPort uint16 = 4421
-
 // SPDKInitiator implements NVMeInitiator using the SPDK user-space data-plane
 // instead of the kernel nvme-cli tooling. It connects to remote NVMe-oF targets
 // through the SPDK JSON-RPC client and creates a local loopback export so the
 // kernel can discover a /dev/nvmeXnY device.
 type SPDKInitiator struct {
 	client *spdk.Client
+	hostIP string // local node IP — connections to this address are skipped
 }
 
 // NewSPDKInitiator returns an SPDKInitiator backed by the given SPDK JSON-RPC client.
-func NewSPDKInitiator(client *spdk.Client) *SPDKInitiator {
-	return &SPDKInitiator{client: client}
+// hostIP is the local node's IP address; targets at this address are skipped to
+// avoid single-reactor deadlock (SPDK can't connect to itself on one core).
+func NewSPDKInitiator(client *spdk.Client, hostIP string) *SPDKInitiator {
+	return &SPDKInitiator{client: client, hostIP: hostIP}
 }
 
 // Connect attaches to a remote NVMe-oF target via the SPDK data-plane and
@@ -39,17 +36,18 @@ func (s *SPDKInitiator) Connect(_ context.Context, addr, port, nqn string) (stri
 
 	// Connect to the remote NVMe-oF target through SPDK; this creates a
 	// remote bdev inside the data-plane process.
-	bdevName, err := s.client.ConnectInitiator(addr, uint16(targetPort), nqn)
+	localBdevName := fmt.Sprintf("initiator_%s", nqn)
+	bdevName, err := s.client.ConnectInitiator(addr, uint16(targetPort), nqn, localBdevName)
 	if err != nil {
 		return "", fmt.Errorf("spdk connect initiator to %s:%s nqn %s: %w", addr, port, nqn, err)
 	}
 
 	// Export the remote bdev as a local NVMe-oF loopback target so the
 	// kernel NVMe driver can discover it as a standard block device.
-	localNQN := "nqn.2024-01.io.novastor:local-" + nqn
-	if err := s.client.ExportLocal(localNQN, localLoopbackAddr, localLoopbackPort, bdevName); err != nil {
+	localVolumeID := "local-" + nqn
+	if _, err := s.client.ExportLocal(localVolumeID, bdevName); err != nil {
 		// Best-effort cleanup: disconnect the initiator we just connected.
-		_ = s.client.DisconnectInitiator(nqn)
+		_ = s.client.DisconnectInitiator(bdevName)
 		return "", fmt.Errorf("spdk export local for bdev %s: %w", bdevName, err)
 	}
 
@@ -65,12 +63,13 @@ func (s *SPDKInitiator) Connect(_ context.Context, addr, port, nqn string) (stri
 func (s *SPDKInitiator) Disconnect(_ context.Context, nqn string) error {
 	// Remove the local loopback NVMe-oF target first so the kernel releases
 	// the block device before we disconnect the remote initiator session.
-	localNQN := "nqn.2024-01.io.novastor:local-" + nqn
-	if err := s.client.DeleteNvmfTarget(localNQN); err != nil {
-		return fmt.Errorf("spdk delete local nvmf target %s: %w", localNQN, err)
+	localVolumeID := "local-" + nqn
+	if err := s.client.DeleteNvmfTarget(localVolumeID); err != nil {
+		return fmt.Errorf("spdk delete local nvmf target %s: %w", localVolumeID, err)
 	}
 
-	if err := s.client.DisconnectInitiator(nqn); err != nil {
+	localBdevName := fmt.Sprintf("initiator_%s", nqn)
+	if err := s.client.DisconnectInitiator(localBdevName); err != nil {
 		return fmt.Errorf("spdk disconnect initiator nqn %s: %w", nqn, err)
 	}
 
@@ -92,29 +91,34 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 		return "", fmt.Errorf("no targets provided")
 	}
 
-	basePort := localLoopbackPort
-	var connectedNQNs []string
+	var connectedBdevs []string
 	var exportFailures int
 
 	for i, t := range targets {
+		// Skip targets on the local node — SPDK with a single reactor core
+		// deadlocks when connecting as initiator to its own target.
+		if t.Addr == s.hostIP {
+			continue
+		}
+
 		port, err := strconv.ParseUint(t.Port, 10, 16)
 		if err != nil {
-			port = 4420
+			port = 4430
 		}
-		bdevName, err := s.client.ConnectInitiator(t.Addr, uint16(port), t.NQN)
+		localBdevName := fmt.Sprintf("initiator_%s_path%d", t.NQN, i)
+		bdevName, err := s.client.ConnectInitiator(t.Addr, uint16(port), t.NQN, localBdevName)
 		if err != nil {
 			// Cleanup already-connected
-			for _, nqn := range connectedNQNs {
-				_ = s.client.DisconnectInitiator(nqn)
+			for _, bdev := range connectedBdevs {
+				_ = s.client.DisconnectInitiator(bdev)
 			}
 			return "", fmt.Errorf("connect target %s: %w", t.Addr, err)
 		}
-		connectedNQNs = append(connectedNQNs, t.NQN)
+		connectedBdevs = append(connectedBdevs, bdevName)
 
-		// Export each as loopback on sequential ports
-		localNQN := fmt.Sprintf("nqn.2024-01.io.novastor:local-%s-path%d", t.NQN, i)
-		loopPort := basePort + uint16(i)
-		if err := s.client.ExportLocal(localNQN, localLoopbackAddr, loopPort, bdevName); err != nil {
+		// Export each as loopback
+		localVolumeID := fmt.Sprintf("local-%s-path%d", t.NQN, i)
+		if _, err := s.client.ExportLocal(localVolumeID, bdevName); err != nil {
 			// Non-fatal for individual paths, but track failures.
 			exportFailures++
 		}
@@ -122,8 +126,8 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 
 	if exportFailures == len(targets) {
 		// Cleanup all connections since no paths could be exported.
-		for _, nqn := range connectedNQNs {
-			_ = s.client.DisconnectInitiator(nqn)
+		for _, bdev := range connectedBdevs {
+			_ = s.client.DisconnectInitiator(bdev)
 		}
 		return "", fmt.Errorf("all %d NVMe-oF path exports failed", len(targets))
 	}
@@ -142,11 +146,12 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 func (s *SPDKInitiator) DisconnectMultipath(_ context.Context, targets []TargetInfo) error {
 	var lastErr error
 	for i, t := range targets {
-		localNQN := fmt.Sprintf("nqn.2024-01.io.novastor:local-%s-path%d", t.NQN, i)
-		if err := s.client.DeleteNvmfTarget(localNQN); err != nil {
+		localVolumeID := fmt.Sprintf("local-%s-path%d", t.NQN, i)
+		if err := s.client.DeleteNvmfTarget(localVolumeID); err != nil {
 			lastErr = err
 		}
-		if err := s.client.DisconnectInitiator(t.NQN); err != nil {
+		localBdevName := fmt.Sprintf("initiator_%s_path%d", t.NQN, i)
+		if err := s.client.DisconnectInitiator(localBdevName); err != nil {
 			lastErr = err
 		}
 	}

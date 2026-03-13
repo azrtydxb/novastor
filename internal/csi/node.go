@@ -199,7 +199,7 @@ func (ns *NodeService) NodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	} else if ns.initiator != nil && targetAddr != "" && subsystemNQN != "" {
 		// Single-target attachment (backward compat).
 		if targetPort == "" {
-			targetPort = "4420"
+			targetPort = "4430"
 		}
 		var err error
 		devicePath, err = ns.initiator.Connect(ctx, targetAddr, targetPort, subsystemNQN)

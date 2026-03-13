@@ -118,12 +118,13 @@ agent:
   nodeSelector: {}
   tolerations: []
   heartbeatInterval: "500ms"    # Fast heartbeat for failover detection
+  spdkBaseBdev: "Malloc0"       # SPDK bdev for lvol store (NVMe0n1 for real NVMe, Malloc0 for testing)
   failover:
     enabled: true
     katoTimeout: "200ms"        # SPDK keep-alive timeout
 
 dataplane:
-  enabled: false
+  enabled: true
   image:
     repository: novastor-dataplane
   reactorMask: "0x1"

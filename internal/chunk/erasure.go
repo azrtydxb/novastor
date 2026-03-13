@@ -13,9 +13,6 @@ import (
 const shardSeparator = ":shard:"
 
 // ShardID returns the chunk ID for a specific shard of an erasure-coded chunk.
-// Format: "{chunkID}:shard:{index}"
-// Panics if chunkID contains the ":shard:" separator (which would make
-// ParseShardID ambiguous).
 func ShardID(chunkID string, shardIndex int) ChunkID {
 	if strings.Contains(chunkID, shardSeparator) {
 		panic(fmt.Sprintf("chunk ID %q contains shard separator %q", chunkID, shardSeparator))
@@ -24,7 +21,6 @@ func ShardID(chunkID string, shardIndex int) ChunkID {
 }
 
 // ParseShardID extracts the original chunk ID and shard index from a shard ID.
-// Returns an error if the ID is not a valid shard ID.
 func ParseShardID(id ChunkID) (chunkID string, shardIndex int, err error) {
 	s := string(id)
 	idx := strings.LastIndex(s, shardSeparator)
@@ -45,13 +41,12 @@ func ParseShardID(id ChunkID) (chunkID string, shardIndex int, err error) {
 	return chunkID, shardIndex, nil
 }
 
-// IsShardID returns true if the given ID is a shard ID (contains the :shard: separator).
+// IsShardID returns true if the given ID is a shard ID.
 func IsShardID(id ChunkID) bool {
 	return strings.Contains(string(id), shardSeparator)
 }
 
 // ErasureCoder provides Reed-Solomon erasure coding for chunk protection.
-// It encodes data into data+parity shards and can reconstruct from missing shards.
 type ErasureCoder struct {
 	dataShards   int
 	parityShards int
@@ -59,7 +54,6 @@ type ErasureCoder struct {
 }
 
 // NewErasureCoder creates a new erasure coder with the given shard counts.
-// Returns an error if either parameter is not positive.
 func NewErasureCoder(dataShards, parityShards int) (*ErasureCoder, error) {
 	if dataShards <= 0 || parityShards <= 0 {
 		return nil, fmt.Errorf("data shards (%d) and parity shards (%d) must be positive", dataShards, parityShards)
@@ -72,7 +66,6 @@ func NewErasureCoder(dataShards, parityShards int) (*ErasureCoder, error) {
 }
 
 // Encode splits data into shards and generates parity shards.
-// Returns dataShards + parityShards shards, any of which can be used for reconstruction.
 func (ec *ErasureCoder) Encode(data []byte) ([][]byte, error) {
 	buf := make([]byte, 8+len(data))
 	binary.BigEndian.PutUint64(buf[:8], uint64(len(data)))
@@ -88,12 +81,10 @@ func (ec *ErasureCoder) Encode(data []byte) ([][]byte, error) {
 }
 
 // Decode reconstructs the original data from a set of shards.
-// At least dataShards valid shards are required for successful reconstruction.
 func (ec *ErasureCoder) Decode(shards [][]byte) ([]byte, error) {
 	if err := ec.encoder.Reconstruct(shards); err != nil {
 		return nil, fmt.Errorf("reconstructing shards: %w", err)
 	}
-	// Calculate total size of data shards for Join
 	shardSize := 0
 	for _, s := range shards {
 		if s != nil {

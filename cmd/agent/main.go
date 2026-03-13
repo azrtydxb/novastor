@@ -93,7 +93,7 @@ func main() {
 	tlsClientKey := flag.String("tls-client-key", "", "Path to client key for outbound mTLS connections to metadata service")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	spdkSocket := flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "Path to the SPDK JSON-RPC Unix socket")
-	dataplaneRequired := flag.Bool("dataplane-required", true, "Require SPDK data-plane socket (set false to run without dataplane)")
+	spdkBaseBdev := flag.String("spdk-base-bdev", "NVMe0n1", "SPDK bdev name used as the base device for the lvol store (e.g. NVMe0n1, Malloc0)")
 	flag.Parse()
 
 	logging.Init(false)
@@ -121,31 +121,27 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Connect to the SPDK data-plane socket (optional when dataplane is disabled).
-	var spdkClient *spdk.Client
-	if *dataplaneRequired {
-		logging.L.Info("waiting for SPDK data-plane socket", zap.String("socket", *spdkSocket))
-		socketTimeout := 120 * time.Second
-		socketDeadline := time.Now().Add(socketTimeout)
-		for {
-			if _, statErr := os.Stat(*spdkSocket); statErr == nil {
-				break
-			}
-			if time.Now().After(socketDeadline) {
-				logging.L.Fatal("timed out waiting for SPDK data-plane socket",
-					zap.String("socket", *spdkSocket),
-					zap.Duration("timeout", socketTimeout))
-			}
-			time.Sleep(2 * time.Second)
+	// Connect to the SPDK data-plane socket. SPDK is always required;
+	// all data-path I/O goes through the Rust dataplane.
+	logging.L.Info("waiting for SPDK data-plane socket", zap.String("socket", *spdkSocket))
+	socketTimeout := 120 * time.Second
+	socketDeadline := time.Now().Add(socketTimeout)
+	for {
+		if _, statErr := os.Stat(*spdkSocket); statErr == nil {
+			break
 		}
-		spdkClient = spdk.NewClient(*spdkSocket)
-		if err := spdkClient.Connect(); err != nil {
-			logging.L.Fatal("failed to connect to SPDK data-plane", zap.Error(err))
+		if time.Now().After(socketDeadline) {
+			logging.L.Fatal("timed out waiting for SPDK data-plane socket",
+				zap.String("socket", *spdkSocket),
+				zap.Duration("timeout", socketTimeout))
 		}
-		logging.L.Info("connected to SPDK data-plane", zap.String("socket", *spdkSocket))
-	} else {
-		logging.L.Info("dataplane not required, skipping SPDK socket wait")
+		time.Sleep(2 * time.Second)
 	}
+	spdkClient := spdk.NewClient(*spdkSocket)
+	if err := spdkClient.Connect(); err != nil {
+		logging.L.Fatal("failed to connect to SPDK data-plane", zap.Error(err))
+	}
+	logging.L.Info("connected to SPDK data-plane", zap.String("socket", *spdkSocket))
 
 	// Build gRPC server options.
 	var serverOpts []grpc.ServerOption
@@ -216,16 +212,16 @@ func main() {
 		}
 	}
 
-	// Register NVMe-oF target service.
+	// Register NVMe-oF target service. SPDK dataplane is always required;
+	// all data-path I/O goes through the Rust dataplane.
 	if *hostIP == "" {
 		logging.L.Info("NVMe-oF target service disabled (--host-ip not set)")
 	} else if metaClient == nil {
 		logging.L.Warn("NVMe-oF target service disabled: no metadata connection")
-	} else if spdkClient != nil {
-		// SPDK dataplane available — use SPDK for NVMe-oF targets.
-		spdkServer := agent.NewSPDKTargetServer(*hostIP, spdkClient, metaClient)
+	} else {
+		spdkServer := agent.NewSPDKTargetServer(*hostIP, *spdkBaseBdev, spdkClient, metaClient)
 		spdkServer.Register(srv)
-		logging.L.Info("NVMe-oF target service registered (SPDK)", zap.String("hostIP", *hostIP))
+		logging.L.Info("NVMe-oF target service registered", zap.String("hostIP", *hostIP))
 
 		// Start failover controller for ANA state management.
 		fc := failover.New(*nodeID, registrationAddr, *hostIP, metaClient, spdkClient, logging.L)
@@ -233,11 +229,6 @@ func main() {
 			logging.L.Fatal("failover controller start", zap.Error(err))
 		}
 		defer fc.Stop()
-	} else {
-		// No SPDK dataplane — use kernel nvmet for NVMe-oF targets.
-		kernelServer := agent.NewKernelTargetServer(*hostIP)
-		kernelServer.Register(srv)
-		logging.L.Info("NVMe-oF target service registered (kernel nvmet)", zap.String("hostIP", *hostIP))
 	}
 
 	// Start the garbage collector for orphan chunks.

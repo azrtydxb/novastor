@@ -34,6 +34,7 @@ tonic = "0.13"
 prost = "0.13"
 prost-types = "0.13"
 tokio-stream = "0.1"
+threadpool = "1"
 
 [build-dependencies]
 bindgen = "0.71"

@@ -294,7 +294,7 @@ fn nvmf_init_transport(_p: serde_json::Value) -> Result<serde_json::Value, DataP
     let mgr = NVMF_MANAGER.get().ok_or(DataPlaneError::SpdkInit(
         "nvmf manager not initialised".into(),
     ))?;
-    mgr.init_transport()?;
+    mgr.ensure_transport()?;
     Ok(serde_json::json!({"status": "ok"}))
 }
 
@@ -1180,7 +1180,8 @@ struct BackendInitChunkParams {
 
 fn backend_init_chunk(p: BackendInitChunkParams) -> Result<serde_json::Value, DataPlaneError> {
     let store = Arc::new(ChunkStore::new(&p.bdev_name, p.capacity_bytes));
-    let backend = Arc::new(ChunkBackend::new(store));
+    let backend: Arc<dyn StorageBackend> = Arc::new(ChunkBackend::new(store));
+
     backends()
         .lock()
         .unwrap()
