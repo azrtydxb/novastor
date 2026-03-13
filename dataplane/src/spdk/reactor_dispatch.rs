@@ -633,7 +633,8 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
             &mut desc,
         );
         if rc != 0 {
-            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
+                AsyncCompletionSender::from_ptr(sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(format!(
                 "spdk_bdev_open_ext('{}') failed: rc={rc}",
                 name
@@ -732,7 +733,8 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
             &mut desc,
         );
         if rc != 0 {
-            let mut s = AsyncCompletionSender::from_ptr(sender_ptr);
+            let mut s: AsyncCompletionSender<Result<()>> =
+                AsyncCompletionSender::from_ptr(sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(format!(
                 "spdk_bdev_open_ext('{}') failed: rc={rc}",
                 name
