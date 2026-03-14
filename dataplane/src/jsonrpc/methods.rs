@@ -10,6 +10,7 @@ use crate::backend::raw_disk::RawDiskBackend;
 use crate::backend::traits::StorageBackend;
 use crate::bdev::chunk_io::ChunkStore;
 use crate::bdev::erasure::ErasureBdev;
+use crate::bdev::novastor_bdev;
 use crate::bdev::replica::ReplicaBdev;
 use crate::config::{
     BlobstoreConfig, ErasureBdevConfig, LocalBdevConfig, LvolConfig, NvmfInitiatorConfig,
@@ -1182,6 +1183,10 @@ fn backend_init_chunk(p: BackendInitChunkParams) -> Result<serde_json::Value, Da
     let store = Arc::new(ChunkStore::new(&p.bdev_name, p.capacity_bytes));
     let backend: Arc<dyn StorageBackend> = Arc::new(ChunkBackend::new(store));
 
+    // Register the chunk backend with the novastor_bdev module so it can
+    // bridge SPDK block I/O to ChunkBackend::read/write.
+    novastor_bdev::set_chunk_backend(backend.clone());
+
     backends()
         .lock()
         .unwrap()
@@ -1203,8 +1208,23 @@ fn backend_create_volume(
 ) -> Result<serde_json::Value, DataPlaneError> {
     let backend = get_backend(&p.backend)?;
     let info = backend.create_volume(&p.name, p.size_bytes, p.thin)?;
-    Ok(serde_json::to_value(info)
-        .map_err(|e| DataPlaneError::JsonRpcError(format!("serialization: {e}")))?)
+
+    // For chunk backend volumes, automatically register an SPDK bdev so
+    // the volume can be exposed via NVMe-oF without a separate RPC call.
+    let mut result = serde_json::to_value(&info)
+        .map_err(|e| DataPlaneError::JsonRpcError(format!("serialization: {e}")))?;
+
+    if p.backend == "chunk" {
+        let bdev_name = novastor_bdev::create(&p.name, p.size_bytes)?;
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert(
+                "bdev_name".to_string(),
+                serde_json::Value::String(bdev_name),
+            );
+        }
+    }
+
+    Ok(result)
 }
 
 #[derive(Deserialize)]
@@ -1214,6 +1234,13 @@ struct BackendVolumeNameParams {
 }
 
 fn backend_delete_volume(p: BackendVolumeNameParams) -> Result<serde_json::Value, DataPlaneError> {
+    // For chunk backend, destroy the SPDK bdev first (before deleting the
+    // volume data) so that any NVMe-oF subsystem referencing it is cleaned up.
+    if p.backend == "chunk" {
+        // Best-effort: bdev may not exist if creation failed partway.
+        let _ = novastor_bdev::destroy(&p.name);
+    }
+
     let backend = get_backend(&p.backend)?;
     backend.delete_volume(&p.name)?;
     Ok(serde_json::json!(true))

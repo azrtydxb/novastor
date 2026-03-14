@@ -108,7 +108,8 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
     let bdev_addr = reactor_dispatch::dispatch_sync(move || -> Result<usize> {
         unsafe {
             // Allocate and zero the bdev struct.
-            let bdev = libc::calloc(1, std::mem::size_of::<ffi::spdk_bdev>()) as *mut ffi::spdk_bdev;
+            let bdev =
+                libc::calloc(1, std::mem::size_of::<ffi::spdk_bdev>()) as *mut ffi::spdk_bdev;
             if bdev.is_null() {
                 let _ = Box::from_raw(ctx_ptr); // cleanup
                 return Err(DataPlaneError::BdevError("calloc spdk_bdev failed".into()));
@@ -117,7 +118,8 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
             // Set bdev fields.
             let name_c = std::ffi::CString::new(bdev_name_clone.as_str()).unwrap();
             (*bdev).name = libc::strdup(name_c.as_ptr());
-            (*bdev).product_name = libc::strdup(b"NovaStor ChunkBackend\0".as_ptr() as *const c_char);
+            (*bdev).product_name =
+                libc::strdup(b"NovaStor ChunkBackend\0".as_ptr() as *const c_char);
             (*bdev).blocklen = block_size;
             (*bdev).blockcnt = num_blocks;
             (*bdev).ctxt = ctx_ptr as *mut c_void;
@@ -200,10 +202,7 @@ pub fn destroy(volume_name: &str) -> Result<()> {
         )));
     }
 
-    info!(
-        "novastor_bdev: destroyed bdev for volume '{}'",
-        volume_name
-    );
+    info!("novastor_bdev: destroyed bdev for volume '{}'", volume_name);
     Ok(())
 }
 
@@ -218,8 +217,7 @@ static NOVASTOR_MODULE_INIT: std::sync::Once = std::sync::Once::new();
 /// Get a pointer to the NovaStor bdev module, initialising it on first call.
 fn novastor_bdev_module_ptr() -> *mut ffi::spdk_bdev_module {
     NOVASTOR_MODULE_INIT.call_once(|| unsafe {
-        NOVASTOR_MODULE.name =
-            b"novastor_chunk\0".as_ptr() as *const c_char;
+        NOVASTOR_MODULE.name = b"novastor_chunk\0".as_ptr() as *const c_char;
         NOVASTOR_MODULE.module_init = Some(module_init_cb);
         NOVASTOR_MODULE.module_fini = Some(module_fini_cb);
     });
@@ -343,11 +341,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 let success = match result {
                     Ok(data) => unsafe {
                         let copy_len = std::cmp::min(data.len(), iov_len);
-                        std::ptr::copy_nonoverlapping(
-                            data.as_ptr(),
-                            iov_base as *mut u8,
-                            copy_len,
-                        );
+                        std::ptr::copy_nonoverlapping(data.as_ptr(), iov_base as *mut u8, copy_len);
                         true
                     },
                     Err(e) => {

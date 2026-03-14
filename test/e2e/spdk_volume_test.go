@@ -19,12 +19,12 @@ const (
 	spdkSocketPath = "/var/tmp/novastor-spdk.sock"
 	testVolumeID   = "e2e-test-vol-001"
 	testListenAddr = "127.0.0.1"
-	testPort       = uint16(4420)
+	testPort       = uint16(4430)
 )
 
-// TestSPDKVolumeLifecycle tests the complete lifecycle of a replicated volume
-// using the SPDK data-plane: create lvol → create NVMe-oF target → connect
-// initiator → verify → disconnect → delete.
+// TestSPDKVolumeLifecycle tests the complete lifecycle of a chunk-backed volume
+// using the SPDK data-plane: init chunk backend → create chunk volume → create
+// NVMe-oF target → connect initiator → verify → disconnect → delete.
 func TestSPDKVolumeLifecycle(t *testing.T) {
 	if os.Getenv("NOVASTOR_E2E") == "" {
 		t.Skip("set NOVASTOR_E2E=1 to run end-to-end tests")
@@ -47,33 +47,35 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 	t.Logf("data-plane version: %s", ver)
 
 	// Step 1: Create a malloc bdev for testing (no real disk needed).
-	t.Log("creating malloc bdev")
-	if err := client.CreateMallocBdev("e2e-base", 256, 512); err != nil {
-		t.Fatalf("CreateMallocBdev failed: %v", err)
+	t.Log("creating malloc bdev for chunk backend")
+	if err := client.NativeCreateMallocBdev("e2e-base", 256, 512); err != nil {
+		if !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("NativeCreateMallocBdev failed: %v", err)
+		}
+		t.Log("malloc bdev already exists, reusing")
 	}
-	defer func() {
-		_ = client.DeleteBdev("e2e-base")
-	}()
 
-	// Step 2: Create an lvol store on the malloc bdev.
-	t.Log("creating lvol store")
-	lvsName, err := client.CreateLvolStore("e2e-base")
+	// Step 2: Initialise the chunk backend on the malloc bdev.
+	t.Log("initialising chunk backend")
+	capacityBytes := uint64(256) * 1024 * 1024
+	if err := client.InitChunkBackend("e2e-base", capacityBytes); err != nil {
+		if !strings.Contains(err.Error(), "already") {
+			t.Fatalf("InitChunkBackend failed: %v", err)
+		}
+		t.Log("chunk backend already initialised, reusing")
+	}
+
+	// Step 3: Create a chunk volume (returns the auto-registered bdev name).
+	t.Log("creating chunk volume")
+	bdevName, err := client.CreateChunkVolume(testVolumeID, 128*1024*1024, true)
 	if err != nil {
-		t.Fatalf("CreateLvolStore failed: %v", err)
+		t.Fatalf("CreateChunkVolume failed: %v", err)
 	}
-	t.Logf("lvol store name: %s", lvsName)
+	t.Logf("chunk volume bdev: %s", bdevName)
 
-	// Step 3: Create a logical volume.
-	t.Log("creating logical volume")
-	lvolName, err := client.CreateLvol(lvsName, testVolumeID, 128*1024*1024)
-	if err != nil {
-		t.Fatalf("CreateLvol failed: %v", err)
-	}
-	t.Logf("lvol name: %s", lvolName)
-
-	// Step 4: Create an NVMe-oF target exposing the lvol.
+	// Step 4: Create an NVMe-oF target exposing the chunk volume bdev.
 	t.Log("creating NVMe-oF target")
-	nqn, err := client.CreateNvmfTarget(testVolumeID, testListenAddr, testPort, lvolName)
+	nqn, err := client.CreateNvmfTarget(testVolumeID, testListenAddr, testPort, bdevName)
 	if err != nil {
 		t.Fatalf("CreateNvmfTarget failed: %v", err)
 	}
@@ -83,15 +85,15 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 	t.Log("verifying NVMe-oF target reachability")
 	verifyTarget(t, ctx, testListenAddr, testPort, nqn)
 
-	// Step 6: Clean up - delete target, then bdev.
+	// Step 6: Clean up - delete target, then chunk volume.
 	t.Log("cleaning up NVMe-oF target")
 	if err := client.DeleteNvmfTarget(testVolumeID); err != nil {
 		t.Errorf("DeleteNvmfTarget failed: %v", err)
 	}
 
-	t.Log("cleaning up lvol")
-	if err := client.DeleteBdev(lvolName); err != nil {
-		t.Errorf("DeleteBdev (lvol) failed: %v", err)
+	t.Log("cleaning up chunk volume")
+	if err := client.DeleteChunkVolume(testVolumeID); err != nil {
+		t.Errorf("DeleteChunkVolume failed: %v", err)
 	}
 
 	t.Log("SPDK volume lifecycle test passed")
@@ -112,8 +114,8 @@ func TestSPDKReplicaBdev(t *testing.T) {
 
 	// Create a replica bdev with two targets (both pointing to localhost).
 	targets := []spdk.ReplicaTarget{
-		{Addr: "127.0.0.1", Port: 4420, NQN: "novastor-replica-test-1", IsLocal: true},
-		{Addr: "127.0.0.1", Port: 4421, NQN: "novastor-replica-test-2", IsLocal: false},
+		{Addr: "127.0.0.1", Port: 4430, NQN: "novastor-replica-test-1", IsLocal: true},
+		{Addr: "127.0.0.1", Port: 4431, NQN: "novastor-replica-test-2", IsLocal: false},
 	}
 
 	t.Log("creating replica bdev")
