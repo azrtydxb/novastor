@@ -16,7 +16,7 @@ import (
 // --------------------------------------------------------------------------
 
 type setANACall struct {
-	NQN        string
+	VolumeID   string
 	ANAGroupID uint32
 	State      string
 }
@@ -27,10 +27,10 @@ type mockSPDKClient struct {
 	err   error
 }
 
-func (m *mockSPDKClient) SetANAState(nqn string, anaGroupID uint32, state string) error {
+func (m *mockSPDKClient) SetANAState(volumeID string, anaGroupID uint32, state string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls = append(m.calls, setANACall{NQN: nqn, ANAGroupID: anaGroupID, State: state})
+	m.calls = append(m.calls, setANACall{VolumeID: volumeID, ANAGroupID: anaGroupID, State: state})
 	return m.err
 }
 
@@ -119,12 +119,12 @@ func TestController_PromotesToOwner(t *testing.T) {
 	}
 
 	// The last call should be the promote to optimized.
+	// Now passes volumeID directly (not NQN).
 	lastCall := calls[len(calls)-1]
-	expectedNQN := nqnPrefix + volumeID
 	expectedGroupID := anaGroupForVolume(volumeID)
 
-	if lastCall.NQN != expectedNQN {
-		t.Errorf("expected NQN %q, got %q", expectedNQN, lastCall.NQN)
+	if lastCall.VolumeID != volumeID {
+		t.Errorf("expected volumeID %q, got %q", volumeID, lastCall.VolumeID)
 	}
 	if lastCall.ANAGroupID != expectedGroupID {
 		t.Errorf("expected ANA group ID %d, got %d", expectedGroupID, lastCall.ANAGroupID)
@@ -189,12 +189,12 @@ func TestController_DemotesOnRecovery(t *testing.T) {
 	}
 
 	// The last call should be the demote to non_optimized.
+	// Now passes volumeID directly (not NQN).
 	lastCall := calls[len(calls)-1]
-	expectedNQN := nqnPrefix + volumeID
 	expectedGroupID := anaGroupForVolume(volumeID)
 
-	if lastCall.NQN != expectedNQN {
-		t.Errorf("expected NQN %q, got %q", expectedNQN, lastCall.NQN)
+	if lastCall.VolumeID != volumeID {
+		t.Errorf("expected volumeID %q, got %q", volumeID, lastCall.VolumeID)
 	}
 	if lastCall.ANAGroupID != expectedGroupID {
 		t.Errorf("expected ANA group ID %d, got %d", expectedGroupID, lastCall.ANAGroupID)

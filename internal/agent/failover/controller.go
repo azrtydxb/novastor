@@ -21,10 +21,6 @@ const (
 	// watchInterval is the polling interval for ownership checks.
 	watchInterval = 500 * time.Millisecond
 
-	// nqnPrefix is prepended to the volumeID to form the subsystem NQN.
-	// Must match spdkNQNPrefix in internal/agent/spdk_target_server.go.
-	nqnPrefix = "novastor-"
-
 	// ANAOptimized is the ANA state for the active/preferred path.
 	ANAOptimized = "optimized"
 
@@ -38,9 +34,10 @@ type MetadataClient interface {
 	RequestOwnership(ctx context.Context, volumeID, requesterAddr string) (bool, uint64, error)
 }
 
-// SPDKClient is the interface for SPDK data-plane operations needed by the failover controller.
+// SPDKClient is the interface for data-plane operations needed by the failover controller.
+// SetANAState takes a volumeID (not NQN) — the dataplane converts to NQN internally.
 type SPDKClient interface {
-	SetANAState(nqn string, anaGroupID uint32, state string) error
+	SetANAState(volumeID string, anaGroupID uint32, state string) error
 }
 
 // VolumeState tracks the failover state of a single volume on this agent.
@@ -221,8 +218,7 @@ func (c *Controller) checkOwnership(ctx context.Context) {
 }
 
 // promote transitions a volume's local NVMe-oF target to the optimized ANA state.
-func (c *Controller) promote(ctx context.Context, vs *VolumeState, generation uint64) {
-	nqn := nqnPrefix + vs.VolumeID
+func (c *Controller) promote(_ context.Context, vs *VolumeState, generation uint64) {
 	anaGroupID := anaGroupForVolume(vs.VolumeID)
 
 	c.logger.Info("promoting volume to optimized",
@@ -231,7 +227,8 @@ func (c *Controller) promote(ctx context.Context, vs *VolumeState, generation ui
 		zap.Uint32("anaGroupID", anaGroupID),
 	)
 
-	if err := c.spdkClient.SetANAState(nqn, anaGroupID, ANAOptimized); err != nil {
+	// Pass volumeID — the dataplane converts to NQN internally.
+	if err := c.spdkClient.SetANAState(vs.VolumeID, anaGroupID, ANAOptimized); err != nil {
 		c.logger.Error("failed to set ANA state to optimized",
 			zap.String("volumeID", vs.VolumeID),
 			zap.Error(err),
@@ -249,8 +246,7 @@ func (c *Controller) promote(ctx context.Context, vs *VolumeState, generation ui
 }
 
 // demote transitions a volume's local NVMe-oF target to the non-optimized ANA state.
-func (c *Controller) demote(ctx context.Context, vs *VolumeState) {
-	nqn := nqnPrefix + vs.VolumeID
+func (c *Controller) demote(_ context.Context, vs *VolumeState) {
 	anaGroupID := anaGroupForVolume(vs.VolumeID)
 
 	c.logger.Info("demoting volume to non_optimized",
@@ -258,7 +254,8 @@ func (c *Controller) demote(ctx context.Context, vs *VolumeState) {
 		zap.Uint32("anaGroupID", anaGroupID),
 	)
 
-	if err := c.spdkClient.SetANAState(nqn, anaGroupID, ANANonOptimized); err != nil {
+	// Pass volumeID — the dataplane converts to NQN internally.
+	if err := c.spdkClient.SetANAState(vs.VolumeID, anaGroupID, ANANonOptimized); err != nil {
 		c.logger.Error("failed to set ANA state to non_optimized",
 			zap.String("volumeID", vs.VolumeID),
 			zap.Error(err),
@@ -286,7 +283,6 @@ func (c *Controller) syncInitialState(ctx context.Context, vs *VolumeState) erro
 		return nil
 	}
 
-	nqn := nqnPrefix + vs.VolumeID
 	anaGroupID := anaGroupForVolume(vs.VolumeID)
 	ownerIsUs := ownership.OwnerAddr == c.nodeAddr
 
@@ -297,7 +293,8 @@ func (c *Controller) syncInitialState(ctx context.Context, vs *VolumeState) erro
 		targetState = ANANonOptimized
 	}
 
-	if err := c.spdkClient.SetANAState(nqn, anaGroupID, targetState); err != nil {
+	// Pass volumeID — the dataplane converts to NQN internally.
+	if err := c.spdkClient.SetANAState(vs.VolumeID, anaGroupID, targetState); err != nil {
 		return fmt.Errorf("set ANA state to %s: %w", targetState, err)
 	}
 

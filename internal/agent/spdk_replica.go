@@ -6,9 +6,10 @@ import (
 
 	"go.uber.org/zap"
 
+	dppb "github.com/azrtydxb/novastor/api/proto/dataplane"
+	"github.com/azrtydxb/novastor/internal/dataplane"
 	"github.com/azrtydxb/novastor/internal/logging"
 	"github.com/azrtydxb/novastor/internal/metadata"
-	"github.com/azrtydxb/novastor/internal/spdk"
 )
 
 // SetupReplicaBdev creates a replica bdev in the SPDK data-plane for a volume.
@@ -23,14 +24,12 @@ import (
 //
 // When readPolicy is empty, automatically selects "local_first" if the local
 // node is a replica, otherwise "latency_aware".
-func SetupReplicaBdev(ctx context.Context, spdkClient *spdk.Client, metaClient *metadata.GRPCClient, volumeID, localNodeID string, replicaNodes []string, readPolicy string, sizeBytes int64) (string, error) {
+func SetupReplicaBdev(ctx context.Context, dpClient *dataplane.Client, metaClient *metadata.GRPCClient, volumeID, localNodeID string, replicaNodes []string, readPolicy string, sizeBytes int64) (string, error) {
 	if len(replicaNodes) == 0 {
 		return "", fmt.Errorf("no replica nodes for volume %s", volumeID)
 	}
 
-	nqnPrefix := "novastor-"
-	nqn := nqnPrefix + volumeID
-	targets := make([]spdk.ReplicaTarget, 0, len(replicaNodes))
+	targets := make([]*dppb.ReplicaTarget, 0, len(replicaNodes))
 
 	hasLocal := false
 	for _, nodeAddr := range replicaNodes {
@@ -38,11 +37,9 @@ func SetupReplicaBdev(ctx context.Context, spdkClient *spdk.Client, metaClient *
 		if isLocal {
 			hasLocal = true
 		}
-		target := spdk.ReplicaTarget{
-			Addr:    nodeAddr,
-			Port:    4430,
-			NQN:     nqn,
-			IsLocal: isLocal,
+		target := &dppb.ReplicaTarget{
+			BdevName: fmt.Sprintf("replica_%s_%s", volumeID[:8], nodeAddr),
+			IsLocal:  isLocal,
 		}
 		targets = append(targets, target)
 	}
@@ -56,8 +53,8 @@ func SetupReplicaBdev(ctx context.Context, spdkClient *spdk.Client, metaClient *
 		}
 	}
 
-	bdevName := fmt.Sprintf("replica-%s", volumeID)
-	if err := spdkClient.CreateReplicaBdev(bdevName, targets, readPolicy, sizeBytes); err != nil {
+	bdevName, err := dpClient.CreateReplicaBdev(volumeID, targets, uint64(sizeBytes), readPolicy)
+	if err != nil {
 		return "", fmt.Errorf("creating replica bdev for volume %s: %w", volumeID, err)
 	}
 

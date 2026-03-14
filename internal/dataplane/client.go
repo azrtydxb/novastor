@@ -443,6 +443,27 @@ func (c *Client) DeleteVolume(backendType, name string) error {
 }
 
 // --------------------------------------------------------------------------
+// Convenience Methods
+// --------------------------------------------------------------------------
+
+// ExportLocal creates a local NVMe-oF target on 127.0.0.1:4430 for a bdev,
+// so the kernel can discover a /dev/nvmeXnY device via loopback. Returns the NQN.
+func (c *Client) ExportLocal(volumeID, bdevName string) (string, error) {
+	return c.CreateNvmfTarget(volumeID, bdevName, "127.0.0.1", 4430, "", 0)
+}
+
+// ListLvolStores returns all lvol stores.
+func (c *Client) ListLvolStores() ([]*pb.LvolStoreInfo, error) {
+	ctx, cancel := c.ctx()
+	defer cancel()
+	resp, err := c.svc.ListLvolStores(ctx, &pb.ListLvolStoresRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetStores(), nil
+}
+
+// --------------------------------------------------------------------------
 // Health & Fencing
 // --------------------------------------------------------------------------
 

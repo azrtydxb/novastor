@@ -8,18 +8,18 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/azrtydxb/novastor/internal/dataplane"
 	"github.com/azrtydxb/novastor/internal/logging"
 	"github.com/azrtydxb/novastor/internal/metadata"
 	"github.com/azrtydxb/novastor/internal/metrics"
-	"github.com/azrtydxb/novastor/internal/spdk"
 )
 
 // SPDKGarbageCollector handles periodic garbage collection of orphan chunks
-// via the SPDK data-plane JSON-RPC interface. It queries the metadata service
+// via the SPDK data-plane gRPC interface. It queries the metadata service
 // to determine which chunks are still referenced, then calls the dataplane's
-// chunk_gc RPC to delete unreferenced chunks.
+// GarbageCollect RPC to delete unreferenced chunks.
 type SPDKGarbageCollector struct {
-	spdkClient *spdk.Client
+	dpClient   *dataplane.Client
 	metaClient *metadata.GRPCClient
 	bdevName   string
 	interval   time.Duration
@@ -31,10 +31,10 @@ type SPDKGarbageCollector struct {
 }
 
 // NewSPDKGarbageCollector creates a garbage collector that operates via
-// the SPDK data-plane JSON-RPC socket.
-func NewSPDKGarbageCollector(spdkClient *spdk.Client, metaClient *metadata.GRPCClient, bdevName string, interval time.Duration) *SPDKGarbageCollector {
+// the SPDK data-plane gRPC interface.
+func NewSPDKGarbageCollector(dpClient *dataplane.Client, metaClient *metadata.GRPCClient, bdevName string, interval time.Duration) *SPDKGarbageCollector {
 	return &SPDKGarbageCollector{
-		spdkClient: spdkClient,
+		dpClient:   dpClient,
 		metaClient: metaClient,
 		bdevName:   bdevName,
 		interval:   interval,
@@ -118,9 +118,9 @@ func (gc *SPDKGarbageCollector) runOnce(ctx context.Context) {
 	gc.mu.Unlock()
 }
 
-// RunOnce executes a single garbage collection pass via SPDK dataplane.
+// RunOnce executes a single garbage collection pass via the dataplane gRPC.
 // It queries metadata for all referenced chunks, then calls the dataplane's
-// chunk_gc RPC which deletes anything not in the valid set.
+// GarbageCollect RPC which deletes anything not in the valid set.
 func (gc *SPDKGarbageCollector) RunOnce(ctx context.Context) (*GCResult, error) {
 	start := time.Now()
 	result := &GCResult{}
@@ -132,29 +132,29 @@ func (gc *SPDKGarbageCollector) RunOnce(ctx context.Context) (*GCResult, error) 
 		return nil, fmt.Errorf("getting referenced chunks: %w", err)
 	}
 
-	// Convert to a list for the SPDK RPC.
+	// Convert to a list for the gRPC RPC.
 	validIDs := make([]string, 0, len(referenced))
 	for id := range referenced {
 		validIDs = append(validIDs, id)
 	}
 
-	// Call the dataplane's chunk_gc RPC which handles the actual deletion.
-	gcResult, err := gc.spdkClient.ChunkGC(gc.bdevName, validIDs)
+	// Call the dataplane's GarbageCollect RPC which handles the actual deletion.
+	deleted, errors, err := gc.dpClient.GarbageCollect(gc.bdevName, validIDs)
 	if err != nil {
-		return nil, fmt.Errorf("SPDK chunk_gc RPC: %w", err)
+		return nil, fmt.Errorf("dataplane GarbageCollect RPC: %w", err)
 	}
 
-	result.OrphanChunksDeleted = int(gcResult.Deleted)
+	result.OrphanChunksDeleted = int(deleted)
 	result.Duration = time.Since(start)
 
-	if gcResult.Errors > 0 {
+	if errors > 0 {
 		logging.L.Warn("agent spdk gc had errors",
-			zap.Int64("errors", gcResult.Errors),
-			zap.Int64("deleted", gcResult.Deleted))
+			zap.Uint32("errors", errors),
+			zap.Uint32("deleted", deleted))
 	}
 
 	// Update Prometheus metrics.
-	for i := int64(0); i < gcResult.Deleted; i++ {
+	for i := uint32(0); i < deleted; i++ {
 		metrics.GCOrphanChunksDeleted.Inc()
 	}
 

@@ -21,10 +21,10 @@ import (
 
 	"github.com/azrtydxb/novastor/internal/agent"
 	"github.com/azrtydxb/novastor/internal/agent/failover"
+	"github.com/azrtydxb/novastor/internal/dataplane"
 	"github.com/azrtydxb/novastor/internal/logging"
 	"github.com/azrtydxb/novastor/internal/metadata"
 	"github.com/azrtydxb/novastor/internal/metrics"
-	"github.com/azrtydxb/novastor/internal/spdk"
 	"github.com/azrtydxb/novastor/internal/transport"
 )
 
@@ -92,7 +92,7 @@ func main() {
 	tlsClientCert := flag.String("tls-client-cert", "", "Path to client certificate for outbound mTLS connections to metadata service")
 	tlsClientKey := flag.String("tls-client-key", "", "Path to client key for outbound mTLS connections to metadata service")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
-	spdkSocket := flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "Path to the SPDK JSON-RPC Unix socket")
+	dataplaneAddr := flag.String("dataplane-addr", "localhost:9500", "Address of the Rust gRPC dataplane")
 	spdkBaseBdev := flag.String("spdk-base-bdev", "NVMe0n1", "SPDK bdev name used as the base device for the chunk backend (e.g. NVMe0n1, Malloc0)")
 	testMode := flag.Bool("test-mode", false, "Enable test mode: allows Malloc bdev auto-creation (NOT for production use)")
 	flag.Parse()
@@ -122,27 +122,26 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Connect to the SPDK data-plane socket. SPDK is always required;
+	// Connect to the Rust data-plane via gRPC. SPDK is always required;
 	// all data-path I/O goes through the Rust dataplane.
-	logging.L.Info("waiting for SPDK data-plane socket", zap.String("socket", *spdkSocket))
-	socketTimeout := 120 * time.Second
-	socketDeadline := time.Now().Add(socketTimeout)
-	for {
-		if _, statErr := os.Stat(*spdkSocket); statErr == nil {
-			break
-		}
-		if time.Now().After(socketDeadline) {
-			logging.L.Fatal("timed out waiting for SPDK data-plane socket",
-				zap.String("socket", *spdkSocket),
-				zap.Duration("timeout", socketTimeout))
-		}
-		time.Sleep(2 * time.Second)
+	logging.L.Info("connecting to Rust data-plane via gRPC", zap.String("addr", *dataplaneAddr))
+	dpClient, err := dataplane.Dial(*dataplaneAddr, logging.L)
+	if err != nil {
+		logging.L.Fatal("failed to connect to Rust data-plane", zap.Error(err))
 	}
-	spdkClient := spdk.NewClient(*spdkSocket)
-	if err := spdkClient.Connect(); err != nil {
-		logging.L.Fatal("failed to connect to SPDK data-plane", zap.Error(err))
+	defer dpClient.Close()
+	logging.L.Info("connected to Rust data-plane via gRPC", zap.String("addr", *dataplaneAddr))
+
+	// Verify dataplane connectivity.
+	dpVersion, dpCommit, err := dpClient.GetVersion()
+	if err != nil {
+		logging.L.Warn("dataplane version check failed (dataplane may not be ready yet)", zap.Error(err))
+	} else {
+		logging.L.Info("dataplane version",
+			zap.String("version", dpVersion),
+			zap.String("commit", dpCommit),
+		)
 	}
-	logging.L.Info("connected to SPDK data-plane", zap.String("socket", *spdkSocket))
 
 	// Build gRPC server options.
 	var serverOpts []grpc.ServerOption
@@ -214,18 +213,18 @@ func main() {
 	}
 
 	// Register NVMe-oF target service. SPDK dataplane is always required;
-	// all data-path I/O goes through the Rust dataplane.
+	// all data-path I/O goes through the Rust dataplane via gRPC.
 	if *hostIP == "" {
 		logging.L.Info("NVMe-oF target service disabled (--host-ip not set)")
 	} else if metaClient == nil {
 		logging.L.Warn("NVMe-oF target service disabled: no metadata connection")
 	} else {
-		spdkServer := agent.NewSPDKTargetServer(*hostIP, *spdkBaseBdev, *testMode, spdkClient, metaClient)
+		spdkServer := agent.NewSPDKTargetServer(*hostIP, *spdkBaseBdev, *testMode, dpClient, metaClient)
 		spdkServer.Register(srv)
 		logging.L.Info("NVMe-oF target service registered", zap.String("hostIP", *hostIP))
 
 		// Start failover controller for ANA state management.
-		fc := failover.New(*nodeID, registrationAddr, *hostIP, metaClient, spdkClient, logging.L)
+		fc := failover.New(*nodeID, registrationAddr, *hostIP, metaClient, dpClient, logging.L)
 		if err := fc.Start(ctx); err != nil {
 			logging.L.Fatal("failover controller start", zap.Error(err))
 		}
@@ -233,17 +232,17 @@ func main() {
 	}
 
 	// Register ChunkService server — bridges S3/Filer gRPC chunk I/O
-	// to the Rust SPDK data-plane via JSON-RPC.
-	chunkServer := agent.NewChunkServer(spdkClient, *spdkBaseBdev)
+	// to the Rust SPDK data-plane via gRPC.
+	chunkServer := agent.NewChunkServer(dpClient, *spdkBaseBdev)
 	chunkServer.Register(srv)
-	logging.L.Info("chunk service registered (routes I/O to SPDK dataplane)")
+	logging.L.Info("chunk service registered (routes I/O to SPDK dataplane via gRPC)")
 
 	// Start the garbage collector for orphan chunks via SPDK data-plane.
 	if metaClient != nil {
-		spdkGC := agent.NewSPDKGarbageCollector(spdkClient, metaClient, *spdkBaseBdev, *gcInterval)
+		spdkGC := agent.NewSPDKGarbageCollector(dpClient, metaClient, *spdkBaseBdev, *gcInterval)
 		spdkGC.Start(ctx)
 		defer spdkGC.Stop()
-		logging.L.Info("agent garbage collector started (routes through SPDK dataplane)",
+		logging.L.Info("agent garbage collector started (routes through SPDK dataplane via gRPC)",
 			zap.Duration("interval", *gcInterval),
 			zap.String("bdev", *spdkBaseBdev))
 	}
@@ -253,6 +252,25 @@ func main() {
 		defer metaClient.Close()
 		go registerNode(ctx, metaClient, *nodeID, registrationAddr, *heartbeatInterval)
 	}
+
+	// Start dataplane heartbeat loop to prevent fencing.
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fenced, hbErr := dpClient.Heartbeat(*nodeID)
+				if hbErr != nil {
+					logging.L.Warn("dataplane heartbeat failed", zap.Error(hbErr))
+				} else if fenced {
+					logging.L.Error("dataplane reports FENCED state")
+				}
+			}
+		}
+	}()
 
 	// Start Prometheus metrics HTTP server.
 	metricsMux := http.NewServeMux()
@@ -272,9 +290,9 @@ func main() {
 
 	// Start gRPC listener.
 	lc := net.ListenConfig{}
-	listener, err := lc.Listen(ctx, "tcp", *listenAddr)
-	if err != nil {
-		logging.L.Fatal("failed to listen", zap.String("addr", *listenAddr), zap.Error(err))
+	listener, listenErr := lc.Listen(ctx, "tcp", *listenAddr)
+	if listenErr != nil {
+		logging.L.Fatal("failed to listen", zap.String("addr", *listenAddr), zap.Error(listenErr))
 	}
 
 	logging.L.Info("agent gRPC server listening", zap.String("addr", *listenAddr))
@@ -293,8 +311,8 @@ func main() {
 		_ = metricsServer.Shutdown(shutdownCtx)
 	}()
 
-	if err := srv.Serve(listener); err != nil {
-		logging.L.Fatal("agent gRPC server failed", zap.Error(err))
+	if serveErr := srv.Serve(listener); serveErr != nil {
+		logging.L.Fatal("agent gRPC server failed", zap.Error(serveErr))
 	}
 	logging.L.Info("agent stopped")
 }
