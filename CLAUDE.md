@@ -81,6 +81,33 @@ Both modes are available for **all three access layers** (block, file, object). 
 - **Replication**: Synchronous N-way (default factor=3, write quorum=majority). Owner fans out full chunks to replica nodes via gRPC.
 - **Erasure Coding**: Reed-Solomon (default 4+2). Owner RS-encodes into K data + M parity shards, distributes via gRPC. 1.5x overhead vs 3x.
 
+## Custom Agents (MANDATORY)
+
+Two custom agents enforce architecture and code quality. **These are not optional.**
+
+### `architecture-compliance` — Architecture Auditor
+- **MUST be run** after implementing any feature, fixing any bug, or making any code change that touches Go agent, Rust dataplane, Helm charts, proto definitions, or any layer boundary code
+- **MUST be run** before creating any PR or claiming work is complete
+- Audits code against the 10 invariants in the architecture spec
+- Invoke with: "Use the architecture-compliance agent to audit the changes"
+
+### `novastor-reviewer` — Code Reviewer
+- **MUST be run** before creating any PR
+- **SHOULD be run** after completing a logical unit of work (a task, a feature, a fix)
+- Full code review covering architecture compliance + Go/Rust code quality + Helm/proto review
+- Invoke with: "Use the novastor-reviewer agent to review the changes"
+
+### When to Use Which
+| Situation | Agent |
+|-----------|-------|
+| Quick check during implementation | `architecture-compliance` |
+| Before committing a feature | `architecture-compliance` |
+| Before creating a PR | Both: `architecture-compliance` first, then `novastor-reviewer` |
+| After a large refactor | Both |
+| Fixing a bug in one file | `architecture-compliance` (minimum) |
+
+**DO NOT skip these agents.** Architecture drift is the #1 risk in this project. Every shortcut taken in the past led to layers being collapsed, wrong communication protocols, and months of rework.
+
 ## Code Standards
 
 ### Critical Rules
