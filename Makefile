@@ -38,6 +38,7 @@ generate-proto: protoc-gen-go protoc-gen-go-grpc ## Generate Go code from protob
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 		--proto_path=. \
 		api/proto/chunk/chunk.proto \
+		api/proto/dataplane/dataplane.proto \
 		api/proto/metadata/metadata.proto \
 		api/proto/nvme/nvme.proto
 
