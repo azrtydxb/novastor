@@ -84,34 +84,3 @@ func (c *NVMeTargetClient) SetANAState(ctx context.Context, volumeID, anaState s
 	}
 	return nil
 }
-
-// SetupReplicationResult holds the result of a SetupReplication call.
-type SetupReplicationResult struct {
-	ReplicaBdevName string
-	SubsystemNQN    string
-}
-
-// SetupReplication calls the agent's SetupReplication RPC.
-func (c *NVMeTargetClient) SetupReplication(ctx context.Context, volumeID, localBdevName string, remoteTargets []ReplicaTargetInfo, sizeBytes int64) (*SetupReplicationResult, error) {
-	pbTargets := make([]*pb.ReplicaTargetInfo, len(remoteTargets))
-	for i, rt := range remoteTargets {
-		pbTargets[i] = &pb.ReplicaTargetInfo{
-			Address: rt.Address,
-			Port:    rt.Port,
-			Nqn:     rt.NQN,
-		}
-	}
-	resp, err := c.client.SetupReplication(ctx, &pb.SetupReplicationRequest{
-		VolumeId:      volumeID,
-		LocalBdevName: localBdevName,
-		RemoteTargets: pbTargets,
-		SizeBytes:     sizeBytes,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("SetupReplication RPC for volume %s: %w", volumeID, err)
-	}
-	return &SetupReplicationResult{
-		ReplicaBdevName: resp.GetReplicaBdevName(),
-		SubsystemNQN:    resp.GetSubsystemNqn(),
-	}, nil
-}

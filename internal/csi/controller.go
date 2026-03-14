@@ -85,6 +85,10 @@ type PlacementEngine interface {
 
 // AgentTargetClient abstracts NVMe-oF target creation/deletion on agent nodes.
 // When nil, the controller skips NVMe-oF target management (backward compatible).
+//
+// Note: Replication and erasure coding are handled by the Rust dataplane's
+// chunk engine — the presentation layer (NVMe-oF) is thin protocol
+// translation only. The protection scheme is passed in CreateTarget.
 type AgentTargetClient interface {
 	// CreateTarget creates an NVMe-oF target on the agent and returns connection params.
 	CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32) (subsystemNQN, targetAddress, targetPort string, err error)
@@ -92,16 +96,6 @@ type AgentTargetClient interface {
 	DeleteTarget(ctx context.Context, agentAddr string, volumeID string) error
 	// SetANAState changes the ANA state for a volume's NVMe-oF target on the agent.
 	SetANAState(ctx context.Context, agentAddr string, volumeID string, anaState string, anaGroupID uint32) error
-	// SetupReplication configures the owner node to replicate writes to remote targets.
-	// Returns the replica bdev name and updated NQN.
-	SetupReplication(ctx context.Context, agentAddr, volumeID, localBdevName string, remoteTargets []ReplicaTarget, sizeBytes int64) (replicaBdevName, subsystemNQN string, err error)
-}
-
-// ReplicaTarget describes a remote NVMe-oF target for replication.
-type ReplicaTarget struct {
-	Address string
-	Port    string
-	NQN     string
 }
 
 // ControllerServer implements the CSI Controller service.
@@ -537,35 +531,10 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 		ownerNQN := results[0].nqn
 
-		// If there are multiple nodes, set up replication on the owner node.
-		// This creates a composite replica bdev that fans writes to all targets.
-		if len(uniqueNodes) > 1 {
-			ownerBdevName := fmt.Sprintf("novastor_%s", volumeID)
-			var remoteTargets []ReplicaTarget
-			for i := 1; i < len(uniqueNodes); i++ {
-				remoteTargets = append(remoteTargets, ReplicaTarget{
-					Address: results[i].addr,
-					Port:    results[i].port,
-					NQN:     results[i].nqn,
-				})
-			}
-			replicaBdevName, replicaNQN, repErr := cs.agentTarget.SetupReplication(
-				ctx, uniqueNodes[0], volumeID, ownerBdevName, remoteTargets, int64(requiredBytes),
-			)
-			if repErr != nil {
-				logging.L.Warn("SetupReplication failed; volume still usable on owner only",
-					zap.String("volumeID", volumeID),
-					zap.Error(repErr))
-			} else {
-				ownerNQN = replicaNQN
-				logging.L.Info("replication configured on owner node",
-					zap.String("volumeID", volumeID),
-					zap.String("replicaBdev", replicaBdevName),
-					zap.String("nqn", replicaNQN),
-					zap.Int("replicaCount", len(uniqueNodes)),
-				)
-			}
-		}
+		// Replication/EC is handled by the Rust dataplane's chunk engine
+		// (configured via the protection scheme in CreateTarget). The
+		// presentation layer is thin protocol translation only — no
+		// cross-node replication setup needed here.
 
 		logging.L.Info("NVMe-oF targets created",
 			zap.String("volumeID", volumeID),

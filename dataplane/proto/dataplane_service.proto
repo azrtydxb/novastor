@@ -263,10 +263,25 @@ message CreateVolumeRequest {
   string backend_type = 1;
   string name = 2;
   uint64 size_bytes = 3;
+  // Protection scheme for the volume. If not set, defaults to replication
+  // with factor 1 (no redundancy).
+  ProtectionScheme protection = 4;
 }
 message CreateVolumeResponse {
   string name = 1;
   uint64 size_bytes = 2;
+}
+
+// ProtectionScheme describes the data protection for a volume.
+message ProtectionScheme {
+  // "replication" or "erasure_coding"
+  string mode = 1;
+  // For replication: number of copies (e.g. 3 = triple replication).
+  uint32 replication_factor = 2;
+  // For erasure coding: number of data shards (e.g. 4).
+  uint32 data_shards = 3;
+  // For erasure coding: number of parity shards (e.g. 2).
+  uint32 parity_shards = 4;
 }
 
 message DeleteVolumeRequest {

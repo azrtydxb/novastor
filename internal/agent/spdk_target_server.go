@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -12,7 +11,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	dppb "github.com/azrtydxb/novastor/api/proto/dataplane"
 	pb "github.com/azrtydxb/novastor/api/proto/nvme"
 	"github.com/azrtydxb/novastor/internal/dataplane"
 	"github.com/azrtydxb/novastor/internal/logging"
@@ -256,147 +254,4 @@ func (s *SPDKTargetServer) SetANAState(ctx context.Context, req *pb.SetANAStateR
 	)
 
 	return &pb.SetANAStateResponse{}, nil
-}
-
-// SetupReplication configures the owner node to replicate writes to remote
-// replica targets. It:
-// 1. Connects as NVMe-oF initiator to each remote target
-// 2. Creates a replica bdev combining local chunk bdev + remote initiator bdevs
-// 3. Tears down the simple NVMe-oF target
-// 4. Re-exports using the replica bdev as the backing device
-//
-// After this, all writes to this volume's NVMe-oF target are fanned out
-// to all replicas with majority quorum by the Rust dataplane's replica bdev.
-func (s *SPDKTargetServer) SetupReplication(ctx context.Context, req *pb.SetupReplicationRequest) (*pb.SetupReplicationResponse, error) {
-	volumeID := req.GetVolumeId()
-	if volumeID == "" {
-		return nil, status.Error(codes.InvalidArgument, "volume_id is required")
-	}
-	localBdevName := req.GetLocalBdevName()
-	if localBdevName == "" {
-		return nil, status.Error(codes.InvalidArgument, "local_bdev_name is required")
-	}
-	remoteTargets := req.GetRemoteTargets()
-	if len(remoteTargets) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "at least one remote target is required")
-	}
-
-	logging.L.Info("spdk target: setting up replication",
-		zap.String("volumeID", volumeID),
-		zap.String("localBdev", localBdevName),
-		zap.Int("remoteCount", len(remoteTargets)),
-	)
-
-	// Step 1: Connect as NVMe-oF initiator to each remote replica target.
-	var connectedBdevs []string
-	var connectedNQNs []string
-	for _, rt := range remoteTargets {
-		_, err := strconv.ParseUint(rt.GetPort(), 10, 16)
-		if err != nil {
-			// Clean up already connected initiators.
-			for _, nqn := range connectedNQNs {
-				_ = s.dpClient.DisconnectInitiator(nqn)
-			}
-			return nil, status.Errorf(codes.InvalidArgument, "invalid port %q for remote target %s: %v", rt.GetPort(), rt.GetAddress(), err)
-		}
-
-		remoteBdev, err := s.dpClient.ConnectInitiator(rt.GetAddress(), rt.GetPort(), rt.GetNqn())
-		if err != nil {
-			logging.L.Error("spdk target: failed to connect initiator to remote replica",
-				zap.String("volumeID", volumeID),
-				zap.String("remoteAddr", rt.GetAddress()),
-				zap.Error(err),
-			)
-			// Clean up already connected initiators.
-			for _, nqn := range connectedNQNs {
-				_ = s.dpClient.DisconnectInitiator(nqn)
-			}
-			return nil, status.Errorf(codes.Internal, "connecting initiator to %s for volume %s: %v", rt.GetAddress(), volumeID, err)
-		}
-		connectedBdevs = append(connectedBdevs, remoteBdev)
-		connectedNQNs = append(connectedNQNs, rt.GetNqn())
-		logging.L.Info("spdk target: connected initiator to remote replica",
-			zap.String("volumeID", volumeID),
-			zap.String("remoteAddr", rt.GetAddress()),
-			zap.String("remoteBdev", remoteBdev),
-		)
-	}
-
-	// Step 2: Build replica target list (local + remote bdevs).
-	replicaTargets := make([]*dppb.ReplicaTarget, 0, 1+len(connectedBdevs))
-
-	// Local chunk bdev — marked as local for read preference.
-	replicaTargets = append(replicaTargets, &dppb.ReplicaTarget{
-		BdevName: localBdevName,
-		IsLocal:  true,
-	})
-
-	// Remote initiator bdevs.
-	for _, remoteBdev := range connectedBdevs {
-		replicaTargets = append(replicaTargets, &dppb.ReplicaTarget{
-			BdevName: remoteBdev,
-			IsLocal:  false,
-		})
-	}
-
-	// Step 3: Create the composite replica bdev.
-	sizeBytes := req.GetSizeBytes()
-	replicaBdevName, err := s.dpClient.CreateReplicaBdev(volumeID, replicaTargets, uint64(sizeBytes), "local_first")
-	if err != nil {
-		logging.L.Error("spdk target: failed to create replica bdev",
-			zap.String("volumeID", volumeID),
-			zap.Error(err),
-		)
-		for _, nqn := range connectedNQNs {
-			_ = s.dpClient.DisconnectInitiator(nqn)
-		}
-		return nil, status.Errorf(codes.Internal, "creating replica bdev for %s: %v", volumeID, err)
-	}
-	logging.L.Info("spdk target: replica bdev created",
-		zap.String("volumeID", volumeID),
-		zap.String("replicaBdev", replicaBdevName),
-		zap.Int("totalReplicas", len(replicaTargets)),
-	)
-
-	// Step 4: Tear down the old NVMe-oF target backed by the simple chunk bdev.
-	if err := s.dpClient.DeleteNvmfTarget(volumeID); err != nil {
-		logging.L.Warn("spdk target: failed to delete old NVMe-oF target (may not exist)",
-			zap.String("volumeID", volumeID),
-			zap.Error(err),
-		)
-	}
-
-	// Step 5: Re-export with the replica bdev as the backing device.
-	nqn, err := s.dpClient.CreateNvmfTarget(volumeID, replicaBdevName, s.hostIP, spdkTargetPort, "", 0)
-	if err != nil {
-		logging.L.Error("spdk target: failed to re-export with replica bdev, restoring original target",
-			zap.String("volumeID", volumeID),
-			zap.Error(err),
-		)
-		// Rollback: recreate the original target with the chunk bdev so the volume remains accessible.
-		if _, restoreErr := s.dpClient.CreateNvmfTarget(volumeID, localBdevName, s.hostIP, spdkTargetPort, "", 0); restoreErr != nil {
-			logging.L.Error("spdk target: failed to restore original NVMe-oF target",
-				zap.String("volumeID", volumeID),
-				zap.Error(restoreErr),
-			)
-		} else {
-			logging.L.Info("spdk target: restored original NVMe-oF target after replication failure",
-				zap.String("volumeID", volumeID),
-				zap.String("bdev", localBdevName),
-			)
-		}
-		return nil, status.Errorf(codes.Internal, "re-exporting replica bdev for %s: %v", volumeID, err)
-	}
-
-	logging.L.Info("spdk target: replication setup complete",
-		zap.String("volumeID", volumeID),
-		zap.String("nqn", nqn),
-		zap.String("replicaBdev", replicaBdevName),
-		zap.Int("totalReplicas", len(replicaTargets)),
-	)
-
-	return &pb.SetupReplicationResponse{
-		ReplicaBdevName: replicaBdevName,
-		SubsystemNqn:    nqn,
-	}, nil
 }

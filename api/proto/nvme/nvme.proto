@@ -7,13 +7,16 @@ option go_package = "github.com/azrtydxb/novastor/api/proto/nvme";
 // NVMeTargetService manages NVMe-oF/TCP targets on storage agent nodes.
 // The CSI controller calls this service during CreateVolume/DeleteVolume
 // to create and tear down backing block devices exposed via nvmet configfs.
+//
+// Replication and erasure coding are handled by the Rust dataplane's chunk
+// engine — the presentation layer (NVMe-oF) is thin protocol translation only.
 service NVMeTargetService {
-  // CreateTarget creates a sparse backing file, attaches a loop device,
-  // and exposes it as an NVMe-oF/TCP target via nvmet configfs.
-  // Returns the subsystem NQN, listen address, and port for the initiator.
+  // CreateTarget creates a chunk-backed volume and exposes it as an
+  // NVMe-oF/TCP target via the data-plane. The volume's protection scheme
+  // (replication or EC) is configured in the chunk engine at creation time.
   rpc CreateTarget(CreateTargetRequest) returns (CreateTargetResponse);
 
-  // DeleteTarget removes the NVMe-oF/TCP target, detaches the loop device,
+  // DeleteTarget removes the NVMe-oF target, detaches the loop device,
   // and deletes the sparse backing file.
   rpc DeleteTarget(DeleteTargetRequest) returns (DeleteTargetResponse);
 
@@ -21,12 +24,6 @@ service NVMeTargetService {
   // volume's NVMe-oF target. Used during active-passive failover to transition
   // a target between optimized (active) and inaccessible (passive) states.
   rpc SetANAState(SetANAStateRequest) returns (SetANAStateResponse);
-
-  // SetupReplication configures the owner node to replicate writes to remote
-  // replica targets. The owner connects as NVMe-oF initiator to each remote
-  // target, creates a replica bdev that fans out writes with majority quorum,
-  // and re-exports the replica bdev as the NVMe-oF target for this volume.
-  rpc SetupReplication(SetupReplicationRequest) returns (SetupReplicationResponse);
 }
 
 message CreateTargetRequest {
@@ -45,6 +42,24 @@ message CreateTargetRequest {
   // ana_group_id is the ANA group identifier for this target. All targets
   // sharing the same group ID transition state together during failover.
   uint32 ana_group_id = 4;
+
+  // protection configures the data protection scheme for this volume.
+  // If not set, defaults to replication with factor 1.
+  VolumeProtection protection = 5;
+}
+
+// VolumeProtection describes the data protection scheme for a volume.
+// Replication and erasure coding are handled by the chunk engine in the
+// Rust dataplane — the presentation layer does not participate in replication.
+message VolumeProtection {
+  // "replication" or "erasure_coding"
+  string mode = 1;
+  // For replication: number of copies (e.g. 3).
+  uint32 replication_factor = 2;
+  // For erasure coding: number of data shards (e.g. 4).
+  uint32 data_shards = 3;
+  // For erasure coding: number of parity shards (e.g. 2).
+  uint32 parity_shards = 4;
 }
 
 message CreateTargetResponse {
@@ -79,33 +94,3 @@ message SetANAStateRequest {
 }
 
 message SetANAStateResponse {}
-
-// ReplicaTargetInfo describes a remote NVMe-oF target to replicate to.
-message ReplicaTargetInfo {
-  // address is the IP address of the remote agent hosting the replica.
-  string address = 1;
-  // port is the NVMe-oF TCP port (e.g. "4430").
-  string port = 2;
-  // nqn is the NVMe Qualified Name of the remote subsystem.
-  string nqn = 3;
-}
-
-message SetupReplicationRequest {
-  // volume_id identifies the volume to configure replication for.
-  string volume_id = 1;
-  // local_bdev_name is the SPDK bdev name for the local chunk volume
-  // (e.g. "novastor_<volume_id>").
-  string local_bdev_name = 2;
-  // remote_targets is the list of remote NVMe-oF targets to replicate to.
-  repeated ReplicaTargetInfo remote_targets = 3;
-  // size_bytes is the volume size, required for SPDK bdev registration of
-  // the replica bdev so it can be exported as an NVMe-oF namespace.
-  int64 size_bytes = 4;
-}
-
-message SetupReplicationResponse {
-  // replica_bdev_name is the name of the composite replica bdev.
-  string replica_bdev_name = 1;
-  // subsystem_nqn is the NQN of the re-exported NVMe-oF target.
-  string subsystem_nqn = 2;
-}
