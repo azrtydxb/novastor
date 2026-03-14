@@ -499,6 +499,15 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			}
 		}
 
+		// Until cross-node chunk replication is implemented, only create
+		// the NVMe-oF target on the owner node.  Non-owner dataplanes
+		// have empty local chunk volumes and cannot serve I/O, which
+		// causes kernel NVMe multipath to route reads to dead paths and
+		// triggers ext4 I/O errors.
+		if len(uniqueNodes) > 1 {
+			uniqueNodes = uniqueNodes[:1]
+		}
+
 		type targetResult struct {
 			nqn  string
 			addr string
