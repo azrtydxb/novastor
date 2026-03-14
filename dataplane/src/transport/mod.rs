@@ -9,6 +9,10 @@ pub mod chunk_proto {
     tonic::include_proto!("novastor.chunk");
 }
 
+pub mod dataplane_proto {
+    tonic::include_proto!("novastor.dataplane");
+}
+
 pub mod raft_proto {
     tonic::include_proto!("novastor.raft");
 }

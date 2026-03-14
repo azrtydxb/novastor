@@ -7,7 +7,11 @@ fn main() {
         .build_server(true)
         .build_client(true)
         .compile_protos(
-            &["proto/chunk_service.proto", "proto/raft_service.proto"],
+            &[
+                "proto/chunk_service.proto",
+                "proto/dataplane_service.proto",
+                "proto/raft_service.proto",
+            ],
             &["proto/"],
         )
         .expect("failed to compile proto files");

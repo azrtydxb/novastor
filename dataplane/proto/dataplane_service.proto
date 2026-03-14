@@ -1,0 +1,292 @@
+syntax = "proto3";
+package novastor.dataplane;
+
+// DataplaneService is the single gRPC API between the Go management agent
+// and the Rust SPDK dataplane. It replaces ALL JSON-RPC communication.
+service DataplaneService {
+  // --- Bdev Management ---
+  rpc CreateAioBdev(CreateAioBdevRequest) returns (BdevInfo);
+  rpc CreateMallocBdev(CreateMallocBdevRequest) returns (BdevInfo);
+  rpc CreateLvolStore(CreateLvolStoreRequest) returns (LvolStoreInfo);
+  rpc CreateLvol(CreateLvolRequest) returns (BdevInfo);
+  rpc DeleteBdev(DeleteBdevRequest) returns (DeleteBdevResponse);
+  rpc ListBdevs(ListBdevsRequest) returns (ListBdevsResponse);
+  rpc GetBdevInfo(GetBdevInfoRequest) returns (BdevInfo);
+  rpc ListLvolStores(ListLvolStoresRequest) returns (ListLvolStoresResponse);
+
+  // --- NVMe-oF Target Management ---
+  rpc InitTransport(InitTransportRequest) returns (InitTransportResponse);
+  rpc CreateNvmfTarget(CreateNvmfTargetRequest) returns (NvmfTargetInfo);
+  rpc DeleteNvmfTarget(DeleteNvmfTargetRequest) returns (DeleteNvmfTargetResponse);
+  rpc SetAnaState(SetAnaStateRequest) returns (SetAnaStateResponse);
+  rpc GetAnaState(GetAnaStateRequest) returns (GetAnaStateResponse);
+  rpc ListSubsystems(ListSubsystemsRequest) returns (ListSubsystemsResponse);
+  rpc ExportBdev(ExportBdevRequest) returns (ExportBdevResponse);
+
+  // --- NVMe-oF Initiator ---
+  rpc ConnectInitiator(ConnectInitiatorRequest) returns (ConnectInitiatorResponse);
+  rpc DisconnectInitiator(DisconnectInitiatorRequest) returns (DisconnectInitiatorResponse);
+
+  // --- Replica Bdev ---
+  rpc CreateReplicaBdev(CreateReplicaBdevRequest) returns (CreateReplicaBdevResponse);
+  rpc ReplicaStatus(ReplicaStatusRequest) returns (ReplicaStatusResponse);
+
+  // --- Chunk Store ---
+  rpc InitChunkStore(InitChunkStoreRequest) returns (InitChunkStoreResponse);
+  rpc ChunkStoreStats(ChunkStoreStatsRequest) returns (ChunkStoreStatsResponse);
+  rpc WriteChunk(stream WriteChunkRequest) returns (WriteChunkResponse);
+  rpc ReadChunk(ReadChunkRequest) returns (stream ReadChunkResponse);
+  rpc DeleteChunk(DeleteChunkRequest) returns (DeleteChunkResponse);
+  rpc ChunkExists(ChunkExistsRequest) returns (ChunkExistsResponse);
+  rpc ListChunks(ListChunksRequest) returns (ListChunksResponse);
+  rpc GarbageCollect(GarbageCollectRequest) returns (GarbageCollectResponse);
+
+  // --- Backend Management ---
+  rpc InitBackend(InitBackendRequest) returns (InitBackendResponse);
+  rpc CreateVolume(CreateVolumeRequest) returns (CreateVolumeResponse);
+  rpc DeleteVolume(DeleteVolumeRequest) returns (DeleteVolumeResponse);
+
+  // --- Health & Fencing ---
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+// Bdev messages
+message CreateAioBdevRequest {
+  string name = 1;
+  string device_path = 2;
+  uint32 block_size = 3;
+}
+
+message CreateMallocBdevRequest {
+  string name = 1;
+  uint64 size_mb = 2;
+  uint32 block_size = 3;
+}
+
+message BdevInfo {
+  string name = 1;
+  string device_path = 2;
+  uint32 block_size = 3;
+  uint64 num_blocks = 4;
+  string bdev_type = 5;
+  uint64 size_bytes = 6;
+}
+
+message CreateLvolStoreRequest {
+  string bdev_name = 1;
+  string lvs_name = 2;
+  uint32 cluster_size = 3;
+}
+
+message LvolStoreInfo {
+  string uuid = 1;
+  string name = 2;
+  string base_bdev = 3;
+  uint32 cluster_size = 4;
+  uint64 total_clusters = 5;
+  uint64 free_clusters = 6;
+}
+
+message CreateLvolRequest {
+  string lvs_name = 1;
+  string lvol_name = 2;
+  uint64 size_bytes = 3;
+  bool thin_provision = 4;
+}
+
+message DeleteBdevRequest { string name = 1; }
+message DeleteBdevResponse {}
+message ListBdevsRequest {}
+message ListBdevsResponse { repeated BdevInfo bdevs = 1; }
+message GetBdevInfoRequest { string name = 1; }
+message ListLvolStoresRequest {}
+message ListLvolStoresResponse { repeated LvolStoreInfo stores = 1; }
+
+// NVMe-oF Target messages
+message InitTransportRequest {}
+message InitTransportResponse {}
+
+message CreateNvmfTargetRequest {
+  string volume_id = 1;
+  string bdev_name = 2;
+  string listen_address = 3;
+  uint32 listen_port = 4;
+  string ana_state = 5;
+  uint32 ana_group_id = 6;
+}
+
+message NvmfTargetInfo {
+  string nqn = 1;
+  string bdev_name = 2;
+  string listen_address = 3;
+  uint32 listen_port = 4;
+  uint32 ana_group_id = 5;
+  string ana_state = 6;
+}
+
+message DeleteNvmfTargetRequest { string volume_id = 1; }
+message DeleteNvmfTargetResponse {}
+
+message SetAnaStateRequest {
+  string volume_id = 1;
+  string ana_state = 2;
+  uint32 ana_group_id = 3;
+}
+message SetAnaStateResponse {}
+
+message GetAnaStateRequest { string volume_id = 1; }
+message GetAnaStateResponse {
+  string ana_state = 1;
+  uint32 ana_group_id = 2;
+}
+
+message ListSubsystemsRequest {}
+message SubsystemInfo {
+  string nqn = 1;
+  string bdev_name = 2;
+  string listen_address = 3;
+  uint32 listen_port = 4;
+  string ana_state = 5;
+}
+message ListSubsystemsResponse { repeated SubsystemInfo subsystems = 1; }
+
+message ExportBdevRequest {
+  string nqn = 1;
+  string bdev_name = 2;
+  uint32 nsid = 3;
+}
+message ExportBdevResponse { uint32 nsid = 1; }
+
+// NVMe-oF Initiator messages
+message ConnectInitiatorRequest {
+  string address = 1;
+  string port = 2;
+  string nqn = 3;
+}
+message ConnectInitiatorResponse {
+  string bdev_name = 1;
+  string nqn = 2;
+}
+
+message DisconnectInitiatorRequest { string nqn = 1; }
+message DisconnectInitiatorResponse {}
+
+// Replica Bdev messages
+message ReplicaTarget {
+  string bdev_name = 1;
+  bool is_local = 2;
+}
+message CreateReplicaBdevRequest {
+  string volume_id = 1;
+  repeated ReplicaTarget targets = 2;
+  uint64 size_bytes = 3;
+  string read_policy = 4;
+}
+message CreateReplicaBdevResponse { string bdev_name = 1; }
+
+message ReplicaStatusRequest { string volume_id = 1; }
+message ReplicaStatusResponse {
+  string volume_id = 1;
+  string bdev_name = 2;
+  uint32 num_targets = 3;
+  string status = 4;
+}
+
+// Chunk Store messages
+message InitChunkStoreRequest { string bdev_name = 1; }
+message InitChunkStoreResponse {
+  uint64 total_slots = 1;
+  uint64 used_slots = 2;
+  uint64 chunk_size = 3;
+}
+
+message ChunkStoreStatsRequest { string bdev_name = 1; }
+message ChunkStoreStatsResponse {
+  uint64 total_slots = 1;
+  uint64 used_slots = 2;
+  uint64 free_slots = 3;
+  uint64 chunk_size = 4;
+}
+
+message WriteChunkRequest {
+  string chunk_id = 1;
+  bytes data = 2;
+  string bdev_name = 3;
+}
+message WriteChunkResponse {
+  string chunk_id = 1;
+  int64 bytes_written = 2;
+}
+
+message ReadChunkRequest {
+  string chunk_id = 1;
+  string bdev_name = 2;
+}
+message ReadChunkResponse {
+  string chunk_id = 1;
+  bytes data = 2;
+}
+
+message DeleteChunkRequest {
+  string chunk_id = 1;
+  string bdev_name = 2;
+}
+message DeleteChunkResponse {}
+
+message ChunkExistsRequest {
+  string chunk_id = 1;
+  string bdev_name = 2;
+}
+message ChunkExistsResponse { bool exists = 1; }
+
+message ListChunksRequest { string bdev_name = 1; }
+message ListChunksResponse { repeated string chunk_ids = 1; }
+
+message GarbageCollectRequest {
+  string bdev_name = 1;
+  repeated string live_chunk_ids = 2;
+}
+message GarbageCollectResponse {
+  uint32 deleted = 1;
+  uint32 errors = 2;
+}
+
+// Backend Management messages
+message InitBackendRequest {
+  string backend_type = 1;
+  string config_json = 2;
+}
+message InitBackendResponse {}
+
+message CreateVolumeRequest {
+  string backend_type = 1;
+  string name = 2;
+  uint64 size_bytes = 3;
+}
+message CreateVolumeResponse {
+  string name = 1;
+  uint64 size_bytes = 2;
+}
+
+message DeleteVolumeRequest {
+  string backend_type = 1;
+  string name = 2;
+}
+message DeleteVolumeResponse {}
+
+// Health & Fencing messages
+message GetVersionRequest {}
+message GetVersionResponse {
+  string version = 1;
+  string commit = 2;
+}
+
+message HeartbeatRequest {
+  string node_id = 1;
+  int64 timestamp = 2;
+}
+message HeartbeatResponse {
+  bool fenced = 1;
+  string status = 2;
+}

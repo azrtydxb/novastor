@@ -1,12 +1,16 @@
-//! gRPC server — binds ChunkService and RaftService to a TCP listener.
+//! gRPC server — binds ChunkService, DataplaneService, and RaftService to a TCP listener.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::backend::chunk_store::ChunkStore;
 use crate::error::Result;
+use crate::spdk::bdev_manager::BdevManager;
+use crate::spdk::nvmf_manager::NvmfManager;
 use crate::transport::chunk_proto::chunk_service_server::ChunkServiceServer;
 use crate::transport::chunk_service::ChunkServiceImpl;
+use crate::transport::dataplane_proto::dataplane_service_server::DataplaneServiceServer;
+use crate::transport::dataplane_service::DataplaneServiceImpl;
 
 /// Configuration for the gRPC inter-node server.
 pub struct GrpcServerConfig {
@@ -42,6 +46,8 @@ impl GrpcServerHandle {
 pub struct GrpcServer {
     config: GrpcServerConfig,
     chunk_store: Arc<dyn ChunkStore>,
+    bdev_manager: Option<Arc<BdevManager>>,
+    nvmf_manager: Option<Arc<NvmfManager>>,
 }
 
 impl GrpcServer {
@@ -49,7 +55,21 @@ impl GrpcServer {
         Self {
             config,
             chunk_store,
+            bdev_manager: None,
+            nvmf_manager: None,
         }
+    }
+
+    /// Set the BdevManager and NvmfManager for the DataplaneService.
+    /// When both are set, the DataplaneService will be registered on the server.
+    pub fn with_dataplane(
+        mut self,
+        bdev_manager: Arc<BdevManager>,
+        nvmf_manager: Arc<NvmfManager>,
+    ) -> Self {
+        self.bdev_manager = Some(bdev_manager);
+        self.nvmf_manager = Some(nvmf_manager);
+        self
     }
 
     /// Start the gRPC server. Returns a handle with the bound address and shutdown control.
@@ -72,12 +92,28 @@ impl GrpcServer {
 
         log::info!("gRPC server listening on {}", bound_addr);
 
+        let bdev_mgr = self.bdev_manager.clone();
+        let nvmf_mgr = self.nvmf_manager.clone();
+
         let task = tokio::spawn(async move {
-            tonic::transport::Server::builder()
-                .add_service(chunk_server)
-                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
-                .await
-                .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
+            let mut builder = tonic::transport::Server::builder();
+            let router = builder.add_service(chunk_server);
+
+            // Register DataplaneService if managers are available.
+            if let (Some(bdev_mgr), Some(nvmf_mgr)) = (bdev_mgr, nvmf_mgr) {
+                let dp_svc = DataplaneServiceImpl::new(bdev_mgr, nvmf_mgr);
+                let dp_server = DataplaneServiceServer::new(dp_svc);
+                router
+                    .add_service(dp_server)
+                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                    .await
+                    .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
+            } else {
+                router
+                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                    .await
+                    .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
+            }
         });
 
         Ok(GrpcServerHandle {
