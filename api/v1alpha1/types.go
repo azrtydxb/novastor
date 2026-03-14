@@ -25,10 +25,38 @@ type StoragePool struct {
 type StoragePoolSpec struct {
 	// NodeSelector selects which nodes belong to this pool.
 	NodeSelector *metav1.LabelSelector `json:"nodeSelector,omitempty"`
+
+	// BackendType selects the storage backend for this pool.
+	// - "file": File on existing mounted filesystem → SPDK AIO bdev
+	// - "lvm": SPDK lvol store on unbound NVMe device (thin provisioning, snapshots)
+	// - "raw": Direct SPDK NVMe bdev on unbound NVMe device (highest performance)
+	// All backends produce SPDK bdevs consumed by the chunk engine.
+	// +kubebuilder:validation:Enum=file;lvm;raw
+	// +kubebuilder:default=lvm
+	BackendType string `json:"backendType"`
+
 	// DeviceFilter specifies which devices on selected nodes to use.
+	// For "raw" and "lvm" backends, this selects NVMe devices to unbind and use.
+	// For "file" backend, this is ignored (use FileBackend instead).
 	DeviceFilter *DeviceFilter `json:"deviceFilter,omitempty"`
+
+	// FileBackend configures the file backend. Only used when backendType is "file".
+	FileBackend *FileBackendSpec `json:"fileBackend,omitempty"`
+
 	// DataProtection configures how data is protected in this pool.
 	DataProtection DataProtectionSpec `json:"dataProtection"`
+}
+
+// FileBackendSpec configures the file backend (directory on existing filesystem).
+type FileBackendSpec struct {
+	// Path is the directory on each node where backing files are stored.
+	// The directory must exist and be on a mounted filesystem.
+	// +kubebuilder:default="/var/lib/novastor/file"
+	Path string `json:"path"`
+
+	// MaxCapacityBytes is the maximum size of the backing file per node.
+	// Defaults to 80% of available filesystem space if not set.
+	MaxCapacityBytes *int64 `json:"maxCapacityBytes,omitempty"`
 }
 
 type DeviceFilter struct {

@@ -75,3 +75,9 @@ void vbdev_lvol_destroy(struct spdk_lvol *lvol,
 struct spdk_bdev *novastor_create_uring_bdev(const char *name,
                                               const char *filename,
                                               uint32_t block_size);
+
+/* Forward declaration for NVMe bdev attach.
+ * Uses the bdev_nvme module's attach controller API (spdk/bdev_nvme.h).
+ * The actual definition is in nvme_wrapper.c. */
+int novastor_attach_nvme_bdev(const char *controller_name,
+                               const char *pcie_addr);

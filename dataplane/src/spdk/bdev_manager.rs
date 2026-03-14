@@ -1,6 +1,6 @@
 //! SPDK bdev management — AIO, malloc, blobstore lvols.
 
-use crate::config::{BlobstoreConfig, LocalBdevConfig, LvolConfig};
+use crate::config::{BlobstoreConfig, LocalBdevConfig, LvolConfig, NvmeBdevConfig};
 use crate::error::{DataPlaneError, Result};
 use crate::spdk::reactor_dispatch;
 use log::info;
@@ -287,6 +287,55 @@ impl BdevManager {
             store.free_clusters = store.free_clusters.saturating_sub(clusters_used);
         }
 
+        Ok(info)
+    }
+
+    /// Attach an NVMe device as a direct SPDK bdev.
+    ///
+    /// The device is identified by its PCIe BDF address (e.g., "0000:00:04.0").
+    /// SPDK creates a bdev named `<controller_name>n<ns>` for each namespace.
+    /// The primary bdev (namespace 1) is returned.
+    pub fn attach_nvme_bdev(&self, config: &NvmeBdevConfig) -> Result<BdevInfo> {
+        info!(
+            "attaching NVMe device: name={}, pcie={}",
+            config.name, config.pcie_addr
+        );
+
+        let name = config.name.clone();
+        let pcie_addr = config.pcie_addr.clone();
+
+        reactor_dispatch::dispatch_sync(move || -> Result<()> {
+            let ctrl_name = std::ffi::CString::new(name.as_str())
+                .map_err(|e| DataPlaneError::BdevError(format!("invalid controller name: {e}")))?;
+            let pcie_c = std::ffi::CString::new(pcie_addr.as_str())
+                .map_err(|e| DataPlaneError::BdevError(format!("invalid PCIe address: {e}")))?;
+
+            unsafe {
+                let rc = ffi::novastor_attach_nvme_bdev(
+                    ctrl_name.as_ptr() as *const c_char,
+                    pcie_c.as_ptr() as *const c_char,
+                );
+                if rc != 0 {
+                    return Err(DataPlaneError::BdevError(format!(
+                        "novastor_attach_nvme_bdev failed: rc={rc}"
+                    )));
+                }
+            }
+            Ok(())
+        })?;
+
+        // The NVMe bdev is named <controller_name>n1 by SPDK convention.
+        let bdev_name = format!("{}n1", config.name);
+        let (num_blocks, block_size) = self.query_bdev_size(&bdev_name)?;
+
+        let info = BdevInfo {
+            name: bdev_name.clone(),
+            device_path: config.pcie_addr.clone(),
+            block_size,
+            num_blocks,
+            bdev_type: "nvme".to_string(),
+        };
+        self.bdevs.lock().unwrap().insert(bdev_name, info.clone());
         Ok(info)
     }
 

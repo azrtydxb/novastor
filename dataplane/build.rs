@@ -99,12 +99,17 @@ fn main() {
         );
     }
 
-    // Compile the C uring wrapper.
+    // Compile the C wrappers (uring + NVMe).
     let spdk_include = format!("{}/include", spdk_dir);
     cc::Build::new()
         .file("src/uring_wrapper.c")
         .include(&spdk_include)
         .compile("uring_wrapper");
+
+    cc::Build::new()
+        .file("src/nvme_wrapper.c")
+        .include(&spdk_include)
+        .compile("nvme_wrapper");
 
     let spdk_include = format!("{}/include", spdk_dir);
     if PathBuf::from(&spdk_include).exists() {
@@ -131,6 +136,7 @@ fn main() {
             .allowlist_function("spdk_nvme_.*")
             .allowlist_function("create_aio_bdev")
             .allowlist_function("novastor_create_uring_bdev")
+            .allowlist_function("novastor_attach_nvme_bdev")
             .allowlist_function("bdev_aio_delete")
             .allowlist_function("create_malloc_disk")
             .allowlist_function("delete_malloc_disk")

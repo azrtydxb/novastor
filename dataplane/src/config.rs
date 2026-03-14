@@ -79,6 +79,19 @@ pub struct NvmfInitiatorConfig {
     pub bdev_name: String,
 }
 
+/// Configuration for attaching an NVMe device as a direct SPDK bdev.
+///
+/// Used by the Raw backend to attach unbound NVMe devices. The device is
+/// identified by its PCIe BDF address (e.g., "0000:00:04.0") or NVMe-oF
+/// transport address.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NvmeBdevConfig {
+    /// SPDK bdev name (controller name prefix; bdevs named `<name>n1`, etc.).
+    pub name: String,
+    /// PCIe BDF address (e.g., "0000:00:04.0") for local NVMe devices.
+    pub pcie_addr: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplicaBdevConfig {
     pub volume_id: String,

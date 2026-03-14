@@ -1,12 +1,16 @@
-//! Raw Disk backend — direct block I/O on SPDK bdevs.
+//! Raw Disk backend — direct block I/O on NVMe bdevs.
 //!
-//! The simplest backend: a volume is a 1:1 mapping to an SPDK bdev (AIO or
-//! NVMe). Reads and writes go directly to the device at the requested offset.
+//! The Raw backend attaches unbound NVMe devices directly as SPDK NVMe bdevs.
+//! No filesystem is created on the device. Volumes are 1:1 mappings to the
+//! underlying NVMe namespace.
 //!
-//! Production volumes use io_uring (AIO) bdevs backed by real block devices or
-//! files on the host filesystem. Snapshots use full block copies.
+//! This is the highest-performance backend: zero overhead from filesystems or
+//! logical volume management. Suitable for dedicated NVMe devices that should
+//! be used entirely by NovaStor.
+//!
+//! Snapshots use full block copies between bdevs.
 
-use crate::config::LocalBdevConfig;
+use crate::config::{LocalBdevConfig, NvmeBdevConfig};
 use crate::error::{DataPlaneError, Result};
 use crate::spdk::bdev_manager::BdevManager;
 use crate::spdk::reactor_dispatch;
@@ -17,24 +21,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::traits::*;
 
-/// Directory where raw disk volume files are stored.
-/// Each volume gets a sparse file at `<base_path>/<volume_name>.raw`.
-const RAW_VOLUME_BASE_PATH: &str = "/var/lib/novastor/raw";
-
-/// Global bdev manager for creating AIO bdevs.
+/// Global bdev manager for creating/managing NVMe bdevs.
 static RAW_BDEV_MANAGER: OnceLock<BdevManager> = OnceLock::new();
 
 fn bdev_manager() -> &'static BdevManager {
     RAW_BDEV_MANAGER.get_or_init(BdevManager::new)
 }
 
-/// Tracks a raw disk volume's metadata.
+/// Tracks a raw NVMe volume's metadata.
 struct RawVolume {
     name: String,
-    /// The underlying SPDK bdev name.
+    /// The underlying SPDK bdev name (e.g., "nvme0n1").
     bdev_name: String,
-    /// Path to the backing file on the host filesystem.
-    device_path: String,
+    /// PCIe BDF address of the NVMe device.
+    pcie_addr: String,
     size_bytes: u64,
     block_size: u32,
     num_blocks: u64,
@@ -42,15 +42,19 @@ struct RawVolume {
     parent_snapshot: Option<String>,
 }
 
-/// Tracks a snapshot.
+/// Tracks a snapshot (backed by an AIO bdev for the full copy).
 struct RawSnapshot {
     name: String,
     source_volume: String,
     bdev_name: String,
-    device_path: String,
+    /// Snapshot backing file path (full copies stored as files).
+    backing_file: String,
     size_bytes: u64,
     created_at: u64,
 }
+
+/// Directory where snapshot backing files are stored.
+const SNAPSHOT_BASE_PATH: &str = "/var/lib/novastor/raw-snapshots";
 
 pub struct RawDiskBackend {
     volumes: Mutex<HashMap<String, RawVolume>>,
@@ -109,71 +113,54 @@ impl StorageBackend for RawDiskBackend {
     fn create_volume(&self, name: &str, size_bytes: u64, _thin: bool) -> Result<VolumeInfo> {
         info!("raw_disk: creating volume '{}' ({}B)", name, size_bytes);
 
-        let bdev_name = format!("raw_{}", name);
-        let block_size: u32 = 512;
-        let num_blocks = size_bytes / block_size as u64;
-        let device_path = format!("{}/{}.raw", RAW_VOLUME_BASE_PATH, name);
+        // The volume name must include a PCIe address in the format
+        // "<name>@<pcie_addr>" (e.g., "vol1@0000:00:04.0"). The Go agent
+        // passes this after discovering available NVMe devices.
+        let (vol_name, pcie_addr) = if let Some(idx) = name.find('@') {
+            (&name[..idx], &name[idx + 1..])
+        } else {
+            return Err(DataPlaneError::BdevError(format!(
+                "raw_disk: volume name must be '<name>@<pcie_addr>', got '{}'",
+                name
+            )));
+        };
 
-        // Ensure the base directory exists.
-        std::fs::create_dir_all(RAW_VOLUME_BASE_PATH).map_err(|e| {
-            DataPlaneError::BdevError(format!(
-                "failed to create raw volume directory {}: {}",
-                RAW_VOLUME_BASE_PATH, e
-            ))
-        })?;
+        let controller_name = format!("raw_{}", vol_name);
 
-        // Create a sparse file of the requested size for the volume backing.
-        {
-            let f = std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(false)
-                .open(&device_path)
-                .map_err(|e| {
-                    DataPlaneError::BdevError(format!(
-                        "failed to create backing file {}: {}",
-                        device_path, e
-                    ))
-                })?;
-            f.set_len(size_bytes).map_err(|e| {
-                DataPlaneError::BdevError(format!(
-                    "failed to set size on backing file {}: {}",
-                    device_path, e
-                ))
-            })?;
+        // Attach the NVMe device via SPDK.
+        let config = NvmeBdevConfig {
+            name: controller_name.clone(),
+            pcie_addr: pcie_addr.to_string(),
+        };
+        let bdev_info = bdev_manager().attach_nvme_bdev(&config)?;
+
+        let actual_size = bdev_info.num_blocks * bdev_info.block_size as u64;
+        if actual_size < size_bytes {
+            // Device is smaller than requested — unregister and fail.
+            let _ = bdev_manager().delete_bdev(&bdev_info.name);
+            return Err(DataPlaneError::BdevError(format!(
+                "raw_disk: device at {} is {}B, need {}B",
+                pcie_addr, actual_size, size_bytes
+            )));
         }
 
-        // Create an io_uring bdev backed by the real file on disk.
-        let config = LocalBdevConfig {
-            name: bdev_name.clone(),
-            device_path: device_path.clone(),
-            block_size,
-        };
-        bdev_manager().create_aio_bdev(&config)?;
-
         let vol = RawVolume {
-            name: name.to_string(),
-            bdev_name: bdev_name.clone(),
-            device_path: device_path.clone(),
-            size_bytes,
-            block_size,
-            num_blocks,
+            name: vol_name.to_string(),
+            bdev_name: bdev_info.name.clone(),
+            pcie_addr: pcie_addr.to_string(),
+            size_bytes: actual_size,
+            block_size: bdev_info.block_size,
+            num_blocks: bdev_info.num_blocks,
             is_snapshot: false,
             parent_snapshot: None,
         };
-        self.volumes.lock().unwrap().insert(name.to_string(), vol);
+        let info = self.volume_info(&vol);
+        self.volumes
+            .lock()
+            .unwrap()
+            .insert(vol_name.to_string(), vol);
 
-        Ok(VolumeInfo {
-            name: name.to_string(),
-            backend: BackendType::RawDisk,
-            size_bytes,
-            used_bytes: size_bytes,
-            block_size,
-            healthy: true,
-            is_snapshot: false,
-            parent_snapshot: None,
-            thin_provisioned: false,
-        })
+        Ok(info)
     }
 
     fn delete_volume(&self, name: &str) -> Result<()> {
@@ -185,83 +172,24 @@ impl StorageBackend for RawDiskBackend {
             .remove(name)
             .ok_or_else(|| DataPlaneError::BdevError(format!("volume '{}' not found", name)))?;
 
-        // Unregister the SPDK bdev.
+        // Unregister the SPDK NVMe bdev.
         bdev_manager().delete_bdev(&vol.bdev_name)?;
-
-        // Remove the backing file.
-        if !vol.device_path.is_empty() {
-            if let Err(e) = std::fs::remove_file(&vol.device_path) {
-                info!(
-                    "raw_disk: failed to remove backing file {} (may already be gone): {}",
-                    vol.device_path, e
-                );
-            }
-        }
         Ok(())
     }
 
     fn resize_volume(&self, name: &str, new_size_bytes: u64) -> Result<VolumeInfo> {
-        // Raw disk resize: grow the backing file, recreate the bdev.
+        // Raw NVMe devices cannot be resized — they have a fixed physical size.
         let volumes = self.volumes.lock().unwrap();
         let vol = volumes
             .get(name)
             .ok_or_else(|| DataPlaneError::BdevError(format!("volume '{}' not found", name)))?;
 
-        if new_size_bytes < vol.size_bytes {
+        if new_size_bytes != vol.size_bytes {
             return Err(DataPlaneError::BdevError(
-                "raw_disk: shrink not supported".into(),
+                "raw_disk: NVMe devices cannot be resized".into(),
             ));
         }
-        if new_size_bytes == vol.size_bytes {
-            return Ok(self.volume_info(vol));
-        }
-
-        let old_bdev = vol.bdev_name.clone();
-        let device_path = vol.device_path.clone();
-        let block_size = vol.block_size;
-        let new_blocks = new_size_bytes / block_size as u64;
-        drop(volumes);
-
-        // Delete old SPDK bdev.
-        let _ = bdev_manager().delete_bdev(&old_bdev);
-
-        // Grow the backing file (data is preserved, new space is zeroed).
-        {
-            let f = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&device_path)
-                .map_err(|e| {
-                    DataPlaneError::BdevError(format!(
-                        "failed to open backing file for resize {}: {}",
-                        device_path, e
-                    ))
-                })?;
-            f.set_len(new_size_bytes).map_err(|e| {
-                DataPlaneError::BdevError(format!(
-                    "failed to resize backing file {}: {}",
-                    device_path, e
-                ))
-            })?;
-        }
-
-        // Recreate AIO bdev with new size.
-        let config = LocalBdevConfig {
-            name: old_bdev.clone(),
-            device_path: device_path.clone(),
-            block_size,
-        };
-        bdev_manager().create_aio_bdev(&config)?;
-
-        // Update volume record.
-        let mut volumes = self.volumes.lock().unwrap();
-        if let Some(vol) = volumes.get_mut(name) {
-            vol.size_bytes = new_size_bytes;
-            vol.num_blocks = new_blocks;
-            return Ok(self.volume_info(vol));
-        }
-        Err(DataPlaneError::BdevError(
-            "volume disappeared during resize".into(),
-        ))
+        Ok(self.volume_info(vol))
     }
 
     fn stat_volume(&self, name: &str) -> Result<VolumeInfo> {
@@ -325,14 +253,15 @@ impl StorageBackend for RawDiskBackend {
         })?;
         let src_bdev = vol.bdev_name.clone();
         let size = vol.size_bytes;
-        let block_size = vol.block_size;
         drop(volumes);
 
-        // Create a backing file for the snapshot.
+        // Snapshots of raw NVMe devices use full block copies to an AIO bdev
+        // backed by a file, since NVMe devices don't support COW snapshots.
         let snap_bdev = format!("rawsnap_{}", snapshot_name);
-        let snap_path = format!("{}/snap_{}.raw", RAW_VOLUME_BASE_PATH, snapshot_name);
+        let snap_path = format!("{}/snap_{}.raw", SNAPSHOT_BASE_PATH, snapshot_name);
+        let block_size: u32 = 4096;
 
-        std::fs::create_dir_all(RAW_VOLUME_BASE_PATH).map_err(|e| {
+        std::fs::create_dir_all(SNAPSHOT_BASE_PATH).map_err(|e| {
             DataPlaneError::BdevError(format!("failed to create snapshot directory: {}", e))
         })?;
         {
@@ -359,7 +288,7 @@ impl StorageBackend for RawDiskBackend {
         };
         bdev_manager().create_aio_bdev(&config)?;
 
-        // Full copy from source to snapshot.
+        // Full copy from source NVMe bdev to snapshot AIO bdev.
         Self::full_copy(&src_bdev, &snap_bdev, size)?;
 
         let created_at = Self::now_epoch();
@@ -369,7 +298,7 @@ impl StorageBackend for RawDiskBackend {
                 name: snapshot_name.to_string(),
                 source_volume: volume_name.to_string(),
                 bdev_name: snap_bdev,
-                device_path: snap_path,
+                backing_file: snap_path,
                 size_bytes: size,
                 created_at,
             },
@@ -409,8 +338,8 @@ impl StorageBackend for RawDiskBackend {
             })?;
 
         let _ = bdev_manager().delete_bdev(&snap.bdev_name);
-        if !snap.device_path.is_empty() {
-            let _ = std::fs::remove_file(&snap.device_path);
+        if !snap.backing_file.is_empty() {
+            let _ = std::fs::remove_file(&snap.backing_file);
         }
         Ok(())
     }
@@ -443,10 +372,10 @@ impl StorageBackend for RawDiskBackend {
         let size = snap.size_bytes;
         drop(snapshots);
 
-        // Create a backing file and AIO bdev for the clone.
+        // Clone creates an AIO bdev backed by a file (same as snapshot).
         let clone_bdev = format!("raw_{}", clone_name);
-        let clone_path = format!("{}/{}.raw", RAW_VOLUME_BASE_PATH, clone_name);
-        let block_size: u32 = 512;
+        let clone_path = format!("{}/{}.raw", SNAPSHOT_BASE_PATH, clone_name);
+        let block_size: u32 = 4096;
 
         {
             let f = std::fs::OpenOptions::new()
@@ -477,7 +406,7 @@ impl StorageBackend for RawDiskBackend {
         let vol = RawVolume {
             name: clone_name.to_string(),
             bdev_name: clone_bdev,
-            device_path: clone_path,
+            pcie_addr: String::new(),
             size_bytes: size,
             block_size,
             num_blocks: size / block_size as u64,
