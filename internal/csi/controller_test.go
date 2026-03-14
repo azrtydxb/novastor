@@ -1113,19 +1113,19 @@ func (m *mockNodeMetaStore) ListLiveNodeMetas(_ context.Context, _ time.Duration
 
 // --- EC provisioning tests ---
 
-// setupECController creates a controller with 6 nodes and an EC-capable ChunkClient.
-func setupECController() (*ControllerServer, *mockMetadataStore, *ecMockChunkClient) {
+// setupECController creates a controller with 6 nodes for EC metadata tests.
+// Note: actual EC encode/decode is handled by the Rust chunk engine, not the
+// CSI layer. These tests verify that CreateVolume stores EC metadata correctly.
+func setupECController() (*ControllerServer, *mockMetadataStore) {
 	store := newMockMetadataStore()
 	nodes := []string{"node-0", "node-1", "node-2", "node-3", "node-4", "node-5"}
 	placer := &mockPlacer{nodes: nodes}
-	client := newECMockChunkClient()
 	cs := NewControllerServer(store, placer, nil, nil, nil)
-	cs.SetChunkClient(client)
-	return cs, store, client
+	return cs, store
 }
 
 func TestCreateVolume_ECDistribution(t *testing.T) {
-	cs, store, client := setupECController()
+	cs, store := setupECController()
 
 	// Seed initial chunk data on node-0 (simulates primary write via SPDK/CreateTarget).
 	// In real flow, CreateTarget would write the data. For this test, we pre-seed.
@@ -1169,11 +1169,10 @@ func TestCreateVolume_ECDistribution(t *testing.T) {
 		t.Errorf("expected 0 chunks (lazy allocation), got %d", len(vm.ChunkIDs))
 	}
 
-	_ = client // client available for future tests with pre-seeded data
 }
 
 func TestCreateVolume_ECMetadataWithMultipleChunks(t *testing.T) {
-	cs, store, _ := setupECController()
+	cs, store := setupECController()
 
 	req := &csi.CreateVolumeRequest{
 		Name: "ec-multi-chunk",
@@ -1204,7 +1203,7 @@ func TestCreateVolume_ECMetadataWithMultipleChunks(t *testing.T) {
 }
 
 func TestCreateVolume_ReplicationDoesNotWriteShardPlacements(t *testing.T) {
-	cs, store, _ := setupECController()
+	cs, store := setupECController()
 
 	req := &csi.CreateVolumeRequest{
 		Name: "repl-no-shards",

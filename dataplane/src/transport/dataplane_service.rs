@@ -1,8 +1,8 @@
-//! gRPC DataplaneService — replaces JSON-RPC for Go agent → Rust dataplane communication.
+//! gRPC DataplaneService — the sole communication channel between the Go
+//! management agent and the Rust SPDK dataplane (invariant #5).
 //!
-//! Each method delegates to the same backend code that the JSON-RPC handlers in
-//! `jsonrpc/methods.rs` call. This is a thin adapter that translates gRPC
-//! request/response types to the internal API.
+//! Each method delegates to SPDK manager code. This is a thin adapter that
+//! translates gRPC request/response types to the internal API.
 
 use std::collections::HashSet;
 use std::pin::Pin;
@@ -188,6 +188,11 @@ impl DataplaneService for DataplaneServiceImpl {
         &self,
         request: Request<DeleteBdevRequest>,
     ) -> Result<Response<DeleteBdevResponse>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no mutations accepted",
+            ));
+        }
         let req = request.into_inner();
         self.bdev_manager
             .delete_bdev(&req.name)
@@ -303,6 +308,11 @@ impl DataplaneService for DataplaneServiceImpl {
         &self,
         request: Request<DeleteNvmfTargetRequest>,
     ) -> Result<Response<DeleteNvmfTargetResponse>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no mutations accepted",
+            ));
+        }
         let req = request.into_inner();
         self.nvmf_manager
             .delete_target(&req.volume_id)
@@ -554,6 +564,11 @@ impl DataplaneService for DataplaneServiceImpl {
         &self,
         request: Request<DeleteChunkRequest>,
     ) -> Result<Response<DeleteChunkResponse>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no mutations accepted",
+            ));
+        }
         let req = request.into_inner();
         let store = get_chunk_store(&req.bdev_name)?;
         store
@@ -586,6 +601,11 @@ impl DataplaneService for DataplaneServiceImpl {
         &self,
         request: Request<GarbageCollectRequest>,
     ) -> Result<Response<GarbageCollectResponse>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no mutations accepted",
+            ));
+        }
         let req = request.into_inner();
         let store = get_chunk_store(&req.bdev_name)?;
         let live_set: HashSet<String> = req.live_chunk_ids.into_iter().collect();
@@ -684,6 +704,11 @@ impl DataplaneService for DataplaneServiceImpl {
         &self,
         request: Request<DeleteVolumeRequest>,
     ) -> Result<Response<DeleteVolumeResponse>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no mutations accepted",
+            ));
+        }
         let req = request.into_inner();
         match req.backend_type.as_str() {
             "chunk" => {

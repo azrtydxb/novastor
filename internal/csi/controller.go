@@ -20,7 +20,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/azrtydxb/novastor/internal/chunk"
 	"github.com/azrtydxb/novastor/internal/logging"
 	"github.com/azrtydxb/novastor/internal/metadata"
 	"github.com/azrtydxb/novastor/internal/metrics"
@@ -107,8 +106,6 @@ type ControllerServer struct {
 	agentTarget     AgentTargetClient
 	quota           QuotaChecker
 	chunkReplicator ChunkReplicator
-	ecDistributor   *ECDistributor
-	ecReader        *ECReader
 
 	// nodeAddrToName maps agent network addresses (ip:port) to Kubernetes node
 	// names. CRUSH placement returns addresses, but PV topology must use K8s
@@ -141,15 +138,6 @@ func NewControllerServerWithNodeMeta(meta MetadataStore, nodeMeta NodeMetaStore,
 		quota:           quota,
 		chunkReplicator: replicator,
 	}
-}
-
-// SetChunkClient configures erasure coding support by wiring in a ChunkClient.
-// When set, EC volumes will encode/distribute shards during CreateVolume and
-// support EC-aware reads via ReadChunkEC. This is optional — if not called,
-// EC metadata is still written but shard distribution is skipped.
-func (cs *ControllerServer) SetChunkClient(client ChunkClient) {
-	cs.ecDistributor = NewECDistributor(client, cs.meta)
-	cs.ecReader = NewECReader(client)
 }
 
 // UpdateNodeMapping replaces the address-to-node-name mapping used by
@@ -955,47 +943,8 @@ func (cs *ControllerServer) ControllerGetCapabilities(_ context.Context, _ *csi.
 	}, nil
 }
 
-// ReadChunkEC reconstructs a chunk from its erasure-coded shards.
-// It reads the PlacementMap for the chunk, retrieves the volume's EC config,
-// and uses ECReader to reconstruct from available shards.
-//
-// NOTE: This is not a CSI RPC method. It is a controller-local helper that happens
-// to live on ControllerServer and is intended to be invoked by co-located file
-// (NFS/FUSE) and object (S3) gateway components running in the same process.
-// It performs data-plane reads but does not alter CSI controller semantics.
-func (cs *ControllerServer) ReadChunkEC(ctx context.Context, chunkID string) ([]byte, error) {
-	if cs.ecReader == nil {
-		return nil, fmt.Errorf("EC reader not configured")
-	}
-
-	// Get placement map for this chunk.
-	pm, err := cs.meta.GetPlacementMap(ctx, chunkID)
-	if err != nil {
-		return nil, fmt.Errorf("getting placement map for chunk %s: %w", chunkID, err)
-	}
-
-	// Determine EC config from shard count.
-	// Look up shard placements to find the volume ID, then get the volume's protection config.
-	sps, err := cs.meta.GetShardPlacements(ctx, chunkID)
-	if err != nil || len(sps) == 0 {
-		return nil, fmt.Errorf("getting shard placements for chunk %s: no EC shards found", chunkID)
-	}
-
-	vm, err := cs.meta.GetVolumeMeta(ctx, sps[0].VolumeID)
-	if err != nil {
-		return nil, fmt.Errorf("getting volume metadata for %s: %w", sps[0].VolumeID, err)
-	}
-
-	if vm.DataProtection == nil || vm.DataProtection.Mode != metadata.ProtectionModeErasureCoding ||
-		vm.DataProtection.ErasureCoding == nil {
-		return nil, fmt.Errorf("volume %s is not erasure-coded", vm.VolumeID)
-	}
-
-	ecCfg := vm.DataProtection.ErasureCoding
-	ec, err := chunk.NewErasureCoder(ecCfg.DataShards, ecCfg.ParityShards)
-	if err != nil {
-		return nil, fmt.Errorf("creating erasure coder: %w", err)
-	}
-
-	return cs.ecReader.ReadChunk(ctx, ec, chunkID, pm.Nodes)
-}
+// Erasure coding encode/decode operations are handled entirely by the
+// Rust dataplane's chunk engine (invariant #1: layer separation is
+// absolute — presentation/CSI layer MUST NOT replicate or EC-encode).
+// The Go CSI controller only stores protection metadata during
+// CreateVolume; actual shard distribution happens in the chunk engine.

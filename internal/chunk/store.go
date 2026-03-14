@@ -4,7 +4,7 @@ import "context"
 
 // Store is the core interface for chunk storage backends.
 // In the current architecture, all chunk I/O is handled by the Rust SPDK
-// data-plane via JSON-RPC. This interface is retained for management-plane
+// data-plane via gRPC. This interface is retained for management-plane
 // components (GC, datamover) that need a Go-side abstraction.
 type Store interface {
 	Put(ctx context.Context, c *Chunk) error
