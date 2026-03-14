@@ -478,12 +478,9 @@ func main() {
 	}
 	nvmeTargetClient := novcsi.NewNodeTargetClient(targetDialOpts...)
 
-	// Build chunk replicator for synchronous replication during provisioning.
-	// Uses the same dial options as agent connections (pod IP with TLS override).
-	replicator := novcsi.NewGRPCAddrReplicator(targetDialOpts...)
-
 	// Build sub-controllers.
-	controller := novcsi.NewControllerServer(metaClient, placer, nvmeTargetClient, nil, replicator)
+	// Chunk replication/EC is handled by the Rust dataplane's chunk engine.
+	controller := novcsi.NewControllerServer(metaClient, placer, nvmeTargetClient, nil)
 	controllerRef = controller // Enable syncNodes to update the node name mapping.
 	syncNodes()                // Re-run to populate the mapping now that controllerRef is set.
 	snapAdapter := &snapshotStoreAdapter{client: metaClient}

@@ -100,12 +100,11 @@ type AgentTargetClient interface {
 // ControllerServer implements the CSI Controller service.
 type ControllerServer struct {
 	csi.UnimplementedControllerServer
-	meta            MetadataStore
-	nodeMeta        NodeMetaStore
-	placer          PlacementEngine
-	agentTarget     AgentTargetClient
-	quota           QuotaChecker
-	chunkReplicator ChunkReplicator
+	meta        MetadataStore
+	nodeMeta    NodeMetaStore
+	placer      PlacementEngine
+	agentTarget AgentTargetClient
+	quota       QuotaChecker
 
 	// nodeAddrToName maps agent network addresses (ip:port) to Kubernetes node
 	// names. CRUSH placement returns addresses, but PV topology must use K8s
@@ -117,26 +116,25 @@ type ControllerServer struct {
 // NewControllerServer creates a ControllerServer backed by the given stores.
 // agentTarget may be nil to disable NVMe-oF target management.
 // quota may be nil to disable quota checking.
-// replicator may be nil to skip chunk replication during provisioning.
-func NewControllerServer(meta MetadataStore, placer PlacementEngine, agentTarget AgentTargetClient, quota QuotaChecker, replicator ChunkReplicator) *ControllerServer {
+// Chunk replication/EC is handled by the Rust dataplane's chunk engine —
+// the CSI controller only stores protection metadata.
+func NewControllerServer(meta MetadataStore, placer PlacementEngine, agentTarget AgentTargetClient, quota QuotaChecker) *ControllerServer {
 	return &ControllerServer{
-		meta:            meta,
-		placer:          placer,
-		agentTarget:     agentTarget,
-		quota:           quota,
-		chunkReplicator: replicator,
+		meta:        meta,
+		placer:      placer,
+		agentTarget: agentTarget,
+		quota:       quota,
 	}
 }
 
 // NewControllerServerWithNodeMeta creates a ControllerServer with node metadata support.
-func NewControllerServerWithNodeMeta(meta MetadataStore, nodeMeta NodeMetaStore, placer PlacementEngine, agentTarget AgentTargetClient, quota QuotaChecker, replicator ChunkReplicator) *ControllerServer {
+func NewControllerServerWithNodeMeta(meta MetadataStore, nodeMeta NodeMetaStore, placer PlacementEngine, agentTarget AgentTargetClient, quota QuotaChecker) *ControllerServer {
 	return &ControllerServer{
-		meta:            meta,
-		nodeMeta:        nodeMeta,
-		placer:          placer,
-		agentTarget:     agentTarget,
-		quota:           quota,
-		chunkReplicator: replicator,
+		meta:        meta,
+		nodeMeta:    nodeMeta,
+		placer:      placer,
+		agentTarget: agentTarget,
+		quota:       quota,
 	}
 }
 

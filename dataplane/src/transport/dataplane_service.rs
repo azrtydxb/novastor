@@ -277,6 +277,11 @@ impl DataplaneService for DataplaneServiceImpl {
         &self,
         request: Request<CreateNvmfTargetRequest>,
     ) -> Result<Response<NvmfTargetInfo>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no mutations accepted",
+            ));
+        }
         let req = request.into_inner();
         let config = crate::config::NvmfTargetConfig {
             volume_id: req.volume_id,
@@ -324,6 +329,11 @@ impl DataplaneService for DataplaneServiceImpl {
         &self,
         request: Request<SetAnaStateRequest>,
     ) -> Result<Response<SetAnaStateResponse>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no mutations accepted",
+            ));
+        }
         let req = request.into_inner();
         let nqn = volume_id_to_nqn(&req.volume_id);
         self.nvmf_manager
@@ -636,6 +646,11 @@ impl DataplaneService for DataplaneServiceImpl {
         &self,
         request: Request<InitBackendRequest>,
     ) -> Result<Response<InitBackendResponse>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no mutations accepted",
+            ));
+        }
         let req = request.into_inner();
         log::info!(
             "gRPC init_backend: type={}, config={}",
@@ -676,6 +691,11 @@ impl DataplaneService for DataplaneServiceImpl {
         &self,
         request: Request<CreateVolumeRequest>,
     ) -> Result<Response<CreateVolumeResponse>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no mutations accepted",
+            ));
+        }
         let req = request.into_inner();
         log::info!(
             "gRPC create_volume: backend={}, name={}, size={}",
