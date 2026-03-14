@@ -23,7 +23,7 @@ import (
 //
 // When readPolicy is empty, automatically selects "local_first" if the local
 // node is a replica, otherwise "latency_aware".
-func SetupReplicaBdev(ctx context.Context, spdkClient *spdk.Client, metaClient *metadata.GRPCClient, volumeID, localNodeID string, replicaNodes []string, readPolicy string) (string, error) {
+func SetupReplicaBdev(ctx context.Context, spdkClient *spdk.Client, metaClient *metadata.GRPCClient, volumeID, localNodeID string, replicaNodes []string, readPolicy string, sizeBytes int64) (string, error) {
 	if len(replicaNodes) == 0 {
 		return "", fmt.Errorf("no replica nodes for volume %s", volumeID)
 	}
@@ -57,7 +57,7 @@ func SetupReplicaBdev(ctx context.Context, spdkClient *spdk.Client, metaClient *
 	}
 
 	bdevName := fmt.Sprintf("replica-%s", volumeID)
-	if err := spdkClient.CreateReplicaBdev(bdevName, targets, readPolicy); err != nil {
+	if err := spdkClient.CreateReplicaBdev(bdevName, targets, readPolicy, sizeBytes); err != nil {
 		return "", fmt.Errorf("creating replica bdev for volume %s: %w", volumeID, err)
 	}
 

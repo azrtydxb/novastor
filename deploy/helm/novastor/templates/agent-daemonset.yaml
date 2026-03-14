@@ -61,6 +61,9 @@ spec:
             - --heartbeat-interval={{ .Values.agent.heartbeatInterval }}
             - --spdk-socket=/var/tmp/novastor-spdk.sock
             - --spdk-base-bdev={{ .Values.agent.spdkBaseBdev | default "NVMe0n1" }}
+            {{- if .Values.agent.testMode }}
+            - --test-mode
+            {{- end }}
             {{- if include "novastor.tls.enabled" . }}
             - --tls-ca={{ include "novastor.tls.caPath" . }}
             - --tls-cert={{ include "novastor.tls.serverCertPath" . }}

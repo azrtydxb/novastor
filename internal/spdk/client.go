@@ -226,7 +226,7 @@ func (c *Client) callLocked(method string, params interface{}, result interface{
 
 // CreateAioBdev creates an AIO bdev backed by a file.
 func (c *Client) CreateAioBdev(name, filename string, blockSize uint32) error {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"name":       name,
 		"filename":   filename,
 		"block_size": blockSize,
@@ -237,7 +237,7 @@ func (c *Client) CreateAioBdev(name, filename string, blockSize uint32) error {
 // NativeCreateMallocBdev creates an in-memory bdev via SPDK's built-in RPC.
 func (c *Client) NativeCreateMallocBdev(name string, sizeMB uint64, blockSize uint32) error {
 	numBlocks := (sizeMB * 1024 * 1024) / uint64(blockSize)
-	return c.nativeCall("bdev_malloc_create", map[string]interface{}{
+	return c.nativeCall("bdev_malloc_create", map[string]any{
 		"name":       name,
 		"num_blocks": numBlocks,
 		"block_size": blockSize,
@@ -318,7 +318,7 @@ func (c *Client) nativeCall(method string, params interface{}, result interface{
 // be used because SPDK v26.01's nvmf_create_subsystem auto-starts the subsystem,
 // causing a race with subsequent add_ns calls.
 func (c *Client) CreateNvmfTarget(volumeID, listenAddr string, port uint16, bdevName string) (string, error) {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"volume_id":      volumeID,
 		"bdev_name":      bdevName,
 		"listen_address": listenAddr,
@@ -340,12 +340,12 @@ func (c *Client) CreateNvmfTarget(volumeID, listenAddr string, port uint16, bdev
 // Routes through the Rust dataplane's NVMf manager which handles the
 // correct stop → destroy sequence via the SPDK C API.
 func (c *Client) DeleteNvmfTarget(volumeID string) error {
-	return c.call("nvmf_delete_target", map[string]interface{}{"volume_id": volumeID}, nil)
+	return c.call("nvmf_delete_target", map[string]any{"volume_id": volumeID}, nil)
 }
 
 // ConnectInitiator connects to a remote NVMe-oF target and returns the local bdev name.
 func (c *Client) ConnectInitiator(remoteAddr string, remotePort uint16, nqn, bdevName string) (string, error) {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"remote_address": remoteAddr,
 		"remote_port":    remotePort,
 		"nqn":            nqn,
@@ -362,12 +362,12 @@ func (c *Client) ConnectInitiator(remoteAddr string, remotePort uint16, nqn, bde
 
 // DisconnectInitiator disconnects from a remote NVMe-oF target by bdev name.
 func (c *Client) DisconnectInitiator(bdevName string) error {
-	return c.call("nvmf_disconnect_initiator", map[string]interface{}{"bdev_name": bdevName}, nil)
+	return c.call("nvmf_disconnect_initiator", map[string]any{"bdev_name": bdevName}, nil)
 }
 
 // ExportLocal creates an NVMe-oF target for local consumption. Returns the NQN.
 func (c *Client) ExportLocal(volumeID, bdevName string) (string, error) {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"volume_id": volumeID,
 		"bdev_name": bdevName,
 	}
@@ -431,18 +431,21 @@ type ReplicaIOStats struct {
 }
 
 // CreateReplicaBdev creates a composite bdev that replicates writes across targets.
-func (c *Client) CreateReplicaBdev(name string, targets []ReplicaTarget, readPolicy string) error {
-	params := map[string]interface{}{
+// sizeBytes is required for SPDK bdev registration so the replica bdev can be
+// used as an NVMe-oF namespace.
+func (c *Client) CreateReplicaBdev(name string, targets []ReplicaTarget, readPolicy string, sizeBytes int64) error {
+	params := map[string]any{
 		"name":        name,
 		"targets":     targets,
 		"read_policy": readPolicy,
+		"size_bytes":  sizeBytes,
 	}
 	return c.call("replica_bdev_create", params, nil)
 }
 
 // InitChunkBackend initialises the chunk storage backend on the given bdev.
 func (c *Client) InitChunkBackend(bdevName string, capacityBytes uint64) error {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"bdev_name":      bdevName,
 		"capacity_bytes": capacityBytes,
 	}
@@ -453,7 +456,7 @@ func (c *Client) InitChunkBackend(bdevName string, capacityBytes uint64) error {
 // Returns the SPDK bdev name (e.g. "novastor_<name>") that can be used
 // for NVMe-oF target creation.
 func (c *Client) CreateChunkVolume(name string, sizeBytes uint64, thin bool) (string, error) {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"backend":    "chunk",
 		"name":       name,
 		"size_bytes": sizeBytes,
@@ -470,7 +473,7 @@ func (c *Client) CreateChunkVolume(name string, sizeBytes uint64, thin bool) (st
 
 // DeleteChunkVolume deletes a volume from the chunk backend.
 func (c *Client) DeleteChunkVolume(name string) error {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"backend": "chunk",
 		"name":    name,
 	}
@@ -488,7 +491,7 @@ type ChunkWriteResult struct {
 // data is raw bytes; it is base64-encoded before sending over JSON-RPC.
 func (c *Client) ChunkWrite(bdevName string, data []byte) (*ChunkWriteResult, error) {
 	encoded := base64Encode(data)
-	params := map[string]interface{}{
+	params := map[string]any{
 		"bdev_name":   bdevName,
 		"data_base64": encoded,
 	}
@@ -510,7 +513,7 @@ type ChunkReadResult struct {
 // ChunkRead reads a chunk from the dataplane's chunk store.
 // Returns the raw chunk data (base64 decoded) and metadata.
 func (c *Client) ChunkRead(bdevName, chunkID string) ([]byte, uint32, error) {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"bdev_name": bdevName,
 		"chunk_id":  chunkID,
 	}
@@ -527,7 +530,7 @@ func (c *Client) ChunkRead(bdevName, chunkID string) ([]byte, uint32, error) {
 
 // ChunkDelete deletes a chunk from the dataplane's chunk store.
 func (c *Client) ChunkDelete(bdevName, chunkID string) error {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"bdev_name": bdevName,
 		"chunk_id":  chunkID,
 	}
@@ -536,7 +539,7 @@ func (c *Client) ChunkDelete(bdevName, chunkID string) error {
 
 // ChunkExists checks whether a chunk exists in the dataplane's chunk store.
 func (c *Client) ChunkExists(bdevName, chunkID string) (bool, error) {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"bdev_name": bdevName,
 		"chunk_id":  chunkID,
 	}
@@ -563,7 +566,7 @@ func (c *Client) GetVersion() (string, error) {
 
 // SetANAState sets the ANA state for an NVMe-oF target subsystem.
 func (c *Client) SetANAState(nqn string, anaGroupID uint32, state string) error {
-	return c.call("nvmf_set_ana_state", map[string]interface{}{
+	return c.call("nvmf_set_ana_state", map[string]any{
 		"nqn":          nqn,
 		"ana_group_id": anaGroupID,
 		"ana_state":    state,
@@ -576,7 +579,7 @@ func (c *Client) GetANAState(nqn string) (uint32, string, error) {
 		GroupID uint32 `json:"ana_group_id"`
 		State   string `json:"ana_state"`
 	}
-	if err := c.call("nvmf_get_ana_state", map[string]interface{}{"nqn": nqn}, &result); err != nil {
+	if err := c.call("nvmf_get_ana_state", map[string]any{"nqn": nqn}, &result); err != nil {
 		return 0, "", err
 	}
 	return result.GroupID, result.State, nil
@@ -584,7 +587,7 @@ func (c *Client) GetANAState(nqn string) (uint32, string, error) {
 
 // AddReplica dynamically adds a replica target to a running replica bdev.
 func (c *Client) AddReplica(bdevName string, target ReplicaTarget) error {
-	return c.call("replica_bdev_add_replica", map[string]interface{}{
+	return c.call("replica_bdev_add_replica", map[string]any{
 		"volume_id": bdevName,
 		"target":    target,
 	}, nil)
@@ -592,7 +595,7 @@ func (c *Client) AddReplica(bdevName string, target ReplicaTarget) error {
 
 // RemoveReplica dynamically removes a replica target from a running replica bdev.
 func (c *Client) RemoveReplica(bdevName, targetAddr string) error {
-	return c.call("replica_bdev_remove_replica", map[string]interface{}{
+	return c.call("replica_bdev_remove_replica", map[string]any{
 		"volume_id": bdevName,
 		"address":   targetAddr,
 	}, nil)
@@ -601,7 +604,7 @@ func (c *Client) RemoveReplica(bdevName, targetAddr string) error {
 // GetReplicaBdevStatus returns the detailed status of a replica bdev.
 func (c *Client) GetReplicaBdevStatus(bdevName string) (*ReplicaBdevStatus, error) {
 	var result ReplicaBdevStatus
-	if err := c.call("replica_bdev_status", map[string]interface{}{"volume_id": bdevName}, &result); err != nil {
+	if err := c.call("replica_bdev_status", map[string]any{"volume_id": bdevName}, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -610,7 +613,37 @@ func (c *Client) GetReplicaBdevStatus(bdevName string) (*ReplicaBdevStatus, erro
 // GetIOStats returns per-volume I/O statistics including per-replica read distribution.
 func (c *Client) GetIOStats(volumeID string) (*IOStats, error) {
 	var result IOStats
-	if err := c.call("novastor_io_stats", map[string]interface{}{"volume_id": volumeID}, &result); err != nil {
+	if err := c.call("novastor_io_stats", map[string]any{"volume_id": volumeID}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ChunkList returns all chunk IDs stored on a given bdev.
+func (c *Client) ChunkList(bdevName string) ([]string, error) {
+	var result []string
+	if err := c.call("chunk_list", map[string]any{"bdev_name": bdevName}, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// ChunkGCResult holds the result of a garbage collection run.
+type ChunkGCResult struct {
+	TotalChunks int64 `json:"total_chunks"`
+	ValidChunks int64 `json:"valid_chunks"`
+	Deleted     int64 `json:"deleted"`
+	Errors      int64 `json:"errors"`
+}
+
+// ChunkGC runs garbage collection on the given bdev, deleting any chunks
+// not present in the validChunkIDs set.
+func (c *Client) ChunkGC(bdevName string, validChunkIDs []string) (*ChunkGCResult, error) {
+	var result ChunkGCResult
+	if err := c.call("chunk_gc", map[string]any{
+		"bdev_name":       bdevName,
+		"valid_chunk_ids": validChunkIDs,
+	}, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

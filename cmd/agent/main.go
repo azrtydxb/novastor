@@ -94,6 +94,7 @@ func main() {
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	spdkSocket := flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "Path to the SPDK JSON-RPC Unix socket")
 	spdkBaseBdev := flag.String("spdk-base-bdev", "NVMe0n1", "SPDK bdev name used as the base device for the chunk backend (e.g. NVMe0n1, Malloc0)")
+	testMode := flag.Bool("test-mode", false, "Enable test mode: allows Malloc bdev auto-creation (NOT for production use)")
 	flag.Parse()
 
 	logging.Init(false)
@@ -219,7 +220,7 @@ func main() {
 	} else if metaClient == nil {
 		logging.L.Warn("NVMe-oF target service disabled: no metadata connection")
 	} else {
-		spdkServer := agent.NewSPDKTargetServer(*hostIP, *spdkBaseBdev, spdkClient, metaClient)
+		spdkServer := agent.NewSPDKTargetServer(*hostIP, *spdkBaseBdev, *testMode, spdkClient, metaClient)
 		spdkServer.Register(srv)
 		logging.L.Info("NVMe-oF target service registered", zap.String("hostIP", *hostIP))
 
@@ -237,12 +238,14 @@ func main() {
 	chunkServer.Register(srv)
 	logging.L.Info("chunk service registered (routes I/O to SPDK dataplane)")
 
-	// Start the garbage collector for orphan chunks.
+	// Start the garbage collector for orphan chunks via SPDK data-plane.
 	if metaClient != nil {
-		// TODO: GC needs to be reimplemented to work via SPDK data plane
-		// instead of the chunk.Store interface.
-		_ = gcInterval
-		logging.L.Info("agent garbage collector: pending SPDK integration")
+		spdkGC := agent.NewSPDKGarbageCollector(spdkClient, metaClient, *spdkBaseBdev, *gcInterval)
+		spdkGC.Start(ctx)
+		defer spdkGC.Stop()
+		logging.L.Info("agent garbage collector started (routes through SPDK dataplane)",
+			zap.Duration("interval", *gcInterval),
+			zap.String("bdev", *spdkBaseBdev))
 	}
 
 	// Register this node with the metadata service.

@@ -500,114 +500,192 @@ impl NvmfManager {
 
     pub fn connect_initiator(&self, config: &NvmfInitiatorConfig) -> Result<InitiatorInfo> {
         info!(
-            "connecting NVMe-oF initiator: nqn={}, remote={}:{}",
-            config.nqn, config.remote_address, config.remote_port
+            "connecting NVMe-oF initiator: nqn={}, remote={}:{}, bdev_name={}",
+            config.nqn, config.remote_address, config.remote_port, config.bdev_name
         );
 
-        let addr_c = std::ffi::CString::new(config.remote_address.as_str())
-            .map_err(|e| DataPlaneError::NvmfInitiatorError(format!("invalid addr: {e}")))?;
-        let port_str = config.remote_port.to_string();
-        let port_c = std::ffi::CString::new(port_str.as_str()).unwrap();
-        let nqn_c = std::ffi::CString::new(config.nqn.as_str())
-            .map_err(|e| DataPlaneError::NvmfInitiatorError(format!("invalid NQN: {e}")))?;
+        // Use SPDK's native RPC `bdev_nvme_attach_controller` to create a
+        // properly named bdev for the remote NVMe-oF target.  The native
+        // RPC server listens on /var/tmp/spdk.sock (started by spdk_app_start).
+        let bdev_name = Self::attach_controller_via_native_rpc(
+            &config.bdev_name,
+            &config.remote_address,
+            config.remote_port,
+            &config.nqn,
+        )?;
 
-        reactor_dispatch::dispatch_sync(move || -> Result<()> {
-            unsafe {
-                // Build the transport ID for the remote target.
-                let mut trid: ffi::spdk_nvme_transport_id = std::mem::zeroed();
-                trid.trtype = ffi::spdk_nvme_transport_type_SPDK_NVME_TRANSPORT_TCP;
-                trid.adrfam = ffi::spdk_nvmf_adrfam_SPDK_NVMF_ADRFAM_IPV4;
-
-                let addr_bytes = addr_c.as_bytes_with_nul();
-                let port_bytes = port_c.as_bytes_with_nul();
-                let nqn_bytes = nqn_c.as_bytes_with_nul();
-
-                std::ptr::copy_nonoverlapping(
-                    addr_bytes.as_ptr() as *const c_char,
-                    trid.traddr.as_mut_ptr(),
-                    addr_bytes.len().min(trid.traddr.len()),
-                );
-                std::ptr::copy_nonoverlapping(
-                    port_bytes.as_ptr() as *const c_char,
-                    trid.trsvcid.as_mut_ptr(),
-                    port_bytes.len().min(trid.trsvcid.len()),
-                );
-                std::ptr::copy_nonoverlapping(
-                    nqn_bytes.as_ptr() as *const c_char,
-                    trid.subnqn.as_mut_ptr(),
-                    nqn_bytes.len().min(trid.subnqn.len()),
-                );
-
-                // Probe and attach the remote NVMe controller.
-                let mut opts: ffi::spdk_nvme_ctrlr_opts = std::mem::zeroed();
-                ffi::spdk_nvme_ctrlr_get_default_ctrlr_opts(
-                    &mut opts,
-                    std::mem::size_of_val(&opts),
-                );
-
-                let ctrlr = ffi::spdk_nvme_connect(&trid, &opts, std::mem::size_of_val(&opts));
-                if ctrlr.is_null() {
-                    return Err(DataPlaneError::NvmfInitiatorError(
-                        "spdk_nvme_connect failed".to_string(),
-                    ));
-                }
-                Ok(())
-            }
-        })?;
+        info!(
+            "NVMe-oF initiator attached: bdev={}, remote={}:{}",
+            bdev_name, config.remote_address, config.remote_port
+        );
 
         let info = InitiatorInfo {
             nqn: config.nqn.clone(),
             remote_address: config.remote_address.clone(),
             remote_port: config.remote_port,
-            local_bdev_name: config.bdev_name.clone(),
+            local_bdev_name: bdev_name.clone(),
         };
         self.initiators
             .lock()
             .unwrap()
-            .insert(config.bdev_name.clone(), info.clone());
+            .insert(bdev_name, info.clone());
         Ok(info)
+    }
+
+    /// Call SPDK's native `bdev_nvme_attach_controller` RPC via the native
+    /// SPDK JSON-RPC server socket.  This creates a properly registered bdev
+    /// for the remote NVMe-oF target with the given name prefix.
+    fn attach_controller_via_native_rpc(
+        name: &str,
+        addr: &str,
+        port: u16,
+        subnqn: &str,
+    ) -> Result<String> {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+
+        let rpc_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "bdev_nvme_attach_controller",
+            "params": {
+                "name": name,
+                "trtype": "TCP",
+                "adrfam": "IPv4",
+                "traddr": addr,
+                "trsvcid": port.to_string(),
+                "subnqn": subnqn
+            }
+        });
+
+        let sock_path = "/var/tmp/spdk.sock";
+        let mut stream = UnixStream::connect(sock_path).map_err(|e| {
+            DataPlaneError::NvmfInitiatorError(format!(
+                "connecting to SPDK native RPC at {sock_path}: {e}"
+            ))
+        })?;
+
+        // SPDK's native JSON-RPC expects newline-terminated JSON.
+        let mut msg = serde_json::to_string(&rpc_request).unwrap();
+        msg.push('\n');
+        stream.write_all(msg.as_bytes()).map_err(|e| {
+            DataPlaneError::NvmfInitiatorError(format!("writing to SPDK native RPC: {e}"))
+        })?;
+
+        // Read the response.
+        let mut response = String::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = stream.read(&mut buf).map_err(|e| {
+                DataPlaneError::NvmfInitiatorError(format!("reading from SPDK native RPC: {e}"))
+            })?;
+            if n == 0 {
+                break;
+            }
+            response.push_str(&String::from_utf8_lossy(&buf[..n]));
+            // Check if we have a complete JSON response.
+            if response.contains('\n')
+                || serde_json::from_str::<serde_json::Value>(&response).is_ok()
+            {
+                break;
+            }
+        }
+
+        let resp: serde_json::Value = serde_json::from_str(&response).map_err(|e| {
+            DataPlaneError::NvmfInitiatorError(format!(
+                "parsing SPDK native RPC response: {e}, raw: {response}"
+            ))
+        })?;
+
+        if let Some(err) = resp.get("error") {
+            return Err(DataPlaneError::NvmfInitiatorError(format!(
+                "SPDK bdev_nvme_attach_controller failed: {}",
+                err
+            )));
+        }
+
+        // The result is an array of bdev names, e.g. ["replica_xyz_n1"]
+        if let Some(result) = resp.get("result") {
+            if let Some(names) = result.as_array() {
+                if let Some(first) = names.first().and_then(|v| v.as_str()) {
+                    return Ok(first.to_string());
+                }
+            }
+            // Single string result
+            if let Some(s) = result.as_str() {
+                return Ok(s.to_string());
+            }
+        }
+
+        // If result doesn't contain bdev names, use the conventional name
+        // pattern: <name>n1
+        Ok(format!("{name}n1"))
     }
 
     pub fn disconnect_initiator(&self, bdev_name: &str) -> Result<()> {
         info!("disconnecting NVMe-oF initiator: bdev={}", bdev_name);
 
-        let initiator = {
-            let initiators = self.initiators.lock().unwrap();
-            initiators.get(bdev_name).cloned()
-        };
-        let initiator = initiator.ok_or_else(|| {
-            DataPlaneError::NvmfInitiatorError(format!("initiator {} not found", bdev_name))
-        })?;
+        // Extract the controller name from the bdev name (strip "n1" suffix).
+        let ctrl_name = bdev_name.strip_suffix("n1").unwrap_or(bdev_name);
 
-        let nqn_c = std::ffi::CString::new(initiator.nqn.as_str())
-            .map_err(|e| DataPlaneError::NvmfInitiatorError(format!("invalid NQN: {e}")))?;
-
-        reactor_dispatch::dispatch_sync(move || -> Result<()> {
-            unsafe {
-                let mut trid: ffi::spdk_nvme_transport_id = std::mem::zeroed();
-                trid.trtype = ffi::spdk_nvme_transport_type_SPDK_NVME_TRANSPORT_TCP;
-
-                let nqn_bytes = nqn_c.as_bytes_with_nul();
-                std::ptr::copy_nonoverlapping(
-                    nqn_bytes.as_ptr() as *const c_char,
-                    trid.subnqn.as_mut_ptr(),
-                    nqn_bytes.len().min(trid.subnqn.len()),
-                );
-
-                let ctrlr = ffi::spdk_nvme_connect(&trid, std::ptr::null(), 0);
-                if !ctrlr.is_null() {
-                    let rc = ffi::spdk_nvme_detach(ctrlr);
-                    if rc != 0 {
-                        return Err(DataPlaneError::NvmfInitiatorError(format!(
-                            "spdk_nvme_detach failed: rc={rc}"
-                        )));
-                    }
-                }
-                Ok(())
-            }
-        })?;
+        // Use SPDK's native RPC to detach the controller.
+        Self::detach_controller_via_native_rpc(ctrl_name)?;
 
         self.initiators.lock().unwrap().remove(bdev_name);
+        Ok(())
+    }
+
+    /// Call SPDK's native `bdev_nvme_detach_controller` RPC to cleanly
+    /// remove the controller and its bdevs.
+    fn detach_controller_via_native_rpc(name: &str) -> Result<()> {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+
+        let rpc_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "bdev_nvme_detach_controller",
+            "params": {
+                "name": name
+            }
+        });
+
+        let sock_path = "/var/tmp/spdk.sock";
+        let mut stream = UnixStream::connect(sock_path).map_err(|e| {
+            DataPlaneError::NvmfInitiatorError(format!(
+                "connecting to SPDK native RPC at {sock_path}: {e}"
+            ))
+        })?;
+
+        let mut msg = serde_json::to_string(&rpc_request).unwrap();
+        msg.push('\n');
+        stream.write_all(msg.as_bytes()).map_err(|e| {
+            DataPlaneError::NvmfInitiatorError(format!("writing to SPDK native RPC: {e}"))
+        })?;
+
+        let mut response = String::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = stream.read(&mut buf).map_err(|e| {
+                DataPlaneError::NvmfInitiatorError(format!("reading from SPDK native RPC: {e}"))
+            })?;
+            if n == 0 {
+                break;
+            }
+            response.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if response.contains('\n')
+                || serde_json::from_str::<serde_json::Value>(&response).is_ok()
+            {
+                break;
+            }
+        }
+
+        // Best-effort: log errors but don't fail hard on disconnect.
+        if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&response) {
+            if let Some(err) = resp.get("error") {
+                warn!("SPDK bdev_nvme_detach_controller warning: {}", err);
+            }
+        }
         Ok(())
     }
 

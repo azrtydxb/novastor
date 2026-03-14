@@ -11,6 +11,7 @@ use crate::backend::traits::StorageBackend;
 use crate::bdev::chunk_io::ChunkStore;
 use crate::bdev::erasure::ErasureBdev;
 use crate::bdev::novastor_bdev;
+use crate::bdev::novastor_replica_bdev;
 use crate::bdev::replica::ReplicaBdev;
 use crate::config::{
     BlobstoreConfig, ErasureBdevConfig, LocalBdevConfig, LvolConfig, NvmfInitiatorConfig,
@@ -119,6 +120,7 @@ pub fn register_all(router: &mut Router) {
     router.register("chunk_scrub", wrap(chunk_scrub));
     router.register("chunk_split_write", wrap(chunk_split_write));
     router.register("chunk_reassemble", wrap(chunk_reassemble));
+    router.register("chunk_gc", wrap(chunk_gc));
 
     // I/O statistics
     router.register("novastor_io_stats", wrap(handle_io_stats));
@@ -473,6 +475,9 @@ struct ReplicaBdevCreateParams {
     name: String,
     targets: Vec<ReplicaTargetParam>,
     read_policy: Option<String>,
+    /// Size of the replica bdev in bytes, required for SPDK bdev registration.
+    #[serde(default)]
+    size_bytes: u64,
 }
 
 #[derive(Deserialize)]
@@ -511,7 +516,10 @@ fn replica_bdev_create(p: ReplicaBdevCreateParams) -> Result<serde_json::Value, 
             address: t.addr.clone(),
             port: t.port,
             nqn: t.nqn.clone(),
-            bdev_name: t.bdev_name.clone(),
+            // Use explicit bdev_name if provided; otherwise fall back to the
+            // nqn field which the Go agent sets to the actual bdev name
+            // (chunk bdev name for local, initiator bdev name for remote).
+            bdev_name: t.bdev_name.clone().or_else(|| Some(t.nqn.clone())),
         })
         .collect();
 
@@ -530,11 +538,19 @@ fn replica_bdev_create(p: ReplicaBdevCreateParams) -> Result<serde_json::Value, 
     let bdev = Arc::new(bdev);
     let bdev_name = bdev.bdev_name.clone();
 
+    // Register the replica bdev with SPDK so it can be used as an NVMe-oF
+    // namespace. This is required for NVMe-oF export of replicated volumes.
+    let spdk_bdev_name = if p.size_bytes > 0 {
+        novastor_replica_bdev::create(bdev.clone(), p.size_bytes)?
+    } else {
+        bdev_name.clone()
+    };
+
     let mut registry = replica_bdevs().lock().unwrap();
     registry.insert(p.name.clone(), bdev);
 
     Ok(serde_json::json!({
-        "name": bdev_name,
+        "name": spdk_bdev_name,
         "replica_count": replica_count,
         "write_quorum": write_quorum,
     }))
@@ -1372,5 +1388,56 @@ fn get_version(_p: serde_json::Value) -> Result<serde_json::Value, DataPlaneErro
     Ok(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "name": env!("CARGO_PKG_NAME"),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Chunk garbage collection
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ChunkGcParams {
+    bdev_name: String,
+    /// Chunk IDs that are still in use and should NOT be deleted.
+    valid_chunk_ids: Vec<String>,
+}
+
+fn chunk_gc(p: ChunkGcParams) -> Result<serde_json::Value, DataPlaneError> {
+    let stores = chunk_stores().lock().unwrap();
+    let store = stores
+        .get(&p.bdev_name)
+        .ok_or_else(|| {
+            DataPlaneError::BdevError(format!("chunk store '{}' not found", p.bdev_name))
+        })?
+        .clone();
+    drop(stores);
+
+    let all_chunks = store.list_chunks();
+    let valid_set: std::collections::HashSet<&str> =
+        p.valid_chunk_ids.iter().map(|s| s.as_str()).collect();
+
+    let mut deleted = 0u64;
+    let mut errors = 0u64;
+    for chunk_id in &all_chunks {
+        if !valid_set.contains(chunk_id.as_str()) {
+            match store.delete_chunk(chunk_id) {
+                Ok(()) => deleted += 1,
+                Err(e) => {
+                    log::warn!(
+                        "chunk_gc: failed to delete orphan chunk {}: {}",
+                        chunk_id,
+                        e
+                    );
+                    errors += 1;
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "total_chunks": all_chunks.len(),
+        "valid_chunks": valid_set.len(),
+        "deleted": deleted,
+        "errors": errors,
     }))
 }

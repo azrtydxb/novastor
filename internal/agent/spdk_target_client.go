@@ -97,7 +97,7 @@ type ReplicaTargetInfo struct {
 
 // SetupReplication dials the owner agent and calls SetupReplication to
 // configure cross-node write replication via a composite replica bdev.
-func (c *SPDKTargetClient) SetupReplication(ctx context.Context, agentAddr, volumeID, localBdevName string, remoteTargets []ReplicaTargetInfo) (replicaBdevName, subsystemNQN string, err error) {
+func (c *SPDKTargetClient) SetupReplication(ctx context.Context, agentAddr, volumeID, localBdevName string, remoteTargets []ReplicaTargetInfo, sizeBytes int64) (replicaBdevName, subsystemNQN string, err error) {
 	conn, err := grpc.NewClient(agentAddr, c.dialOpts...)
 	if err != nil {
 		return "", "", fmt.Errorf("dialing agent at %s: %w", agentAddr, err)
@@ -118,6 +118,7 @@ func (c *SPDKTargetClient) SetupReplication(ctx context.Context, agentAddr, volu
 		VolumeId:      volumeID,
 		LocalBdevName: localBdevName,
 		RemoteTargets: pbTargets,
+		SizeBytes:     sizeBytes,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("SetupReplication RPC for volume %s on %s: %w", volumeID, agentAddr, err)

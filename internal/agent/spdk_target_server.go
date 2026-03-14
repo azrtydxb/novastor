@@ -40,6 +40,7 @@ type SPDKTargetServer struct {
 
 	hostIP     string
 	baseBdev   string
+	testMode   bool
 	spdkClient *spdk.Client
 	metaClient *metadata.GRPCClient
 
@@ -54,14 +55,18 @@ type SPDKTargetServer struct {
 // through the SPDK data-plane process reachable via the provided spdkClient.
 // baseBdev is the name of the SPDK bdev to use as the backing device for the
 // chunk backend (e.g. "NVMe0n1" for real NVMe drives, "Malloc0" for testing).
-func NewSPDKTargetServer(hostIP, baseBdev string, spdkClient *spdk.Client, metaClient *metadata.GRPCClient) *SPDKTargetServer {
+// testMode must be true to allow Malloc bdev auto-creation; in production this
+// should always be false and only real NVMe/AIO bdevs are accepted.
+func NewSPDKTargetServer(hostIP, baseBdev string, testMode bool, spdkClient *spdk.Client, metaClient *metadata.GRPCClient) *SPDKTargetServer {
 	logging.L.Info("spdk target: initialized SPDK target server",
 		zap.String("hostIP", hostIP),
 		zap.String("baseBdev", baseBdev),
+		zap.Bool("testMode", testMode),
 	)
 	return &SPDKTargetServer{
 		hostIP:     hostIP,
 		baseBdev:   baseBdev,
+		testMode:   testMode,
 		spdkClient: spdkClient,
 		metaClient: metaClient,
 	}
@@ -90,9 +95,14 @@ func (s *SPDKTargetServer) ensureChunkBackend() error {
 		return s.initErr
 	}
 
-	// Auto-create a Malloc bdev when configured for testing (no real NVMe).
+	// Auto-create a Malloc bdev only when --test-mode is explicitly enabled.
+	// In production, only real NVMe/AIO bdevs are accepted.
 	if strings.HasPrefix(s.baseBdev, "Malloc") {
-		logging.L.Info("spdk target: creating malloc bdev for testing",
+		if !s.testMode {
+			return fmt.Errorf("malloc bdev %q requested but --test-mode is not enabled; "+
+				"use real NVMe/AIO bdevs in production or pass --test-mode for testing", s.baseBdev)
+		}
+		logging.L.Warn("spdk target: creating malloc bdev (TEST MODE ONLY — not for production)",
 			zap.String("name", s.baseBdev),
 			zap.Uint64("sizeMB", mallocBdevSizeMB),
 		)
@@ -108,9 +118,13 @@ func (s *SPDKTargetServer) ensureChunkBackend() error {
 	}
 
 	// Initialise the chunk backend on the Rust data-plane.
-	// For Malloc bdevs: capacity = mallocBdevSizeMB * 1MiB.
-	// For real NVMe: the dataplane queries the bdev size internally.
-	capacityBytes := uint64(mallocBdevSizeMB) * 1024 * 1024
+	// For Malloc bdevs (test mode): capacity = mallocBdevSizeMB * 1MiB.
+	// For real NVMe: the dataplane queries the bdev size via SPDK internally;
+	// we pass 0 to signal "use the actual bdev capacity".
+	var capacityBytes uint64
+	if strings.HasPrefix(s.baseBdev, "Malloc") {
+		capacityBytes = uint64(mallocBdevSizeMB) * 1024 * 1024
+	}
 	if err := s.spdkClient.InitChunkBackend(s.baseBdev, capacityBytes); err != nil {
 		// The chunk backend may already be initialised if the agent restarted
 		// while the dataplane kept running.
@@ -359,8 +373,11 @@ func (s *SPDKTargetServer) SetupReplication(ctx context.Context, req *pb.SetupRe
 	}
 
 	// Step 3: Create the composite replica bdev.
+	// size_bytes is required for SPDK bdev registration so the replica bdev
+	// can be exported as an NVMe-oF namespace.
+	sizeBytes := req.GetSizeBytes()
 	replicaBdevName := fmt.Sprintf("replicated_%s", volumeID)
-	if err := s.spdkClient.CreateReplicaBdev(replicaBdevName, replicaTargets, "local_first"); err != nil {
+	if err := s.spdkClient.CreateReplicaBdev(replicaBdevName, replicaTargets, "local_first", sizeBytes); err != nil {
 		logging.L.Error("spdk target: failed to create replica bdev",
 			zap.String("volumeID", volumeID),
 			zap.Error(err),
@@ -387,10 +404,22 @@ func (s *SPDKTargetServer) SetupReplication(ctx context.Context, req *pb.SetupRe
 	// Step 5: Re-export with the replica bdev as the backing device.
 	nqn, err := s.spdkClient.CreateNvmfTarget(volumeID, s.hostIP, spdkTargetPort, replicaBdevName)
 	if err != nil {
-		logging.L.Error("spdk target: failed to re-export with replica bdev",
+		logging.L.Error("spdk target: failed to re-export with replica bdev, restoring original target",
 			zap.String("volumeID", volumeID),
 			zap.Error(err),
 		)
+		// Rollback: recreate the original target with the chunk bdev so the volume remains accessible.
+		if _, restoreErr := s.spdkClient.CreateNvmfTarget(volumeID, s.hostIP, spdkTargetPort, localBdevName); restoreErr != nil {
+			logging.L.Error("spdk target: failed to restore original NVMe-oF target",
+				zap.String("volumeID", volumeID),
+				zap.Error(restoreErr),
+			)
+		} else {
+			logging.L.Info("spdk target: restored original NVMe-oF target after replication failure",
+				zap.String("volumeID", volumeID),
+				zap.String("bdev", localBdevName),
+			)
+		}
 		return nil, status.Errorf(codes.Internal, "re-exporting replica bdev for %s: %v", volumeID, err)
 	}
 

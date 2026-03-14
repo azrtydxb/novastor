@@ -118,7 +118,8 @@ agent:
   nodeSelector: {}
   tolerations: []
   heartbeatInterval: "500ms"    # Fast heartbeat for failover detection
-  spdkBaseBdev: "Malloc0"       # SPDK bdev for lvol store (NVMe0n1 for real NVMe, Malloc0 for testing)
+  spdkBaseBdev: "NVMe0n1"       # SPDK bdev for chunk backend (NVMe0n1 for real NVMe; override to Malloc0 + testMode for testing)
+  testMode: false               # Test mode only: set to true with spdkBaseBdev=Malloc0 for dev/CI environments
   failover:
     enabled: true
     katoTimeout: "200ms"        # SPDK keep-alive timeout

@@ -94,7 +94,7 @@ type AgentTargetClient interface {
 	SetANAState(ctx context.Context, agentAddr string, volumeID string, anaState string, anaGroupID uint32) error
 	// SetupReplication configures the owner node to replicate writes to remote targets.
 	// Returns the replica bdev name and updated NQN.
-	SetupReplication(ctx context.Context, agentAddr, volumeID, localBdevName string, remoteTargets []ReplicaTarget) (replicaBdevName, subsystemNQN string, err error)
+	SetupReplication(ctx context.Context, agentAddr, volumeID, localBdevName string, remoteTargets []ReplicaTarget, sizeBytes int64) (replicaBdevName, subsystemNQN string, err error)
 }
 
 // ReplicaTarget describes a remote NVMe-oF target for replication.
@@ -508,35 +508,69 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			}
 		}
 
-		// TODO: Multi-node replication via SetupReplication is disabled until
-		// the Rust dataplane's replica bdev is registered with SPDK's bdev
-		// layer (spdk_bdev_register), which is required for NVMe-oF export.
-		// For now, create a target only on the owner (first) node.
-		// Once the replica bdev is SPDK-registered, create targets on ALL
-		// uniqueNodes and call SetupReplication on the owner.
-		ownerNode := uniqueNodes[0]
-		nqn, addr, port, err := cs.agentTarget.CreateTarget(
-			ctx, ownerNode, volumeID, int64(requiredBytes), "optimized", anaGroupID,
-		)
-		if err != nil {
-			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
-			return nil, status.Errorf(codes.Internal, "creating NVMe-oF target for volume %s: %v", volumeID, err)
-		}
-
+		// Create NVMe-oF targets on ALL unique nodes. The owner (first) node
+		// gets ANA state "optimized"; replicas get "non-optimized".
 		type targetResult struct {
 			nqn  string
 			addr string
 			port string
 		}
-		results := []targetResult{{nqn: nqn, addr: addr, port: port}}
-		ownerNQN := nqn
-		// Limit to owner node only for now.
-		uniqueNodes = uniqueNodes[:1]
+		results := make([]targetResult, len(uniqueNodes))
 
-		logging.L.Info("NVMe-oF target created on owner node",
+		for i, node := range uniqueNodes {
+			anaState := "non-optimized"
+			if i == 0 {
+				anaState = "optimized"
+			}
+			nqn, addr, port, createErr := cs.agentTarget.CreateTarget(
+				ctx, node, volumeID, int64(requiredBytes), anaState, anaGroupID,
+			)
+			if createErr != nil {
+				// Clean up any targets we already created.
+				for j := 0; j < i; j++ {
+					_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[j], volumeID)
+				}
+				_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
+				return nil, status.Errorf(codes.Internal, "creating NVMe-oF target for volume %s on %s: %v", volumeID, node, createErr)
+			}
+			results[i] = targetResult{nqn: nqn, addr: addr, port: port}
+		}
+		ownerNQN := results[0].nqn
+
+		// If there are multiple nodes, set up replication on the owner node.
+		// This creates a composite replica bdev that fans writes to all targets.
+		if len(uniqueNodes) > 1 {
+			ownerBdevName := fmt.Sprintf("novastor_%s", volumeID)
+			var remoteTargets []ReplicaTarget
+			for i := 1; i < len(uniqueNodes); i++ {
+				remoteTargets = append(remoteTargets, ReplicaTarget{
+					Address: results[i].addr,
+					Port:    results[i].port,
+					NQN:     results[i].nqn,
+				})
+			}
+			replicaBdevName, replicaNQN, repErr := cs.agentTarget.SetupReplication(
+				ctx, uniqueNodes[0], volumeID, ownerBdevName, remoteTargets, int64(requiredBytes),
+			)
+			if repErr != nil {
+				logging.L.Warn("SetupReplication failed; volume still usable on owner only",
+					zap.String("volumeID", volumeID),
+					zap.Error(repErr))
+			} else {
+				ownerNQN = replicaNQN
+				logging.L.Info("replication configured on owner node",
+					zap.String("volumeID", volumeID),
+					zap.String("replicaBdev", replicaBdevName),
+					zap.String("nqn", replicaNQN),
+					zap.Int("replicaCount", len(uniqueNodes)),
+				)
+			}
+		}
+
+		logging.L.Info("NVMe-oF targets created",
 			zap.String("volumeID", volumeID),
-			zap.String("ownerNode", ownerNode),
-			zap.String("nqn", ownerNQN),
+			zap.Int("nodeCount", len(uniqueNodes)),
+			zap.String("ownerNQN", ownerNQN),
 		)
 
 		// Build target addresses JSON for volume context.

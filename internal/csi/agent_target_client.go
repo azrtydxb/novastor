@@ -74,7 +74,7 @@ func (n *NodeTargetClient) SetANAState(ctx context.Context, agentAddr string, vo
 }
 
 // SetupReplication implements AgentTargetClient.
-func (n *NodeTargetClient) SetupReplication(ctx context.Context, agentAddr, volumeID, localBdevName string, remoteTargets []ReplicaTarget) (string, string, error) {
+func (n *NodeTargetClient) SetupReplication(ctx context.Context, agentAddr, volumeID, localBdevName string, remoteTargets []ReplicaTarget, sizeBytes int64) (string, string, error) {
 	c, err := n.clientFor(agentAddr)
 	if err != nil {
 		return "", "", err
@@ -88,7 +88,7 @@ func (n *NodeTargetClient) SetupReplication(ctx context.Context, agentAddr, volu
 			NQN:     rt.NQN,
 		}
 	}
-	result, err := c.SetupReplication(ctx, volumeID, localBdevName, agentTargets)
+	result, err := c.SetupReplication(ctx, volumeID, localBdevName, agentTargets, sizeBytes)
 	if err != nil {
 		return "", "", err
 	}

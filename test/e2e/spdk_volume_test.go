@@ -119,7 +119,7 @@ func TestSPDKReplicaBdev(t *testing.T) {
 	}
 
 	t.Log("creating replica bdev")
-	if err := client.CreateReplicaBdev("e2e-replica", targets, "round-robin"); err != nil {
+	if err := client.CreateReplicaBdev("e2e-replica", targets, "round-robin", 1073741824); err != nil {
 		t.Fatalf("CreateReplicaBdev failed: %v", err)
 	}
 

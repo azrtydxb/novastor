@@ -98,6 +98,9 @@ message SetupReplicationRequest {
   string local_bdev_name = 2;
   // remote_targets is the list of remote NVMe-oF targets to replicate to.
   repeated ReplicaTargetInfo remote_targets = 3;
+  // size_bytes is the volume size, required for SPDK bdev registration of
+  // the replica bdev so it can be exported as an NVMe-oF namespace.
+  int64 size_bytes = 4;
 }
 
 message SetupReplicationResponse {

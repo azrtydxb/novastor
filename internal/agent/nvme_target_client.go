@@ -92,7 +92,7 @@ type SetupReplicationResult struct {
 }
 
 // SetupReplication calls the agent's SetupReplication RPC.
-func (c *NVMeTargetClient) SetupReplication(ctx context.Context, volumeID, localBdevName string, remoteTargets []ReplicaTargetInfo) (*SetupReplicationResult, error) {
+func (c *NVMeTargetClient) SetupReplication(ctx context.Context, volumeID, localBdevName string, remoteTargets []ReplicaTargetInfo, sizeBytes int64) (*SetupReplicationResult, error) {
 	pbTargets := make([]*pb.ReplicaTargetInfo, len(remoteTargets))
 	for i, rt := range remoteTargets {
 		pbTargets[i] = &pb.ReplicaTargetInfo{
@@ -105,6 +105,7 @@ func (c *NVMeTargetClient) SetupReplication(ctx context.Context, volumeID, local
 		VolumeId:      volumeID,
 		LocalBdevName: localBdevName,
 		RemoteTargets: pbTargets,
+		SizeBytes:     sizeBytes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("SetupReplication RPC for volume %s: %w", volumeID, err)
