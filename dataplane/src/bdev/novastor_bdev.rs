@@ -364,8 +364,13 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 );
                 return;
             }
-            let iov_base = (*iovs).iov_base as usize;
-            let iov_len = (*iovs).iov_len;
+
+            // Capture iov metadata for the reactor-side copy.
+            let mut iov_descs: Vec<(usize, usize)> = Vec::with_capacity(iovcnt);
+            for i in 0..iovcnt {
+                let iov = &*iovs.add(i);
+                iov_descs.push((iov.iov_base as usize, iov.iov_len));
+            }
 
             io_pool().execute(move || {
                 let result = match get_chunk_backend() {
@@ -373,27 +378,44 @@ unsafe extern "C" fn bdev_submit_request_cb(
                     Err(e) => Err(e),
                 };
 
-                let success = match result {
-                    Ok(data) => unsafe {
-                        let copy_len = std::cmp::min(data.len(), iov_len);
-                        std::ptr::copy_nonoverlapping(data.as_ptr(), iov_base as *mut u8, copy_len);
-                        true
-                    },
+                // Copy data into the iov buffers and complete I/O on the
+                // reactor thread to guarantee the bdev_io and its iov buffers
+                // are still valid (they remain valid until spdk_bdev_io_complete).
+                match result {
+                    Ok(data) => {
+                        reactor_dispatch::send_to_reactor(move || unsafe {
+                            let mut src_off = 0usize;
+                            for &(base, len) in &iov_descs {
+                                let to_copy =
+                                    std::cmp::min(len, data.len().saturating_sub(src_off));
+                                if to_copy > 0 {
+                                    std::ptr::copy_nonoverlapping(
+                                        data[src_off..].as_ptr(),
+                                        base as *mut u8,
+                                        to_copy,
+                                    );
+                                }
+                                src_off += to_copy;
+                                if src_off >= data.len() {
+                                    break;
+                                }
+                            }
+                            ffi::spdk_bdev_io_complete(
+                                bdev_io_addr as *mut ffi::spdk_bdev_io,
+                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                            );
+                        });
+                    }
                     Err(e) => {
                         error!("novastor_bdev: read failed: {}", e);
-                        false
+                        reactor_dispatch::send_to_reactor(move || unsafe {
+                            ffi::spdk_bdev_io_complete(
+                                bdev_io_addr as *mut ffi::spdk_bdev_io,
+                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
+                            );
+                        });
                     }
                 };
-
-                // Complete I/O on the reactor thread.
-                let status = if success {
-                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS
-                } else {
-                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
-                };
-                reactor_dispatch::send_to_reactor(move || unsafe {
-                    ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
-                });
             });
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE => {

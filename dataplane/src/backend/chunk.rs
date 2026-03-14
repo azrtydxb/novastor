@@ -25,6 +25,10 @@ struct ChunkVolume {
     /// Ordered map: chunk_index → chunk_id.
     /// chunk_index = offset / CHUNK_SIZE.
     chunks: RwLock<HashMap<u64, ChunkID>>,
+    /// Serialises writes to this volume so that read-modify-write cycles for
+    /// partial-chunk writes cannot race and lose data.  Wrapped in Arc so the
+    /// guard can outlive the `volumes` HashMap lock.
+    write_lock: Arc<Mutex<()>>,
     is_snapshot: bool,
     parent_snapshot: Option<String>,
 }
@@ -94,6 +98,7 @@ impl StorageBackend for ChunkBackend {
             name: name.to_string(),
             size_bytes,
             chunks: RwLock::new(HashMap::new()),
+            write_lock: Arc::new(Mutex::new(())),
             is_snapshot: false,
             parent_snapshot: None,
         };
@@ -172,6 +177,7 @@ impl StorageBackend for ChunkBackend {
                 name: name.to_string(),
                 size_bytes: new_size_bytes,
                 chunks: RwLock::new(vol.chunks.read().unwrap().clone()),
+                write_lock: Arc::new(Mutex::new(())),
                 is_snapshot: vol.is_snapshot,
                 parent_snapshot: old_parent.clone(),
             };
@@ -302,6 +308,9 @@ impl StorageBackend for ChunkBackend {
     }
 
     fn write(&self, name: &str, offset: u64, data: &[u8]) -> Result<()> {
+        // Acquire the per-volume write lock first to serialise all writes.
+        // This prevents concurrent partial-chunk writes from racing on the
+        // read-modify-write cycle and losing data (e.g. during mkfs.ext4).
         let volumes = self.volumes.lock().unwrap();
         let vol = volumes
             .get(name)
@@ -317,7 +326,9 @@ impl StorageBackend for ChunkBackend {
                 vol.size_bytes
             )));
         }
+        let write_lock = vol.write_lock.clone();
         drop(volumes);
+        let _write_guard = write_lock.lock().unwrap();
 
         // Split the write into chunk-aligned pieces.
         let mut pos = 0usize;
@@ -470,6 +481,7 @@ impl StorageBackend for ChunkBackend {
             name: clone_name.to_string(),
             size_bytes: size,
             chunks: RwLock::new(chunk_index),
+            write_lock: Arc::new(Mutex::new(())),
             is_snapshot: false,
             parent_snapshot: Some(snapshot_name.to_string()),
         };

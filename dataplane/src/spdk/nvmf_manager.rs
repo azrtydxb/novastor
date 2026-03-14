@@ -8,7 +8,7 @@
 
 use crate::config::{NvmfInitiatorConfig, NvmfTargetConfig};
 use crate::error::{DataPlaneError, Result};
-use log::{error, info};
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_void};
 use std::sync::{Arc, Mutex, Once};
@@ -480,18 +480,8 @@ impl NvmfManager {
 
         reactor_dispatch::send_to_reactor(move || {
             let ctx_ptr = Box::into_raw(ctx) as *mut c_void;
-            unsafe {
-                let dctx = &*(ctx_ptr as *const TargetDeleteCtx);
-                let subsystem = dctx.subsystem.as_ptr() as *mut ffi::spdk_nvmf_subsystem;
-                let rc =
-                    ffi::spdk_nvmf_subsystem_stop(subsystem, Some(delete_stop_done_cb), ctx_ptr);
-                if rc != 0 {
-                    // Synchronous failure — callback will NOT be invoked.
-                    error!("spdk_nvmf_subsystem_stop synchronous failure: rc={}", rc);
-                    let dctx = Box::from_raw(ctx_ptr as *mut TargetDeleteCtx);
-                    dctx.completion.complete(rc);
-                }
-            }
+            // SAFETY: retry_subsystem_stop takes ownership of ctx_ptr on failure paths.
+            unsafe { retry_subsystem_stop(ctx_ptr) };
         });
 
         let rc = completion.wait();
@@ -774,6 +764,75 @@ unsafe extern "C" fn create_start_done_cb(
 // SPDK FFI callbacks — delete target chain
 // ---------------------------------------------------------------------------
 
+/// EINPROGRESS errno value.  SPDK async operations return this when the
+/// subsystem is still transitioning (e.g. connections draining).  The callback
+/// will NOT be invoked — we must retry later.
+const EINPROGRESS: i32 = -115;
+
+/// Delay between EINPROGRESS retries (microseconds).
+const DELETE_RETRY_US: u64 = 50_000; // 50ms
+
+/// Try to stop the subsystem.  On EINPROGRESS, schedules a retry on the
+/// reactor after a short delay instead of reporting a permanent failure.
+unsafe fn retry_subsystem_stop(ctx_ptr: *mut c_void) {
+    let dctx = &*(ctx_ptr as *const TargetDeleteCtx);
+    let subsystem = dctx.subsystem.as_ptr() as *mut ffi::spdk_nvmf_subsystem;
+    let rc = ffi::spdk_nvmf_subsystem_stop(subsystem, Some(delete_stop_done_cb), ctx_ptr);
+    if rc == 0 {
+        // Async stop in progress — callback will fire.
+        return;
+    }
+    if rc == EINPROGRESS {
+        warn!(
+            "spdk_nvmf_subsystem_stop returned EINPROGRESS, retrying in {}us",
+            DELETE_RETRY_US
+        );
+        schedule_retry_on_reactor(ctx_ptr, retry_subsystem_stop);
+        return;
+    }
+    // True synchronous failure — callback will NOT be invoked.
+    error!("spdk_nvmf_subsystem_stop synchronous failure: rc={}", rc);
+    let dctx = Box::from_raw(ctx_ptr as *mut TargetDeleteCtx);
+    dctx.completion.complete(rc);
+}
+
+/// Try to destroy the subsystem.  On EINPROGRESS, schedules a retry on the
+/// reactor after a short delay.
+unsafe fn retry_subsystem_destroy(ctx_ptr: *mut c_void) {
+    let dctx = &*(ctx_ptr as *const TargetDeleteCtx);
+    let subsystem = dctx.subsystem.as_ptr() as *mut ffi::spdk_nvmf_subsystem;
+    let rc = ffi::spdk_nvmf_subsystem_destroy(subsystem, Some(delete_destroy_done_cb), ctx_ptr);
+    if rc == 0 {
+        // Async destroy in progress — callback will fire.
+        return;
+    }
+    if rc == EINPROGRESS {
+        warn!(
+            "spdk_nvmf_subsystem_destroy returned EINPROGRESS, retrying in {}us",
+            DELETE_RETRY_US
+        );
+        schedule_retry_on_reactor(ctx_ptr, retry_subsystem_destroy);
+        return;
+    }
+    // True synchronous failure — callback will NOT be invoked.
+    error!("spdk_nvmf_subsystem_destroy synchronous failure: rc={}", rc);
+    let dctx = Box::from_raw(ctx_ptr as *mut TargetDeleteCtx);
+    dctx.completion.complete(rc);
+}
+
+/// Schedule a retry function to run on the reactor after a short delay.
+/// Uses `send_to_reactor` + `std::thread::sleep` in a background thread to
+/// avoid blocking the reactor while waiting.
+fn schedule_retry_on_reactor(ctx_ptr: *mut c_void, retry_fn: unsafe fn(*mut c_void)) {
+    let ptr = ctx_ptr as usize;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_micros(DELETE_RETRY_US));
+        reactor_dispatch::send_to_reactor(move || unsafe {
+            retry_fn(ptr as *mut c_void);
+        });
+    });
+}
+
 /// Callback after `spdk_nvmf_subsystem_stop` completes during delete_target.
 /// On success, destroys the subsystem. On failure, signals the completion.
 unsafe extern "C" fn delete_stop_done_cb(
@@ -781,24 +840,15 @@ unsafe extern "C" fn delete_stop_done_cb(
     cb_arg: *mut c_void,
     status: i32,
 ) {
-    let ctx_ptr = cb_arg;
-    let ctx = &*(ctx_ptr as *const TargetDeleteCtx);
-
     if status != 0 {
-        error!("spdk_nvmf_subsystem_stop failed: rc={}", status);
-        let ctx = Box::from_raw(ctx_ptr as *mut TargetDeleteCtx);
+        error!("spdk_nvmf_subsystem_stop callback failed: rc={}", status);
+        let ctx = Box::from_raw(cb_arg as *mut TargetDeleteCtx);
         ctx.completion.complete(status);
         return;
     }
 
-    let subsystem = ctx.subsystem.as_ptr() as *mut ffi::spdk_nvmf_subsystem;
-    let rc = ffi::spdk_nvmf_subsystem_destroy(subsystem, Some(delete_destroy_done_cb), ctx_ptr);
-    if rc != 0 {
-        // Synchronous failure — callback will NOT be invoked.
-        error!("spdk_nvmf_subsystem_destroy synchronous failure: rc={}", rc);
-        let ctx = Box::from_raw(ctx_ptr as *mut TargetDeleteCtx);
-        ctx.completion.complete(rc);
-    }
+    // Stop succeeded — now destroy.
+    retry_subsystem_destroy(cb_arg);
 }
 
 /// Callback after `spdk_nvmf_subsystem_destroy` completes during delete_target.
