@@ -1,6 +1,5 @@
 // Package dataplane provides a Go gRPC client for the Rust SPDK dataplane.
-// This replaces the JSON-RPC client in internal/spdk/client.go per the
-// architecture spec (invariant #9: gRPC is the only communication protocol).
+// gRPC is the sole communication channel between Go and Rust (invariant #5).
 package dataplane
 
 import (
@@ -28,7 +27,6 @@ const (
 )
 
 // Client communicates with the local Rust SPDK dataplane via gRPC.
-// It replaces the JSON-RPC spdk.Client.
 type Client struct {
 	conn   *grpc.ClientConn
 	svc    pb.DataplaneServiceClient
