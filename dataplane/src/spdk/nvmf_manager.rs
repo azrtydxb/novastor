@@ -532,9 +532,10 @@ impl NvmfManager {
         Ok(info)
     }
 
-    /// Call SPDK's native `bdev_nvme_attach_controller` RPC via the native
-    /// SPDK JSON-RPC server socket.  This creates a properly registered bdev
-    /// for the remote NVMe-oF target with the given name prefix.
+    /// Call SPDK's native `bdev_nvme_attach_controller` via SPDK's internal
+    /// RPC socket (/var/tmp/spdk.sock). This is Rust→SPDK communication
+    /// (not Go→Rust), so it does not violate invariant #5. Creates a
+    /// properly registered bdev for the remote NVMe-oF target.
     fn attach_controller_via_native_rpc(
         name: &str,
         addr: &str,
@@ -635,8 +636,8 @@ impl NvmfManager {
         Ok(())
     }
 
-    /// Call SPDK's native `bdev_nvme_detach_controller` RPC to cleanly
-    /// remove the controller and its bdevs.
+    /// Call SPDK's native `bdev_nvme_detach_controller` via SPDK's internal
+    /// RPC socket to cleanly remove the controller and its bdevs.
     fn detach_controller_via_native_rpc(name: &str) -> Result<()> {
         use std::io::{Read, Write};
         use std::os::unix::net::UnixStream;

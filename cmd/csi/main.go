@@ -189,7 +189,7 @@ func main() {
 	tlsKey := flag.String("tls-key", "", "Path to client key for mTLS")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	_ = flag.String("data-plane", "legacy", "Data plane mode (currently unused — kernel NVMe initiator is always used)")
-	_ = flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "SPDK JSON-RPC socket (currently unused)")
+	_ = flag.String("spdk-socket", "/var/tmp/novastor-spdk.sock", "SPDK native RPC socket (currently unused — Go agent uses gRPC)")
 	flag.Parse()
 
 	log.Printf("novastor-csi %s (commit: %s, built: %s)", version, commit, date)

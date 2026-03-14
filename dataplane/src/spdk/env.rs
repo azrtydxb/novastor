@@ -40,10 +40,13 @@ pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
         opts.reactor_mask = reactor_mask.as_ptr();
         opts.mem_size = config.mem_size as i32;
         opts.hugedir = hugedir.as_ptr();
-        // Disable SPDK's built-in JSON-RPC server. All communication with
-        // the Go agent uses gRPC (invariant #5). Setting rpc_addr to null
-        // prevents SPDK from opening a Unix socket listener.
-        opts.rpc_addr = std::ptr::null();
+        // Enable SPDK's native RPC socket for SPDK-internal operations only.
+        // This is used by the Rust dataplane to call SPDK subsystem methods
+        // (e.g. bdev_nvme_attach_controller for NVMe-oF initiator). The Go
+        // agent NEVER connects to this socket — all Go→Rust communication
+        // uses gRPC exclusively (invariant #5).
+        let rpc_sock = std::ffi::CString::new("/var/tmp/spdk.sock").unwrap();
+        opts.rpc_addr = rpc_sock.as_ptr();
 
         // Right-size iobuf pools for NVMe-oF TCP transport.
         // NVMe-oF TCP needs ~383 large buffers; 512 gives headroom.
@@ -90,8 +93,9 @@ unsafe extern "C" fn spdk_startup_cb(arg: *mut std::os::raw::c_void) {
 
     // Initialise SPDK managers. These are used by the gRPC
     // DataplaneService to manage bdevs and NVMe-oF targets.
-    // No JSON-RPC server is started — gRPC is the sole communication
-    // channel between the Go agent and the Rust dataplane (invariant #5).
+    // SPDK's native RPC socket is available for SPDK-internal operations
+    // (e.g. bdev_nvme_attach_controller), but the Go agent communicates
+    // exclusively via gRPC (invariant #5).
     info!("SPDK subsystems ready, awaiting gRPC connections");
 }
 

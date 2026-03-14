@@ -1,7 +1,7 @@
 //! SPDK thread dispatch utilities.
 //!
-//! SPDK operations must run on the SPDK app thread (reactor). When our
-//! JSON-RPC server receives a request on its own I/O thread, it needs to
+//! SPDK operations must run on the SPDK app thread (reactor). When the
+//! gRPC service receives a request on a tokio thread, it needs to
 //! dispatch work to the SPDK reactor and wait for the result. This module
 //! provides a [`Completion`] type for that synchronous request/response
 //! pattern, and a [`dispatch_to_reactor`] function that sends a closure
@@ -74,7 +74,7 @@ impl<T> Completion<T> {
 /// Dispatch a closure to the SPDK reactor (app) thread and block until it
 /// completes, returning the result.
 ///
-/// This is the primary mechanism for JSON-RPC handlers (running on OS threads)
+/// This is the primary mechanism for gRPC handlers (running on tokio threads)
 /// to execute SPDK operations that must run on the reactor thread. The closure
 /// runs inside a `spdk_thread_send_msg` callback on the app thread.
 ///

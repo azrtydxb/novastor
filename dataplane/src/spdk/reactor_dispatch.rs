@@ -1,7 +1,7 @@
 //! Reactor dispatch — run SPDK operations on the reactor thread.
 //!
 //! All SPDK bdev and lvol operations must execute on an SPDK thread. The
-//! JSON-RPC server runs on OS threads, so we dispatch work to the reactor
+//! gRPC service runs on tokio threads, so we dispatch work to the reactor
 //! via `spdk_thread_send_msg()` and block until results arrive.
 //!
 //! - Sync ops (create_malloc, query_bdev): `dispatch_sync` sends a closure,

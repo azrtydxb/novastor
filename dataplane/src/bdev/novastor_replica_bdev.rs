@@ -67,7 +67,7 @@ unsafe impl Send for ReplicaBdevCtx {}
 unsafe impl Sync for ReplicaBdevCtx {}
 
 // ---------------------------------------------------------------------------
-// Public API — called from JSON-RPC handlers
+// Public API — called from gRPC DataplaneService handlers
 // ---------------------------------------------------------------------------
 
 /// Create a replica SPDK bdev wrapping a `ReplicaBdev`.

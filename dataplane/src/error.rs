@@ -16,8 +16,6 @@ pub enum DataPlaneError {
     BlobstoreError(String),
     #[error("lvol error: {0}")]
     LvolError(String),
-    #[error("JSON-RPC error: {0}")]
-    JsonRpcError(String),
     #[error("replica bdev error: {0}")]
     ReplicaError(String),
     #[error("erasure coding error: {0}")]

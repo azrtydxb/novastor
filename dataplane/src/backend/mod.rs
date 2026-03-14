@@ -2,7 +2,7 @@
 //!
 //! All three data backends (raw disk, LVM, chunk) implement the same
 //! `StorageBackend` trait so the Go management plane can use any backend
-//! through a single JSON-RPC interface.
+//! through the gRPC DataplaneService.
 
 #[cfg(feature = "spdk-sys")]
 pub mod bdev_store;

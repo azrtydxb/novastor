@@ -6,7 +6,7 @@ use log::info;
 #[derive(Parser, Debug)]
 #[command(name = "novastor-dataplane", version, about)]
 struct Args {
-    /// JSON-RPC Unix socket path
+    /// gRPC listen address for dataplane service
     #[arg(long, default_value = "/var/tmp/novastor-spdk.sock")]
     rpc_socket: String,
 

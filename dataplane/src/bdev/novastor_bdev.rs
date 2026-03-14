@@ -82,7 +82,7 @@ unsafe impl Send for BdevCtx {}
 unsafe impl Sync for BdevCtx {}
 
 // ---------------------------------------------------------------------------
-// Public API — called from JSON-RPC handlers
+// Public API — called from gRPC DataplaneService handlers
 // ---------------------------------------------------------------------------
 
 /// Create a NovaStor bdev wrapping a ChunkBackend volume.
