@@ -65,12 +65,21 @@ struct NovastorBdevEntry {
     volume_name: String,
     /// The SPDK bdev pointer, needed for unregister.
     bdev_ptr: usize,
+    /// The BdevCtx pointer, used as the io_device key for unregister.
+    ctx_ptr: usize,
 }
 
 /// Bdev context stored in `bdev->ctxt`. Points back to the volume name.
 struct BdevCtx {
     volume_name: String,
 }
+
+// Safety: BdevCtx is only accessed from SPDK reactor thread or our I/O pool
+// threads. The reactor thread creates it, the pool threads read volume_name,
+// and the reactor thread frees it on destruct. All access is via raw pointer
+// cast from bdev->ctxt.
+unsafe impl Send for BdevCtx {}
+unsafe impl Sync for BdevCtx {}
 
 // ---------------------------------------------------------------------------
 // Public API — called from JSON-RPC handlers
@@ -100,52 +109,73 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
         volume_name: volume_name.to_string(),
     });
     let ctx_ptr = Box::into_raw(ctx);
+    // Wrap the raw pointer so it can cross the Send boundary to the reactor thread.
+    // Safety: the pointer is valid and exclusively owned until the reactor thread uses it.
+    let ctx_addr = ctx_ptr as usize;
 
     let bdev_name_clone = bdev_name.clone();
-    let volume_name_owned = volume_name.to_string();
 
     // Register on the reactor thread.
-    let bdev_addr = reactor_dispatch::dispatch_sync(move || -> Result<usize> {
-        unsafe {
-            // Allocate and zero the bdev struct.
-            let bdev =
-                libc::calloc(1, std::mem::size_of::<ffi::spdk_bdev>()) as *mut ffi::spdk_bdev;
-            if bdev.is_null() {
-                let _ = Box::from_raw(ctx_ptr); // cleanup
-                return Err(DataPlaneError::BdevError("calloc spdk_bdev failed".into()));
+    let (bdev_addr, registered_ctx_addr) =
+        reactor_dispatch::dispatch_sync(move || -> Result<(usize, usize)> {
+            unsafe {
+                let ctx_ptr = ctx_addr as *mut BdevCtx;
+
+                // Register this bdev's context as an io_device BEFORE bdev_register.
+                // This follows the SPDK bdev_malloc pattern: each bdev instance is
+                // its own io_device, and get_io_channel returns spdk_get_io_channel(ctx).
+                let io_dev_name =
+                    std::ffi::CString::new(format!("novastor_io_{}", bdev_name_clone)).unwrap();
+                ffi::spdk_io_device_register(
+                    ctx_ptr as *mut c_void,
+                    Some(novastor_channel_create_cb),
+                    Some(novastor_channel_destroy_cb),
+                    0, // ctx_size — no per-channel state needed
+                    io_dev_name.as_ptr(),
+                );
+
+                // Allocate and zero the bdev struct.
+                let bdev =
+                    libc::calloc(1, std::mem::size_of::<ffi::spdk_bdev>()) as *mut ffi::spdk_bdev;
+                if bdev.is_null() {
+                    ffi::spdk_io_device_unregister(ctx_ptr as *mut c_void, None);
+                    let _ = Box::from_raw(ctx_ptr); // cleanup
+                    return Err(DataPlaneError::BdevError("calloc spdk_bdev failed".into()));
+                }
+
+                // Set bdev fields.
+                let name_c = std::ffi::CString::new(bdev_name_clone.as_str()).unwrap();
+                (*bdev).name = libc::strdup(name_c.as_ptr());
+                (*bdev).product_name =
+                    libc::strdup(b"NovaStor ChunkBackend\0".as_ptr() as *const c_char);
+                (*bdev).blocklen = block_size;
+                (*bdev).blockcnt = num_blocks;
+                (*bdev).ctxt = ctx_ptr as *mut c_void;
+                (*bdev).module = novastor_bdev_module_ptr();
+                (*bdev).fn_table = novastor_fn_table();
+
+                let rc = ffi::spdk_bdev_register(bdev);
+                if rc != 0 {
+                    ffi::spdk_io_device_unregister(ctx_ptr as *mut c_void, None);
+                    libc::free((*bdev).name as *mut c_void);
+                    libc::free((*bdev).product_name as *mut c_void);
+                    libc::free(bdev as *mut c_void);
+                    let _ = Box::from_raw(ctx_ptr);
+                    return Err(DataPlaneError::BdevError(format!(
+                        "spdk_bdev_register failed: rc={rc}"
+                    )));
+                }
+
+                Ok((bdev as usize, ctx_ptr as usize))
             }
-
-            // Set bdev fields.
-            let name_c = std::ffi::CString::new(bdev_name_clone.as_str()).unwrap();
-            (*bdev).name = libc::strdup(name_c.as_ptr());
-            (*bdev).product_name =
-                libc::strdup(b"NovaStor ChunkBackend\0".as_ptr() as *const c_char);
-            (*bdev).blocklen = block_size;
-            (*bdev).blockcnt = num_blocks;
-            (*bdev).ctxt = ctx_ptr as *mut c_void;
-            (*bdev).module = novastor_bdev_module_ptr();
-            (*bdev).fn_table = &NOVASTOR_FN_TABLE;
-
-            let rc = ffi::spdk_bdev_register(bdev);
-            if rc != 0 {
-                libc::free((*bdev).name as *mut c_void);
-                libc::free((*bdev).product_name as *mut c_void);
-                libc::free(bdev as *mut c_void);
-                let _ = Box::from_raw(ctx_ptr);
-                return Err(DataPlaneError::BdevError(format!(
-                    "spdk_bdev_register failed: rc={rc}"
-                )));
-            }
-
-            Ok(bdev as usize)
-        }
-    })?;
+        })?;
 
     bdev_registry().lock().unwrap().insert(
         volume_name.to_string(),
         NovastorBdevEntry {
             volume_name: volume_name.to_string(),
             bdev_ptr: bdev_addr,
+            ctx_ptr: registered_ctx_addr,
         },
     );
 
@@ -174,6 +204,7 @@ pub fn destroy(volume_name: &str) -> Result<()> {
         })?;
 
     let bdev_addr = entry.bdev_ptr;
+    let ctx_addr = entry.ctx_ptr;
 
     info!(
         "novastor_bdev: destroying bdev for volume '{}'",
@@ -202,6 +233,11 @@ pub fn destroy(volume_name: &str) -> Result<()> {
         )));
     }
 
+    // Unregister the per-bdev io_device after the bdev itself is gone.
+    reactor_dispatch::send_to_reactor(move || unsafe {
+        ffi::spdk_io_device_unregister(ctx_addr as *mut c_void, None);
+    });
+
     info!("novastor_bdev: destroyed bdev for volume '{}'", volume_name);
     Ok(())
 }
@@ -225,27 +261,29 @@ fn novastor_bdev_module_ptr() -> *mut ffi::spdk_bdev_module {
 }
 
 /// The bdev function table. SPDK calls these for I/O and lifecycle.
-static NOVASTOR_FN_TABLE: ffi::spdk_bdev_fn_table = ffi::spdk_bdev_fn_table {
-    destruct: Some(bdev_destruct_cb),
-    submit_request: Some(bdev_submit_request_cb),
-    io_type_supported: Some(bdev_io_type_supported_cb),
-    get_io_channel: Some(bdev_get_io_channel_cb),
-    // All other fields default to None/0 (null).
-    dump_info_json: None,
-    write_config_json: None,
-    get_spin_time: None,
-    get_module_ctx: None,
-    get_memory_domains: None,
-    accel_sequence_supported: None,
-    reset_device_stat: None,
-    dump_device_stat_json: None,
-};
+/// Initialised at runtime because the struct may have fields that aren't
+/// const-initialisable. All unset fields are zero (None/null).
+static NOVASTOR_FN_TABLE: OnceLock<ffi::spdk_bdev_fn_table> = OnceLock::new();
+
+fn novastor_fn_table() -> &'static ffi::spdk_bdev_fn_table {
+    NOVASTOR_FN_TABLE.get_or_init(|| {
+        let mut ft: ffi::spdk_bdev_fn_table = unsafe { std::mem::zeroed() };
+        ft.destruct = Some(bdev_destruct_cb);
+        ft.submit_request = Some(bdev_submit_request_cb);
+        ft.io_type_supported = Some(bdev_io_type_supported_cb);
+        ft.get_io_channel = Some(bdev_get_io_channel_cb);
+        ft
+    })
+}
 
 // ---------------------------------------------------------------------------
 // SPDK bdev callbacks
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" fn module_init_cb() -> i32 {
+    // Per-bdev io_device registration happens in create().
+    // Module init is a no-op — it exists because SPDK requires module_init
+    // to be non-null, but our module doesn't need global io_device state.
     info!("novastor_bdev: module initialised");
     0
 }
@@ -253,6 +291,15 @@ unsafe extern "C" fn module_init_cb() -> i32 {
 unsafe extern "C" fn module_fini_cb() {
     info!("novastor_bdev: module shutdown");
 }
+
+/// No-op channel create callback. NovaStor bdevs offload I/O to a thread pool
+/// rather than using SPDK per-channel state.
+unsafe extern "C" fn novastor_channel_create_cb(_io_device: *mut c_void, _ctx: *mut c_void) -> i32 {
+    0
+}
+
+/// No-op channel destroy callback.
+unsafe extern "C" fn novastor_channel_destroy_cb(_io_device: *mut c_void, _ctx: *mut c_void) {}
 
 unsafe extern "C" fn bdev_destruct_cb(ctx: *mut c_void) -> i32 {
     // Free the BdevCtx.
@@ -274,23 +321,10 @@ unsafe extern "C" fn bdev_io_type_supported_cb(
 }
 
 unsafe extern "C" fn bdev_get_io_channel_cb(ctx: *mut c_void) -> *mut ffi::spdk_io_channel {
-    // NovaStor bdevs don't need per-channel state. Return the bdev's
-    // internal channel which SPDK provides.
-    // For custom bdevs without channel-specific state, we return the
-    // bdev module's I/O channel.
-    let bdev_ctx = &*(ctx as *const BdevCtx);
-    let name_c = std::ffi::CString::new(format!("novastor_{}", bdev_ctx.volume_name)).unwrap();
-    let bdev = ffi::spdk_bdev_get_by_name(name_c.as_ptr());
-    if bdev.is_null() {
-        return std::ptr::null_mut();
-    }
-    // Use spdk_bdev_get_io_channel via the bdev desc — but we're in
-    // get_io_channel which means SPDK is managing channels for us.
-    // Return a dummy non-null pointer. SPDK's bdev layer handles the
-    // actual channel management for custom modules.
-    // Note: for modules that don't need per-channel state, SPDK still
-    // requires a non-null return. We use the module's own channel.
-    ffi::spdk_get_io_channel(novastor_bdev_module_ptr() as *mut c_void)
+    // Follow the SPDK bdev_malloc pattern: each bdev's BdevCtx is registered
+    // as its own io_device in create(). Return the io_channel for this
+    // specific bdev instance.
+    ffi::spdk_get_io_channel(ctx)
 }
 
 /// The main I/O submission callback. Called on the SPDK reactor thread.
@@ -311,17 +345,18 @@ unsafe extern "C" fn bdev_submit_request_cb(
     }
     let volume_name = (*ctx).volume_name.clone();
 
-    let io_type = (*bdev_io).type_;
+    let io_type = (*bdev_io).type_ as u32;
 
     match io_type {
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_READ => {
-            let offset = (*bdev_io).u.bdev.offset_blocks * (*bdev).blocklen as u64;
-            let length = (*bdev_io).u.bdev.num_blocks * (*bdev).blocklen as u64;
+            let bdev_params = (*bdev_io).u.bdev.as_ref();
+            let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
+            let length = bdev_params.num_blocks * (*bdev).blocklen as u64;
             let bdev_io_addr = bdev_io as usize;
 
             // Get the iov buffer pointer for writing data back.
-            let iovs = (*bdev_io).u.bdev.iovs;
-            let iovcnt = (*bdev_io).u.bdev.iovcnt as usize;
+            let iovs = bdev_params.iovs;
+            let iovcnt = bdev_params.iovcnt as usize;
             if iovs.is_null() || iovcnt == 0 {
                 ffi::spdk_bdev_io_complete(
                     bdev_io,
@@ -362,12 +397,13 @@ unsafe extern "C" fn bdev_submit_request_cb(
             });
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE => {
-            let offset = (*bdev_io).u.bdev.offset_blocks * (*bdev).blocklen as u64;
-            let length = (*bdev_io).u.bdev.num_blocks * (*bdev).blocklen as u64;
+            let bdev_params = (*bdev_io).u.bdev.as_ref();
+            let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
+            let length = bdev_params.num_blocks * (*bdev).blocklen as u64;
             let bdev_io_addr = bdev_io as usize;
 
-            let iovs = (*bdev_io).u.bdev.iovs;
-            let iovcnt = (*bdev_io).u.bdev.iovcnt as usize;
+            let iovs = bdev_params.iovs;
+            let iovcnt = bdev_params.iovcnt as usize;
             if iovs.is_null() || iovcnt == 0 {
                 ffi::spdk_bdev_io_complete(
                     bdev_io,
@@ -413,10 +449,10 @@ unsafe extern "C" fn bdev_submit_request_cb(
             });
         }
         _ => {
-            // Unsupported I/O type.
+            // Unsupported I/O type. SPDK_BDEV_IO_STATUS_FAILED = -1.
             ffi::spdk_bdev_io_complete(
                 bdev_io,
-                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_NOT_SUPPORTED,
+                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
             );
         }
     }

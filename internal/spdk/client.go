@@ -37,9 +37,8 @@ type Client struct {
 
 	// nativeMu serialises calls to SPDK's built-in RPC socket for
 	// NVMe-oF target operations. Each call uses a fresh connection.
-	nativeMu      sync.Mutex
-	nativeID      atomic.Int64
-	transportInit sync.Once
+	nativeMu sync.Mutex
+	nativeID atomic.Int64
 }
 
 // NewClient creates a new SPDK JSON-RPC client.
@@ -300,74 +299,36 @@ func (c *Client) nativeCall(method string, params interface{}, result interface{
 	return nil
 }
 
-// ensureNativeTransport creates the TCP transport via SPDK's native RPC once.
-func (c *Client) ensureNativeTransport() error {
-	var initErr error
-	c.transportInit.Do(func() {
-		err := c.nativeCall("nvmf_create_transport", map[string]interface{}{
-			"trtype": "TCP",
-		}, nil)
-		if err != nil {
-			// Transport may already exist if the dataplane wasn't restarted.
-			if !strings.Contains(err.Error(), "already exists") {
-				initErr = err
-			}
-		}
-	})
-	return initErr
-}
-
 // CreateNvmfTarget creates an NVMe-oF target subsystem exposing a bdev.
-// Uses SPDK's built-in RPC methods which run directly on the reactor thread,
-// ensuring the TCP transport's accept poller functions correctly.
+// Routes through the Rust dataplane's NVMf manager (nvmf_create_target) which
+// uses the SPDK C API directly with correct ordering: create subsystem (INACTIVE)
+// → add namespace → add listener → start. The native JSON-RPC methods cannot
+// be used because SPDK v26.01's nvmf_create_subsystem auto-starts the subsystem,
+// causing a race with subsequent add_ns calls.
 func (c *Client) CreateNvmfTarget(volumeID, listenAddr string, port uint16, bdevName string) (string, error) {
-	if err := c.ensureNativeTransport(); err != nil {
-		return "", fmt.Errorf("ensuring NVMe-oF transport: %w", err)
+	params := map[string]interface{}{
+		"volume_id":      volumeID,
+		"bdev_name":      bdevName,
+		"listen_address": listenAddr,
+		"listen_port":    port,
 	}
-
-	nqn := fmt.Sprintf("nqn.2024-01.io.novastor:volume-%s", volumeID)
-	portStr := fmt.Sprintf("%d", port)
-
-	// Step 1: Create subsystem.
-	if err := c.nativeCall("nvmf_create_subsystem", map[string]interface{}{
-		"nqn":            nqn,
-		"allow_any_host": true,
-	}, nil); err != nil {
-		return "", fmt.Errorf("creating NVMe-oF subsystem: %w", err)
+	var result struct {
+		NQN           string `json:"nqn"`
+		BdevName      string `json:"bdev_name"`
+		ListenAddress string `json:"listen_address"`
+		ListenPort    uint16 `json:"listen_port"`
 	}
-
-	// Step 2: Add namespace (bdev).
-	if err := c.nativeCall("nvmf_subsystem_add_ns", map[string]interface{}{
-		"nqn":       nqn,
-		"namespace": map[string]interface{}{"bdev_name": bdevName},
-	}, nil); err != nil {
-		// Best-effort cleanup.
-		_ = c.nativeCall("nvmf_delete_subsystem", map[string]interface{}{"nqn": nqn}, nil)
-		return "", fmt.Errorf("adding namespace to subsystem: %w", err)
+	if err := c.call("nvmf_create_target", params, &result); err != nil {
+		return "", err
 	}
-
-	// Step 3: Add listener with the specific host IP so the SPDK listener
-	// ACL matches the address clients connect to.
-	if err := c.nativeCall("nvmf_subsystem_add_listener", map[string]interface{}{
-		"nqn": nqn,
-		"listen_address": map[string]interface{}{
-			"trtype":  "TCP",
-			"adrfam":  "IPv4",
-			"traddr":  listenAddr,
-			"trsvcid": portStr,
-		},
-	}, nil); err != nil {
-		_ = c.nativeCall("nvmf_delete_subsystem", map[string]interface{}{"nqn": nqn}, nil)
-		return "", fmt.Errorf("adding listener to subsystem: %w", err)
-	}
-
-	return nqn, nil
+	return result.NQN, nil
 }
 
 // DeleteNvmfTarget removes an NVMe-oF target subsystem by volume ID.
+// Routes through the Rust dataplane's NVMf manager which handles the
+// correct stop → destroy sequence via the SPDK C API.
 func (c *Client) DeleteNvmfTarget(volumeID string) error {
-	nqn := fmt.Sprintf("nqn.2024-01.io.novastor:volume-%s", volumeID)
-	return c.nativeCall("nvmf_delete_subsystem", map[string]interface{}{"nqn": nqn}, nil)
+	return c.call("nvmf_delete_target", map[string]interface{}{"volume_id": volumeID}, nil)
 }
 
 // ConnectInitiator connects to a remote NVMe-oF target and returns the local bdev name.
