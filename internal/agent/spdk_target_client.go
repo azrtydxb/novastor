@@ -87,3 +87,40 @@ func (c *SPDKTargetClient) SetANAState(ctx context.Context, agentAddr, volumeID,
 	}
 	return nil
 }
+
+// ReplicaTargetInfo describes a remote NVMe-oF target for replication setup.
+type ReplicaTargetInfo struct {
+	Address string
+	Port    string
+	NQN     string
+}
+
+// SetupReplication dials the owner agent and calls SetupReplication to
+// configure cross-node write replication via a composite replica bdev.
+func (c *SPDKTargetClient) SetupReplication(ctx context.Context, agentAddr, volumeID, localBdevName string, remoteTargets []ReplicaTargetInfo) (replicaBdevName, subsystemNQN string, err error) {
+	conn, err := grpc.NewClient(agentAddr, c.dialOpts...)
+	if err != nil {
+		return "", "", fmt.Errorf("dialing agent at %s: %w", agentAddr, err)
+	}
+	defer conn.Close()
+
+	pbTargets := make([]*pb.ReplicaTargetInfo, len(remoteTargets))
+	for i, rt := range remoteTargets {
+		pbTargets[i] = &pb.ReplicaTargetInfo{
+			Address: rt.Address,
+			Port:    rt.Port,
+			Nqn:     rt.NQN,
+		}
+	}
+
+	client := pb.NewNVMeTargetServiceClient(conn)
+	resp, err := client.SetupReplication(ctx, &pb.SetupReplicationRequest{
+		VolumeId:      volumeID,
+		LocalBdevName: localBdevName,
+		RemoteTargets: pbTargets,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("SetupReplication RPC for volume %s on %s: %w", volumeID, agentAddr, err)
+	}
+	return resp.GetReplicaBdevName(), resp.GetSubsystemNqn(), nil
+}

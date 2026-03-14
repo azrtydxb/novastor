@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -270,4 +271,138 @@ func (s *SPDKTargetServer) SetANAState(ctx context.Context, req *pb.SetANAStateR
 	)
 
 	return &pb.SetANAStateResponse{}, nil
+}
+
+// SetupReplication configures the owner node to replicate writes to remote
+// replica targets. It:
+// 1. Connects as NVMe-oF initiator to each remote target
+// 2. Creates a replica bdev combining local chunk bdev + remote initiator bdevs
+// 3. Tears down the simple NVMe-oF target
+// 4. Re-exports using the replica bdev as the backing device
+//
+// After this, all writes to this volume's NVMe-oF target are fanned out
+// to all replicas with majority quorum by the Rust dataplane's replica bdev.
+func (s *SPDKTargetServer) SetupReplication(ctx context.Context, req *pb.SetupReplicationRequest) (*pb.SetupReplicationResponse, error) {
+	volumeID := req.GetVolumeId()
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume_id is required")
+	}
+	localBdevName := req.GetLocalBdevName()
+	if localBdevName == "" {
+		return nil, status.Error(codes.InvalidArgument, "local_bdev_name is required")
+	}
+	remoteTargets := req.GetRemoteTargets()
+	if len(remoteTargets) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "at least one remote target is required")
+	}
+
+	logging.L.Info("spdk target: setting up replication",
+		zap.String("volumeID", volumeID),
+		zap.String("localBdev", localBdevName),
+		zap.Int("remoteCount", len(remoteTargets)),
+	)
+
+	// Step 1: Connect as NVMe-oF initiator to each remote replica target.
+	var connectedBdevs []string
+	for _, rt := range remoteTargets {
+		port, err := strconv.ParseUint(rt.GetPort(), 10, 16)
+		if err != nil {
+			// Clean up already connected initiators.
+			for _, bdev := range connectedBdevs {
+				_ = s.spdkClient.DisconnectInitiator(bdev)
+			}
+			return nil, status.Errorf(codes.InvalidArgument, "invalid port %q for remote target %s: %v", rt.GetPort(), rt.GetAddress(), err)
+		}
+
+		initiatorBdevName := fmt.Sprintf("replica_%s_%s", volumeID[:8], rt.GetAddress())
+		remoteBdev, err := s.spdkClient.ConnectInitiator(rt.GetAddress(), uint16(port), rt.GetNqn(), initiatorBdevName)
+		if err != nil {
+			logging.L.Error("spdk target: failed to connect initiator to remote replica",
+				zap.String("volumeID", volumeID),
+				zap.String("remoteAddr", rt.GetAddress()),
+				zap.Error(err),
+			)
+			// Clean up already connected initiators.
+			for _, bdev := range connectedBdevs {
+				_ = s.spdkClient.DisconnectInitiator(bdev)
+			}
+			return nil, status.Errorf(codes.Internal, "connecting initiator to %s for volume %s: %v", rt.GetAddress(), volumeID, err)
+		}
+		connectedBdevs = append(connectedBdevs, remoteBdev)
+		logging.L.Info("spdk target: connected initiator to remote replica",
+			zap.String("volumeID", volumeID),
+			zap.String("remoteAddr", rt.GetAddress()),
+			zap.String("remoteBdev", remoteBdev),
+		)
+	}
+
+	// Step 2: Build replica target list (local + remote bdevs).
+	replicaTargets := make([]spdk.ReplicaTarget, 0, 1+len(connectedBdevs))
+
+	// Local chunk bdev — marked as local for read preference.
+	replicaTargets = append(replicaTargets, spdk.ReplicaTarget{
+		Addr:    s.hostIP,
+		Port:    spdkTargetPort,
+		NQN:     localBdevName, // The replica bdev uses bdev name for local targets.
+		IsLocal: true,
+	})
+
+	// Remote initiator bdevs.
+	for i, rt := range remoteTargets {
+		port, _ := strconv.ParseUint(rt.GetPort(), 10, 16)
+		replicaTargets = append(replicaTargets, spdk.ReplicaTarget{
+			Addr:    rt.GetAddress(),
+			Port:    uint16(port),
+			NQN:     connectedBdevs[i],
+			IsLocal: false,
+		})
+	}
+
+	// Step 3: Create the composite replica bdev.
+	replicaBdevName := fmt.Sprintf("replicated_%s", volumeID)
+	if err := s.spdkClient.CreateReplicaBdev(replicaBdevName, replicaTargets, "local_first"); err != nil {
+		logging.L.Error("spdk target: failed to create replica bdev",
+			zap.String("volumeID", volumeID),
+			zap.Error(err),
+		)
+		for _, bdev := range connectedBdevs {
+			_ = s.spdkClient.DisconnectInitiator(bdev)
+		}
+		return nil, status.Errorf(codes.Internal, "creating replica bdev for %s: %v", volumeID, err)
+	}
+	logging.L.Info("spdk target: replica bdev created",
+		zap.String("volumeID", volumeID),
+		zap.String("replicaBdev", replicaBdevName),
+		zap.Int("totalReplicas", len(replicaTargets)),
+	)
+
+	// Step 4: Tear down the old NVMe-oF target backed by the simple chunk bdev.
+	if err := s.spdkClient.DeleteNvmfTarget(volumeID); err != nil {
+		logging.L.Warn("spdk target: failed to delete old NVMe-oF target (may not exist)",
+			zap.String("volumeID", volumeID),
+			zap.Error(err),
+		)
+	}
+
+	// Step 5: Re-export with the replica bdev as the backing device.
+	nqn, err := s.spdkClient.CreateNvmfTarget(volumeID, s.hostIP, spdkTargetPort, replicaBdevName)
+	if err != nil {
+		logging.L.Error("spdk target: failed to re-export with replica bdev",
+			zap.String("volumeID", volumeID),
+			zap.Error(err),
+		)
+		return nil, status.Errorf(codes.Internal, "re-exporting replica bdev for %s: %v", volumeID, err)
+	}
+
+	logging.L.Info("spdk target: replication setup complete",
+		zap.String("volumeID", volumeID),
+		zap.String("nqn", nqn),
+		zap.String("replicaBdev", replicaBdevName),
+		zap.Int("totalReplicas", len(replicaTargets)),
+	)
+
+	return &pb.SetupReplicationResponse{
+		ReplicaBdevName: replicaBdevName,
+		SubsystemNqn:    nqn,
+	}, nil
 }

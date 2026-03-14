@@ -30,13 +30,17 @@ pub struct ChunkMeta {
 /// A chunk store backed by an SPDK bdev.
 ///
 /// Manages a mapping from chunk IDs to bdev offsets and handles all I/O
-/// operations. Uses a simple bump allocator for offset management.
+/// operations. Uses a bump allocator with a free list so that deleted chunk
+/// offsets are reclaimed and reused before bumping the watermark.
 pub struct ChunkStore {
     bdev_name: String,
     /// Chunk metadata index: chunk ID → meta.
     index: RwLock<HashMap<ChunkID, ChunkMeta>>,
-    /// Next free offset for allocation (simple bump allocator).
+    /// Next free offset for allocation (bump allocator watermark).
     next_offset: std::sync::Mutex<u64>,
+    /// Free list: offsets reclaimed from deleted chunks, available for reuse.
+    /// Each entry is an aligned offset that can hold one CHUNK_SIZE block.
+    free_offsets: std::sync::Mutex<Vec<u64>>,
     /// Total capacity in bytes.
     capacity_bytes: u64,
 }
@@ -52,6 +56,7 @@ impl ChunkStore {
             bdev_name: bdev_name.to_string(),
             index: RwLock::new(HashMap::new()),
             next_offset: std::sync::Mutex::new(0),
+            free_offsets: std::sync::Mutex::new(Vec::new()),
             capacity_bytes,
         }
     }
@@ -146,18 +151,26 @@ impl ChunkStore {
         Ok(data)
     }
 
-    /// Delete a chunk from the bdev.
+    /// Delete a chunk from the bdev and return its offset to the free list.
     pub fn delete_chunk(&self, chunk_id: &str) -> Result<()> {
         let removed = self.index.write().unwrap().remove(chunk_id);
-        if removed.is_none() {
-            return Err(DataPlaneError::BdevError(format!(
-                "chunk not found: {}",
-                &chunk_id[..16.min(chunk_id.len())]
-            )));
-        }
+        let meta = match removed {
+            Some(m) => m,
+            None => {
+                return Err(DataPlaneError::BdevError(format!(
+                    "chunk not found: {}",
+                    &chunk_id[..16.min(chunk_id.len())]
+                )));
+            }
+        };
 
-        // TODO: zero or UNMAP the bdev range and return the offset to a free list.
-        debug!("chunk {} deleted", &chunk_id[..16.min(chunk_id.len())]);
+        // Return the offset to the free list so it can be reused.
+        self.free_offsets.lock().unwrap().push(meta.offset);
+        debug!(
+            "chunk {} deleted, offset {} returned to free list",
+            &chunk_id[..16.min(chunk_id.len())],
+            meta.offset
+        );
         Ok(())
     }
 
@@ -187,12 +200,16 @@ impl ChunkStore {
         let chunk_count = index.len() as u64;
         let data_bytes: u64 = index.values().map(|m| m.size as u64).sum();
         let used_bytes = *self.next_offset.lock().unwrap();
+        let free_slots = self.free_offsets.lock().unwrap().len() as u64;
+        let reclaimable_bytes = free_slots * CHUNK_SIZE as u64;
         ChunkStoreStats {
             bdev_name: self.bdev_name.clone(),
             capacity_bytes: self.capacity_bytes,
             used_bytes,
             data_bytes,
             chunk_count,
+            free_slots,
+            reclaimable_bytes,
         }
     }
 
@@ -262,16 +279,33 @@ impl ChunkStore {
     }
 
     /// Allocate a bdev offset for storing `size` bytes.
+    ///
+    /// Checks the free list first (offsets reclaimed from deleted chunks).
+    /// Falls back to bumping the watermark if no free slots are available.
     fn allocate_offset(&self, size: u64) -> Result<u64> {
-        let mut next = self.next_offset.lock().unwrap();
-        // Align to CHUNK_SIZE boundaries for consistent addressing.
+        // All chunks are stored at CHUNK_SIZE-aligned boundaries.
         let aligned_size = ((size + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64) * CHUNK_SIZE as u64;
+
+        // Try the free list first — reuse space from deleted chunks.
+        {
+            let mut free = self.free_offsets.lock().unwrap();
+            if let Some(offset) = free.pop() {
+                debug!(
+                    "allocate_offset: reusing free offset {} (free list size={})",
+                    offset,
+                    free.len()
+                );
+                return Ok(offset);
+            }
+        }
+
+        // No free slots — bump the watermark.
+        let mut next = self.next_offset.lock().unwrap();
         if *next + aligned_size > self.capacity_bytes {
+            let free_count = self.free_offsets.lock().unwrap().len();
             return Err(DataPlaneError::BdevError(format!(
-                "bdev {} out of space: need {}B, have {}B free",
-                self.bdev_name,
-                aligned_size,
-                self.capacity_bytes - *next
+                "bdev {} out of space: need {}B, watermark={}B, capacity={}B, free_slots={}",
+                self.bdev_name, aligned_size, *next, self.capacity_bytes, free_count
             )));
         }
         let offset = *next;
@@ -288,6 +322,10 @@ pub struct ChunkStoreStats {
     pub used_bytes: u64,
     pub data_bytes: u64,
     pub chunk_count: u64,
+    /// Number of free slots available for reuse (from deleted chunks).
+    pub free_slots: u64,
+    /// Bytes reclaimable from the free list.
+    pub reclaimable_bytes: u64,
 }
 
 /// Result of a scrub (integrity verification) operation.

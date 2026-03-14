@@ -19,9 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NVMeTargetService_CreateTarget_FullMethodName = "/nvme.NVMeTargetService/CreateTarget"
-	NVMeTargetService_DeleteTarget_FullMethodName = "/nvme.NVMeTargetService/DeleteTarget"
-	NVMeTargetService_SetANAState_FullMethodName  = "/nvme.NVMeTargetService/SetANAState"
+	NVMeTargetService_CreateTarget_FullMethodName     = "/nvme.NVMeTargetService/CreateTarget"
+	NVMeTargetService_DeleteTarget_FullMethodName     = "/nvme.NVMeTargetService/DeleteTarget"
+	NVMeTargetService_SetANAState_FullMethodName      = "/nvme.NVMeTargetService/SetANAState"
+	NVMeTargetService_SetupReplication_FullMethodName = "/nvme.NVMeTargetService/SetupReplication"
 )
 
 // NVMeTargetServiceClient is the client API for NVMeTargetService service.
@@ -43,6 +44,11 @@ type NVMeTargetServiceClient interface {
 	// volume's NVMe-oF target. Used during active-passive failover to transition
 	// a target between optimized (active) and inaccessible (passive) states.
 	SetANAState(ctx context.Context, in *SetANAStateRequest, opts ...grpc.CallOption) (*SetANAStateResponse, error)
+	// SetupReplication configures the owner node to replicate writes to remote
+	// replica targets. The owner connects as NVMe-oF initiator to each remote
+	// target, creates a replica bdev that fans out writes with majority quorum,
+	// and re-exports the replica bdev as the NVMe-oF target for this volume.
+	SetupReplication(ctx context.Context, in *SetupReplicationRequest, opts ...grpc.CallOption) (*SetupReplicationResponse, error)
 }
 
 type nVMeTargetServiceClient struct {
@@ -83,6 +89,16 @@ func (c *nVMeTargetServiceClient) SetANAState(ctx context.Context, in *SetANASta
 	return out, nil
 }
 
+func (c *nVMeTargetServiceClient) SetupReplication(ctx context.Context, in *SetupReplicationRequest, opts ...grpc.CallOption) (*SetupReplicationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetupReplicationResponse)
+	err := c.cc.Invoke(ctx, NVMeTargetService_SetupReplication_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NVMeTargetServiceServer is the server API for NVMeTargetService service.
 // All implementations must embed UnimplementedNVMeTargetServiceServer
 // for forward compatibility.
@@ -102,6 +118,11 @@ type NVMeTargetServiceServer interface {
 	// volume's NVMe-oF target. Used during active-passive failover to transition
 	// a target between optimized (active) and inaccessible (passive) states.
 	SetANAState(context.Context, *SetANAStateRequest) (*SetANAStateResponse, error)
+	// SetupReplication configures the owner node to replicate writes to remote
+	// replica targets. The owner connects as NVMe-oF initiator to each remote
+	// target, creates a replica bdev that fans out writes with majority quorum,
+	// and re-exports the replica bdev as the NVMe-oF target for this volume.
+	SetupReplication(context.Context, *SetupReplicationRequest) (*SetupReplicationResponse, error)
 	mustEmbedUnimplementedNVMeTargetServiceServer()
 }
 
@@ -120,6 +141,9 @@ func (UnimplementedNVMeTargetServiceServer) DeleteTarget(context.Context, *Delet
 }
 func (UnimplementedNVMeTargetServiceServer) SetANAState(context.Context, *SetANAStateRequest) (*SetANAStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetANAState not implemented")
+}
+func (UnimplementedNVMeTargetServiceServer) SetupReplication(context.Context, *SetupReplicationRequest) (*SetupReplicationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetupReplication not implemented")
 }
 func (UnimplementedNVMeTargetServiceServer) mustEmbedUnimplementedNVMeTargetServiceServer() {}
 func (UnimplementedNVMeTargetServiceServer) testEmbeddedByValue()                           {}
@@ -196,6 +220,24 @@ func _NVMeTargetService_SetANAState_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NVMeTargetService_SetupReplication_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetupReplicationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NVMeTargetServiceServer).SetupReplication(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NVMeTargetService_SetupReplication_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NVMeTargetServiceServer).SetupReplication(ctx, req.(*SetupReplicationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NVMeTargetService_ServiceDesc is the grpc.ServiceDesc for NVMeTargetService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -214,6 +256,10 @@ var NVMeTargetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetANAState",
 			Handler:    _NVMeTargetService_SetANAState_Handler,
+		},
+		{
+			MethodName: "SetupReplication",
+			Handler:    _NVMeTargetService_SetupReplication_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

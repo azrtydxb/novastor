@@ -21,6 +21,12 @@ service NVMeTargetService {
   // volume's NVMe-oF target. Used during active-passive failover to transition
   // a target between optimized (active) and inaccessible (passive) states.
   rpc SetANAState(SetANAStateRequest) returns (SetANAStateResponse);
+
+  // SetupReplication configures the owner node to replicate writes to remote
+  // replica targets. The owner connects as NVMe-oF initiator to each remote
+  // target, creates a replica bdev that fans out writes with majority quorum,
+  // and re-exports the replica bdev as the NVMe-oF target for this volume.
+  rpc SetupReplication(SetupReplicationRequest) returns (SetupReplicationResponse);
 }
 
 message CreateTargetRequest {
@@ -73,3 +79,30 @@ message SetANAStateRequest {
 }
 
 message SetANAStateResponse {}
+
+// ReplicaTargetInfo describes a remote NVMe-oF target to replicate to.
+message ReplicaTargetInfo {
+  // address is the IP address of the remote agent hosting the replica.
+  string address = 1;
+  // port is the NVMe-oF TCP port (e.g. "4430").
+  string port = 2;
+  // nqn is the NVMe Qualified Name of the remote subsystem.
+  string nqn = 3;
+}
+
+message SetupReplicationRequest {
+  // volume_id identifies the volume to configure replication for.
+  string volume_id = 1;
+  // local_bdev_name is the SPDK bdev name for the local chunk volume
+  // (e.g. "novastor_<volume_id>").
+  string local_bdev_name = 2;
+  // remote_targets is the list of remote NVMe-oF targets to replicate to.
+  repeated ReplicaTargetInfo remote_targets = 3;
+}
+
+message SetupReplicationResponse {
+  // replica_bdev_name is the name of the composite replica bdev.
+  string replica_bdev_name = 1;
+  // subsystem_nqn is the NQN of the re-exported NVMe-oF target.
+  string subsystem_nqn = 2;
+}

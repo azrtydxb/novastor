@@ -5,6 +5,7 @@ package spdk
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,6 +14,16 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+// base64Encode encodes raw bytes to standard base64.
+func base64Encode(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// base64Decode decodes a standard base64 string to raw bytes.
+func base64Decode(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
+}
 
 const (
 	// DefaultSocketPath is the Unix domain socket used by the data-plane.
@@ -143,7 +154,8 @@ func isConnectionError(err error) bool {
 	return strings.Contains(s, "broken pipe") ||
 		strings.Contains(s, "connection reset") ||
 		strings.Contains(s, "EOF") ||
-		strings.Contains(s, "not connected")
+		strings.Contains(s, "not connected") ||
+		strings.Contains(s, "i/o timeout")
 }
 
 // callLocked performs the actual JSON-RPC call. Must be called with c.mu held.
@@ -463,6 +475,78 @@ func (c *Client) DeleteChunkVolume(name string) error {
 		"name":    name,
 	}
 	return c.call("backend.delete_volume", params, nil)
+}
+
+// ChunkWriteResult holds the result of a chunk_write JSON-RPC call.
+type ChunkWriteResult struct {
+	ChunkID  string `json:"chunk_id"`
+	Size     int64  `json:"size"`
+	Checksum uint32 `json:"checksum"`
+}
+
+// ChunkWrite writes a chunk to the dataplane's chunk store.
+// data is raw bytes; it is base64-encoded before sending over JSON-RPC.
+func (c *Client) ChunkWrite(bdevName string, data []byte) (*ChunkWriteResult, error) {
+	encoded := base64Encode(data)
+	params := map[string]interface{}{
+		"bdev_name":   bdevName,
+		"data_base64": encoded,
+	}
+	var result ChunkWriteResult
+	if err := c.call("chunk_write", params, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ChunkReadResult holds the result of a chunk_read JSON-RPC call.
+type ChunkReadResult struct {
+	ChunkID    string `json:"chunk_id"`
+	DataBase64 string `json:"data_base64"`
+	Size       int64  `json:"size"`
+	Checksum   uint32 `json:"checksum"`
+}
+
+// ChunkRead reads a chunk from the dataplane's chunk store.
+// Returns the raw chunk data (base64 decoded) and metadata.
+func (c *Client) ChunkRead(bdevName, chunkID string) ([]byte, uint32, error) {
+	params := map[string]interface{}{
+		"bdev_name": bdevName,
+		"chunk_id":  chunkID,
+	}
+	var result ChunkReadResult
+	if err := c.call("chunk_read", params, &result); err != nil {
+		return nil, 0, err
+	}
+	data, err := base64Decode(result.DataBase64)
+	if err != nil {
+		return nil, 0, fmt.Errorf("decoding chunk data: %w", err)
+	}
+	return data, result.Checksum, nil
+}
+
+// ChunkDelete deletes a chunk from the dataplane's chunk store.
+func (c *Client) ChunkDelete(bdevName, chunkID string) error {
+	params := map[string]interface{}{
+		"bdev_name": bdevName,
+		"chunk_id":  chunkID,
+	}
+	return c.call("chunk_delete", params, nil)
+}
+
+// ChunkExists checks whether a chunk exists in the dataplane's chunk store.
+func (c *Client) ChunkExists(bdevName, chunkID string) (bool, error) {
+	params := map[string]interface{}{
+		"bdev_name": bdevName,
+		"chunk_id":  chunkID,
+	}
+	var result struct {
+		Exists bool `json:"exists"`
+	}
+	if err := c.call("chunk_exists", params, &result); err != nil {
+		return false, err
+	}
+	return result.Exists, nil
 }
 
 // GetVersion returns the data-plane version info.

@@ -231,6 +231,12 @@ func main() {
 		defer fc.Stop()
 	}
 
+	// Register ChunkService server — bridges S3/Filer gRPC chunk I/O
+	// to the Rust SPDK data-plane via JSON-RPC.
+	chunkServer := agent.NewChunkServer(spdkClient, *spdkBaseBdev)
+	chunkServer.Register(srv)
+	logging.L.Info("chunk service registered (routes I/O to SPDK dataplane)")
+
 	// Start the garbage collector for orphan chunks.
 	if metaClient != nil {
 		// TODO: GC needs to be reimplemented to work via SPDK data plane

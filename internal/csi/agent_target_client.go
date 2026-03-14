@@ -73,6 +73,28 @@ func (n *NodeTargetClient) SetANAState(ctx context.Context, agentAddr string, vo
 	return c.SetANAState(ctx, volumeID, anaState, anaGroupID)
 }
 
+// SetupReplication implements AgentTargetClient.
+func (n *NodeTargetClient) SetupReplication(ctx context.Context, agentAddr, volumeID, localBdevName string, remoteTargets []ReplicaTarget) (string, string, error) {
+	c, err := n.clientFor(agentAddr)
+	if err != nil {
+		return "", "", err
+	}
+	// Convert CSI ReplicaTarget to agent ReplicaTargetInfo.
+	agentTargets := make([]agent.ReplicaTargetInfo, len(remoteTargets))
+	for i, rt := range remoteTargets {
+		agentTargets[i] = agent.ReplicaTargetInfo{
+			Address: rt.Address,
+			Port:    rt.Port,
+			NQN:     rt.NQN,
+		}
+	}
+	result, err := c.SetupReplication(ctx, volumeID, localBdevName, agentTargets)
+	if err != nil {
+		return "", "", err
+	}
+	return result.ReplicaBdevName, result.SubsystemNQN, nil
+}
+
 // Close closes all cached gRPC connections.
 func (n *NodeTargetClient) Close() error {
 	n.mu.Lock()

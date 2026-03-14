@@ -16,7 +16,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -92,6 +92,16 @@ type AgentTargetClient interface {
 	DeleteTarget(ctx context.Context, agentAddr string, volumeID string) error
 	// SetANAState changes the ANA state for a volume's NVMe-oF target on the agent.
 	SetANAState(ctx context.Context, agentAddr string, volumeID string, anaState string, anaGroupID uint32) error
+	// SetupReplication configures the owner node to replicate writes to remote targets.
+	// Returns the replica bdev name and updated NQN.
+	SetupReplication(ctx context.Context, agentAddr, volumeID, localBdevName string, remoteTargets []ReplicaTarget) (replicaBdevName, subsystemNQN string, err error)
+}
+
+// ReplicaTarget describes a remote NVMe-oF target for replication.
+type ReplicaTarget struct {
+	Address string
+	Port    string
+	NQN     string
 }
 
 // ControllerServer implements the CSI Controller service.
@@ -483,8 +493,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		volContext["nfsShare"] = fmt.Sprintf("/exports/%s", volumeID)
 		volContext["accessMode"] = "RWX"
 	} else if cs.agentTarget != nil {
-		// For RWO block volumes, create NVMe-oF targets on ALL replica agents
-		// with ANA states for multipath failover.
+		// For RWO block volumes, create an NVMe-oF target on the owner node.
 		// Compute ANA group ID from volume ID (consistent across all agents).
 		anaGroupID := crc32.ChecksumIEEE([]byte(volumeID)) & 0xFF
 
@@ -499,84 +508,78 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			}
 		}
 
-		// Until cross-node chunk replication is implemented, only create
-		// the NVMe-oF target on the owner node.  Non-owner dataplanes
-		// have empty local chunk volumes and cannot serve I/O, which
-		// causes kernel NVMe multipath to route reads to dead paths and
-		// triggers ext4 I/O errors.
-		if len(uniqueNodes) > 1 {
-			uniqueNodes = uniqueNodes[:1]
+		// TODO: Multi-node replication via SetupReplication is disabled until
+		// the Rust dataplane's replica bdev is registered with SPDK's bdev
+		// layer (spdk_bdev_register), which is required for NVMe-oF export.
+		// For now, create a target only on the owner (first) node.
+		// Once the replica bdev is SPDK-registered, create targets on ALL
+		// uniqueNodes and call SetupReplication on the owner.
+		ownerNode := uniqueNodes[0]
+		nqn, addr, port, err := cs.agentTarget.CreateTarget(
+			ctx, ownerNode, volumeID, int64(requiredBytes), "optimized", anaGroupID,
+		)
+		if err != nil {
+			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
+			return nil, status.Errorf(codes.Internal, "creating NVMe-oF target for volume %s: %v", volumeID, err)
 		}
 
 		type targetResult struct {
 			nqn  string
 			addr string
 			port string
-			err  error
 		}
-		results := make([]targetResult, len(uniqueNodes))
-		g, gCtx := errgroup.WithContext(ctx)
-		for i, nodeAddr := range uniqueNodes {
-			i, nodeAddr := i, nodeAddr
-			anaState := "non_optimized"
-			if i == 0 {
-				anaState = "optimized" // First node in CRUSH order is write-owner
+		results := []targetResult{{nqn: nqn, addr: addr, port: port}}
+		ownerNQN := nqn
+		// Limit to owner node only for now.
+		uniqueNodes = uniqueNodes[:1]
+
+		logging.L.Info("NVMe-oF target created on owner node",
+			zap.String("volumeID", volumeID),
+			zap.String("ownerNode", ownerNode),
+			zap.String("nqn", ownerNQN),
+		)
+
+		// Build target addresses JSON for volume context.
+		type targetInfo struct {
+			Addr    string `json:"addr"`
+			Port    string `json:"port"`
+			NQN     string `json:"nqn"`
+			IsOwner bool   `json:"is_owner"`
+		}
+		targets := make([]targetInfo, len(uniqueNodes))
+		for i := range uniqueNodes {
+			targets[i] = targetInfo{
+				Addr:    results[i].addr,
+				Port:    results[i].port,
+				NQN:     results[i].nqn,
+				IsOwner: i == 0,
 			}
-			g.Go(func() error {
-				nqn, addr, port, err := cs.agentTarget.CreateTarget(
-					gCtx, nodeAddr, volumeID, int64(requiredBytes), anaState, anaGroupID,
-				)
-				results[i] = targetResult{nqn, addr, port, err}
-				return err
-			})
 		}
-		if err := g.Wait(); err != nil {
-			// Clean up any successfully created targets.
-			for i, r := range results {
-				if r.err == nil {
-					_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
-				}
+		targetsJSON, err := json.Marshal(targets)
+		if err != nil {
+			for i := range uniqueNodes {
+				_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
 			}
 			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
-			return nil, status.Errorf(codes.Internal, "creating NVMe-oF targets for volume %s: %v", volumeID, err)
-		} else {
-			// Build target addresses JSON for volume context.
-			type targetInfo struct {
-				Addr    string `json:"addr"`
-				Port    string `json:"port"`
-				NQN     string `json:"nqn"`
-				IsOwner bool   `json:"is_owner"`
-			}
-			targets := make([]targetInfo, len(results))
-			for i, r := range results {
-				targets[i] = targetInfo{Addr: r.addr, Port: r.port, NQN: r.nqn, IsOwner: i == 0}
-			}
-			targetsJSON, err := json.Marshal(targets)
-			if err != nil {
-				for i := range uniqueNodes {
-					_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
-				}
-				_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
-				return nil, status.Errorf(codes.Internal, "marshaling target addresses for volume %s: %v", volumeID, err)
-			}
+			return nil, status.Errorf(codes.Internal, "marshaling target addresses for volume %s: %v", volumeID, err)
+		}
 
-			volContext["targetAddresses"] = string(targetsJSON)
-			volContext["writeOwner"] = results[0].addr
-			volContext["subsystemNQN"] = results[0].nqn
-			volContext["targetAddress"] = results[0].addr // Backward compat
-			volContext["targetPort"] = results[0].port    // Backward compat
+		volContext["targetAddresses"] = string(targetsJSON)
+		volContext["writeOwner"] = results[0].addr
+		volContext["subsystemNQN"] = ownerNQN
+		volContext["targetAddress"] = results[0].addr // Backward compat
+		volContext["targetPort"] = results[0].port    // Backward compat
 
-			// Update volume metadata with primary target fields.
-			vm.TargetNodeID = uniqueNodes[0]
-			vm.TargetAddress = results[0].addr
-			vm.TargetPort = results[0].port
-			vm.SubsystemNQN = results[0].nqn
-			if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
-				for i := range uniqueNodes {
-					_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
-				}
-				return nil, status.Errorf(codes.Internal, "updating volume metadata with target info: %v", err)
+		// Update volume metadata with primary target fields.
+		vm.TargetNodeID = uniqueNodes[0]
+		vm.TargetAddress = results[0].addr
+		vm.TargetPort = results[0].port
+		vm.SubsystemNQN = ownerNQN
+		if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
+			for i := range uniqueNodes {
+				_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
 			}
+			return nil, status.Errorf(codes.Internal, "updating volume metadata with target info: %v", err)
 		}
 	}
 
