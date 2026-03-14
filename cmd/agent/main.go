@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/azrtydxb/novastor/internal/agent"
+	"github.com/azrtydxb/novastor/internal/agent/device"
 	"github.com/azrtydxb/novastor/internal/agent/failover"
 	"github.com/azrtydxb/novastor/internal/dataplane"
 	"github.com/azrtydxb/novastor/internal/logging"
@@ -121,6 +122,22 @@ func main() {
 	// Main context for the agent lifetime.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Initialise device manager for NVMe unbinding and hugepage management.
+	devMgr := device.NewManager(logging.L)
+	if err := devMgr.EnsureHugetlbfsMount(); err != nil {
+		logging.L.Warn("hugetlbfs check failed (SPDK may not start)", zap.Error(err))
+	}
+	// Ensure minimum hugepages for SPDK (1024 x 2MB = 2GB).
+	if hpInfo, hpErr := devMgr.EnsureHugepages(1024, ""); hpErr != nil {
+		logging.L.Warn("hugepage allocation failed", zap.Error(hpErr))
+	} else {
+		logging.L.Info("hugepages ready",
+			zap.Int("total", hpInfo.TotalPages),
+			zap.Int("free", hpInfo.FreePages),
+			zap.Uint64("totalBytes", hpInfo.TotalBytes),
+		)
+	}
 
 	// Connect to the Rust data-plane via gRPC. SPDK is always required;
 	// all data-path I/O goes through the Rust dataplane.
