@@ -10,28 +10,54 @@ NovaStor is a unified Kubernetes-native storage system providing **block** (CSI/
 
 ## Architecture
 
+> **AUTHORITATIVE SPEC**: [`docs/superpowers/specs/2026-03-15-layered-architecture-design.md`](docs/superpowers/specs/2026-03-15-layered-architecture-design.md)
+> **This spec MUST be read and followed for ALL implementation work.** The summary below is for quick reference only. When in doubt, the spec is the source of truth.
+
+### Four-Layer Architecture (STRICT — layers MUST NOT be collapsed, bypassed, or combined)
+
 ```
-┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│  CSI Driver  │  │  NFS/FUSE   │  │  S3 Gateway  │
-│   (Block)    │  │   (File)    │  │   (Object)   │
-└──────┬───────┘  └──────┬───────┘  └──────┬───────┘
-       └────────┬────────┴────────┬────────┘
-         ┌──────▼───────┐  ┌─────▼──────┐
-         │  Metadata     │  │  Placement │
-         │  Service      │  │  Engine    │
-         └──────┬───────┘  └─────┬──────┘
-         ┌──────▼────────────────▼──────┐
-         │     Chunk Storage Engine      │
-         └──────────────┬───────────────┘
-              ┌─────────▼─────────┐
-              │  Node Agent        │
-              │  (DaemonSet)       │
-              └───────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Presentation Layer                                      │
+│  NVMe-oF bdev  │  NFS server  │  S3 gateway             │
+│  Thin protocol translation only — no replication logic   │
+└──────────────────────────┬──────────────────────────────┘
+                           │ read/write chunks
+┌──────────────────────────▼──────────────────────────────┐
+│  Chunk Engine                                            │
+│  Content-addressed 4MB immutable chunks                  │
+│  CRUSH placement + protection scheme                     │
+│  Replication fan-out OR Reed-Solomon encoding             │
+│  Owner fans out to replicas via gRPC (Rust-to-Rust)      │
+└──────────────────────────┬──────────────────────────────┘
+                           │ SPDK bdev I/O
+┌──────────────────────────▼──────────────────────────────┐
+│  Backend Engine                                          │
+│  File: file on mounted FS → SPDK AIO bdev                │
+│  LVM:  SPDK lvol store on unbound NVMe                   │
+│  Raw:  SPDK NVMe bdev on unbound NVMe (no filesystem)    │
+│  All produce SPDK bdevs — uniform interface to chunks     │
+└─────────────────────────────────────────────────────────┘
+
+  Policy Engine (control plane — NOT in data path)
+  Monitors actual vs desired state
+  Triggers repairs, rebalancing, rebuilds
 ```
+
+**Hot data path:** Presentation → Chunk Engine → Backend. Three layers. Policy Engine is NEVER in the data path.
 
 ### Core Principle
 
 **Everything is chunks.** A block volume is an ordered sequence of 4MB chunks. A file is chunks + inode metadata. An object is chunks + object metadata. One engine, three access layers.
+
+### Key Invariants (see spec for full list of 10)
+
+1. **Layer separation is absolute.** Presentation MUST NOT replicate. Chunk engine MUST NOT manage devices. Backend MUST NOT know about chunks. Policy engine MUST NOT be in the data path.
+2. **All data I/O flows through SPDK.** Every backend produces SPDK bdevs.
+3. **Go agent never touches data.** Management and configuration only, via gRPC to Rust dataplane.
+4. **CRUSH map is the single source of truth** for placement and protection scheme.
+5. **gRPC is the only communication protocol.** Go→Rust, Rust→Rust — all gRPC. No JSON-RPC.
+6. **No Malloc bdevs in production.** Only with explicit `--test-mode`.
+7. **Fencing on quorum loss.** Dataplane fences itself if it loses contact with Go agent.
 
 ### Components
 
@@ -48,12 +74,12 @@ NovaStor is a unified Kubernetes-native storage system providing **block** (CSI/
 | Scheduler Webhook | `novastor-webhook` | Deployment | `cmd/webhook/`, `internal/webhook/` |
 | CLI | `novastorctl` | — | `cmd/cli/` |
 
-### Data Protection
+### Data Protection (per-volume, not per-pool)
 
-Both modes are available for **all three access layers** (block, file, object). The choice is per-StoragePool:
+Both modes are available for **all three access layers** (block, file, object). The choice is per-volume (pool provides default):
 
-- **Replication**: Synchronous N-way (default factor=3, write quorum=majority). For latency-sensitive workloads.
-- **Erasure Coding**: Reed-Solomon (default 4+2). For capacity-efficient workloads. 1.5x overhead vs 3x.
+- **Replication**: Synchronous N-way (default factor=3, write quorum=majority). Owner fans out full chunks to replica nodes via gRPC.
+- **Erasure Coding**: Reed-Solomon (default 4+2). Owner RS-encodes into K data + M parity shards, distributes via gRPC. 1.5x overhead vs 3x.
 
 ## Code Standards
 
