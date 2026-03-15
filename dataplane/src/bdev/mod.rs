@@ -4,3 +4,4 @@ pub mod erasure;
 pub mod novastor_bdev;
 pub mod novastor_replica_bdev;
 pub mod replica;
+pub mod write_buffer;

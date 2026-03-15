@@ -166,7 +166,7 @@ pub fn set_chunk_engine(engine: Arc<ChunkEngine>, handle: tokio::runtime::Handle
     let _ = TOKIO_HANDLE.set(handle);
 }
 
-fn get_chunk_engine() -> Result<&'static Arc<ChunkEngine>> {
+pub fn get_chunk_engine() -> Result<&'static Arc<ChunkEngine>> {
     CHUNK_ENGINE
         .get()
         .ok_or_else(|| DataPlaneError::BdevError("chunk engine not initialised".into()))

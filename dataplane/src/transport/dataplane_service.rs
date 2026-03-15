@@ -1095,6 +1095,94 @@ impl DataplaneService for DataplaneServiceImpl {
     }
 
     // ========================================================================
+    // Topology
+    // ========================================================================
+
+    async fn update_topology(
+        &self,
+        request: Request<UpdateTopologyRequest>,
+    ) -> Result<Response<UpdateTopologyResponse>, Status> {
+        let req = request.into_inner();
+        use crate::metadata::topology::{Backend, BackendType, ClusterMap, Node, NodeStatus};
+
+        let engine = crate::bdev::novastor_bdev::get_chunk_engine()
+            .map_err(|e| Status::internal(format!("chunk engine not ready: {e}")))?;
+
+        let mut topology = ClusterMap::new(req.generation);
+        for proto_node in &req.nodes {
+            let status = match proto_node.status.as_str() {
+                "online" => NodeStatus::Online,
+                "draining" => NodeStatus::Draining,
+                _ => NodeStatus::Offline,
+            };
+            let backends = proto_node
+                .backends
+                .iter()
+                .map(|b| Backend {
+                    id: b.id.clone(),
+                    node_id: b.node_id.clone(),
+                    capacity_bytes: b.capacity_bytes,
+                    used_bytes: b.used_bytes,
+                    weight: b.weight,
+                    backend_type: match b.backend_type.as_str() {
+                        "file" => BackendType::File,
+                        "lvm" => BackendType::Lvm,
+                        _ => BackendType::Bdev,
+                    },
+                })
+                .collect();
+            topology.add_node(Node {
+                id: proto_node.node_id.clone(),
+                address: proto_node.address.clone(),
+                port: proto_node.port as u16,
+                backends,
+                status,
+            });
+        }
+
+        let accepted = engine.update_topology(topology);
+        if accepted {
+            // Also update the policy engine's topology if it exists.
+            if let Ok(pe) = get_any_policy_engine() {
+                let mut topo2 = ClusterMap::new(req.generation);
+                for proto_node in &req.nodes {
+                    let status = match proto_node.status.as_str() {
+                        "online" => NodeStatus::Online,
+                        "draining" => NodeStatus::Draining,
+                        _ => NodeStatus::Offline,
+                    };
+                    let backends = proto_node
+                        .backends
+                        .iter()
+                        .map(|b| Backend {
+                            id: b.id.clone(),
+                            node_id: b.node_id.clone(),
+                            capacity_bytes: b.capacity_bytes,
+                            used_bytes: b.used_bytes,
+                            weight: b.weight,
+                            backend_type: match b.backend_type.as_str() {
+                                "file" => BackendType::File,
+                                "lvm" => BackendType::Lvm,
+                                _ => BackendType::Bdev,
+                            },
+                        })
+                        .collect();
+                    topo2.add_node(Node {
+                        id: proto_node.node_id.clone(),
+                        address: proto_node.address.clone(),
+                        port: proto_node.port as u16,
+                        backends,
+                        status,
+                    });
+                }
+                pe.update_topology(topo2).await;
+            }
+        }
+
+        Ok(Response::new(UpdateTopologyResponse { accepted }))
+    }
+
+    // ========================================================================
     // Health & Fencing
     // ========================================================================
 

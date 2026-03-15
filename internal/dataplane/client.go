@@ -482,6 +482,26 @@ func (c *Client) SetVolumePolicy(volumeID string, desiredReplicas uint32) (bool,
 }
 
 // --------------------------------------------------------------------------
+// Topology
+// --------------------------------------------------------------------------
+
+// UpdateTopology pushes a full cluster topology snapshot to the dataplane.
+// The generation must be strictly higher than the current one (except when
+// upgrading from generation 0, which is the bootstrap placeholder).
+func (c *Client) UpdateTopology(generation uint64, nodes []*pb.TopologyNode) (bool, error) {
+	ctx, cancel := c.ctx()
+	defer cancel()
+	resp, err := c.svc.UpdateTopology(ctx, &pb.UpdateTopologyRequest{
+		Generation: generation,
+		Nodes:      nodes,
+	})
+	if err != nil {
+		return false, fmt.Errorf("update topology (gen %d): %w", generation, err)
+	}
+	return resp.GetAccepted(), nil
+}
+
+// --------------------------------------------------------------------------
 // Health & Fencing
 // --------------------------------------------------------------------------
 

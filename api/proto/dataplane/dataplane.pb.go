@@ -3347,6 +3347,262 @@ func (x *SetVolumePolicyResponse) GetAccepted() bool {
 	return false
 }
 
+type TopologyNode struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	Address       string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	Port          uint32                 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	Backends      []*TopologyBackend     `protobuf:"bytes,4,rep,name=backends,proto3" json:"backends,omitempty"`
+	Status        string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TopologyNode) Reset() {
+	*x = TopologyNode{}
+	mi := &file_api_proto_dataplane_dataplane_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TopologyNode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TopologyNode) ProtoMessage() {}
+
+func (x *TopologyNode) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_dataplane_dataplane_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TopologyNode.ProtoReflect.Descriptor instead.
+func (*TopologyNode) Descriptor() ([]byte, []int) {
+	return file_api_proto_dataplane_dataplane_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *TopologyNode) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *TopologyNode) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *TopologyNode) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *TopologyNode) GetBackends() []*TopologyBackend {
+	if x != nil {
+		return x.Backends
+	}
+	return nil
+}
+
+func (x *TopologyNode) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+type TopologyBackend struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	NodeId        string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	CapacityBytes uint64                 `protobuf:"varint,3,opt,name=capacity_bytes,json=capacityBytes,proto3" json:"capacity_bytes,omitempty"`
+	UsedBytes     uint64                 `protobuf:"varint,4,opt,name=used_bytes,json=usedBytes,proto3" json:"used_bytes,omitempty"`
+	Weight        uint32                 `protobuf:"varint,5,opt,name=weight,proto3" json:"weight,omitempty"`
+	BackendType   string                 `protobuf:"bytes,6,opt,name=backend_type,json=backendType,proto3" json:"backend_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TopologyBackend) Reset() {
+	*x = TopologyBackend{}
+	mi := &file_api_proto_dataplane_dataplane_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TopologyBackend) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TopologyBackend) ProtoMessage() {}
+
+func (x *TopologyBackend) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_dataplane_dataplane_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TopologyBackend.ProtoReflect.Descriptor instead.
+func (*TopologyBackend) Descriptor() ([]byte, []int) {
+	return file_api_proto_dataplane_dataplane_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *TopologyBackend) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *TopologyBackend) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *TopologyBackend) GetCapacityBytes() uint64 {
+	if x != nil {
+		return x.CapacityBytes
+	}
+	return 0
+}
+
+func (x *TopologyBackend) GetUsedBytes() uint64 {
+	if x != nil {
+		return x.UsedBytes
+	}
+	return 0
+}
+
+func (x *TopologyBackend) GetWeight() uint32 {
+	if x != nil {
+		return x.Weight
+	}
+	return 0
+}
+
+func (x *TopologyBackend) GetBackendType() string {
+	if x != nil {
+		return x.BackendType
+	}
+	return ""
+}
+
+type UpdateTopologyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Generation    uint64                 `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
+	Nodes         []*TopologyNode        `protobuf:"bytes,2,rep,name=nodes,proto3" json:"nodes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateTopologyRequest) Reset() {
+	*x = UpdateTopologyRequest{}
+	mi := &file_api_proto_dataplane_dataplane_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateTopologyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateTopologyRequest) ProtoMessage() {}
+
+func (x *UpdateTopologyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_dataplane_dataplane_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateTopologyRequest.ProtoReflect.Descriptor instead.
+func (*UpdateTopologyRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_dataplane_dataplane_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *UpdateTopologyRequest) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *UpdateTopologyRequest) GetNodes() []*TopologyNode {
+	if x != nil {
+		return x.Nodes
+	}
+	return nil
+}
+
+type UpdateTopologyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateTopologyResponse) Reset() {
+	*x = UpdateTopologyResponse{}
+	mi := &file_api_proto_dataplane_dataplane_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateTopologyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateTopologyResponse) ProtoMessage() {}
+
+func (x *UpdateTopologyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_dataplane_dataplane_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateTopologyResponse.ProtoReflect.Descriptor instead.
+func (*UpdateTopologyResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_dataplane_dataplane_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *UpdateTopologyResponse) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
+	}
+	return false
+}
+
 var File_api_proto_dataplane_dataplane_proto protoreflect.FileDescriptor
 
 const file_api_proto_dataplane_dataplane_proto_rawDesc = "" +
@@ -3569,7 +3825,28 @@ const file_api_proto_dataplane_dataplane_proto_rawDesc = "" +
 	"\tvolume_id\x18\x01 \x01(\tR\bvolumeId\x12)\n" +
 	"\x10desired_replicas\x18\x02 \x01(\rR\x0fdesiredReplicas\"5\n" +
 	"\x17SetVolumePolicyResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted2\x80\x15\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\"\xa5\x01\n" +
+	"\fTopologyNode\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x18\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\rR\x04port\x126\n" +
+	"\bbackends\x18\x04 \x03(\v2\x1a.dataplane.TopologyBackendR\bbackends\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\tR\x06status\"\xbb\x01\n" +
+	"\x0fTopologyBackend\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
+	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12%\n" +
+	"\x0ecapacity_bytes\x18\x03 \x01(\x04R\rcapacityBytes\x12\x1d\n" +
+	"\n" +
+	"used_bytes\x18\x04 \x01(\x04R\tusedBytes\x12\x16\n" +
+	"\x06weight\x18\x05 \x01(\rR\x06weight\x12!\n" +
+	"\fbackend_type\x18\x06 \x01(\tR\vbackendType\"f\n" +
+	"\x15UpdateTopologyRequest\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x01 \x01(\x04R\n" +
+	"generation\x12-\n" +
+	"\x05nodes\x18\x02 \x03(\v2\x17.dataplane.TopologyNodeR\x05nodes\"4\n" +
+	"\x16UpdateTopologyResponse\x12\x1a\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted2\xd7\x15\n" +
 	"\x10DataplaneService\x12E\n" +
 	"\rCreateAioBdev\x12\x1f.dataplane.CreateAioBdevRequest\x1a\x13.dataplane.BdevInfo\x12K\n" +
 	"\x10CreateMallocBdev\x12\".dataplane.CreateMallocBdevRequest\x1a\x13.dataplane.BdevInfo\x12N\n" +
@@ -3606,7 +3883,8 @@ const file_api_proto_dataplane_dataplane_proto_rawDesc = "" +
 	"\vInitBackend\x12\x1d.dataplane.InitBackendRequest\x1a\x1e.dataplane.InitBackendResponse\x12O\n" +
 	"\fCreateVolume\x12\x1e.dataplane.CreateVolumeRequest\x1a\x1f.dataplane.CreateVolumeResponse\x12O\n" +
 	"\fDeleteVolume\x12\x1e.dataplane.DeleteVolumeRequest\x1a\x1f.dataplane.DeleteVolumeResponse\x12X\n" +
-	"\x0fSetVolumePolicy\x12!.dataplane.SetVolumePolicyRequest\x1a\".dataplane.SetVolumePolicyResponse\x12I\n" +
+	"\x0fSetVolumePolicy\x12!.dataplane.SetVolumePolicyRequest\x1a\".dataplane.SetVolumePolicyResponse\x12U\n" +
+	"\x0eUpdateTopology\x12 .dataplane.UpdateTopologyRequest\x1a!.dataplane.UpdateTopologyResponse\x12I\n" +
 	"\n" +
 	"GetVersion\x12\x1c.dataplane.GetVersionRequest\x1a\x1d.dataplane.GetVersionResponse\x12F\n" +
 	"\tHeartbeat\x12\x1b.dataplane.HeartbeatRequest\x1a\x1c.dataplane.HeartbeatResponseB2Z0github.com/azrtydxb/novastor/api/proto/dataplaneb\x06proto3"
@@ -3623,7 +3901,7 @@ func file_api_proto_dataplane_dataplane_proto_rawDescGZIP() []byte {
 	return file_api_proto_dataplane_dataplane_proto_rawDescData
 }
 
-var file_api_proto_dataplane_dataplane_proto_msgTypes = make([]protoimpl.MessageInfo, 65)
+var file_api_proto_dataplane_dataplane_proto_msgTypes = make([]protoimpl.MessageInfo, 69)
 var file_api_proto_dataplane_dataplane_proto_goTypes = []any{
 	(*CreateAioBdevRequest)(nil),        // 0: dataplane.CreateAioBdevRequest
 	(*CreateMallocBdevRequest)(nil),     // 1: dataplane.CreateMallocBdevRequest
@@ -3690,83 +3968,91 @@ var file_api_proto_dataplane_dataplane_proto_goTypes = []any{
 	(*HeartbeatResponse)(nil),           // 62: dataplane.HeartbeatResponse
 	(*SetVolumePolicyRequest)(nil),      // 63: dataplane.SetVolumePolicyRequest
 	(*SetVolumePolicyResponse)(nil),     // 64: dataplane.SetVolumePolicyResponse
+	(*TopologyNode)(nil),                // 65: dataplane.TopologyNode
+	(*TopologyBackend)(nil),             // 66: dataplane.TopologyBackend
+	(*UpdateTopologyRequest)(nil),       // 67: dataplane.UpdateTopologyRequest
+	(*UpdateTopologyResponse)(nil),      // 68: dataplane.UpdateTopologyResponse
 }
 var file_api_proto_dataplane_dataplane_proto_depIdxs = []int32{
 	2,  // 0: dataplane.ListBdevsResponse.bdevs:type_name -> dataplane.BdevInfo
 	4,  // 1: dataplane.ListLvolStoresResponse.stores:type_name -> dataplane.LvolStoreInfo
 	24, // 2: dataplane.ListSubsystemsResponse.subsystems:type_name -> dataplane.SubsystemInfo
 	32, // 3: dataplane.CreateReplicaBdevRequest.targets:type_name -> dataplane.ReplicaTarget
-	0,  // 4: dataplane.DataplaneService.CreateAioBdev:input_type -> dataplane.CreateAioBdevRequest
-	1,  // 5: dataplane.DataplaneService.CreateMallocBdev:input_type -> dataplane.CreateMallocBdevRequest
-	3,  // 6: dataplane.DataplaneService.CreateLvolStore:input_type -> dataplane.CreateLvolStoreRequest
-	5,  // 7: dataplane.DataplaneService.CreateLvol:input_type -> dataplane.CreateLvolRequest
-	6,  // 8: dataplane.DataplaneService.DeleteBdev:input_type -> dataplane.DeleteBdevRequest
-	8,  // 9: dataplane.DataplaneService.ListBdevs:input_type -> dataplane.ListBdevsRequest
-	10, // 10: dataplane.DataplaneService.GetBdevInfo:input_type -> dataplane.GetBdevInfoRequest
-	11, // 11: dataplane.DataplaneService.ListLvolStores:input_type -> dataplane.ListLvolStoresRequest
-	13, // 12: dataplane.DataplaneService.InitTransport:input_type -> dataplane.InitTransportRequest
-	15, // 13: dataplane.DataplaneService.CreateNvmfTarget:input_type -> dataplane.CreateNvmfTargetRequest
-	17, // 14: dataplane.DataplaneService.DeleteNvmfTarget:input_type -> dataplane.DeleteNvmfTargetRequest
-	19, // 15: dataplane.DataplaneService.SetAnaState:input_type -> dataplane.SetAnaStateRequest
-	21, // 16: dataplane.DataplaneService.GetAnaState:input_type -> dataplane.GetAnaStateRequest
-	23, // 17: dataplane.DataplaneService.ListSubsystems:input_type -> dataplane.ListSubsystemsRequest
-	26, // 18: dataplane.DataplaneService.ExportBdev:input_type -> dataplane.ExportBdevRequest
-	28, // 19: dataplane.DataplaneService.ConnectInitiator:input_type -> dataplane.ConnectInitiatorRequest
-	30, // 20: dataplane.DataplaneService.DisconnectInitiator:input_type -> dataplane.DisconnectInitiatorRequest
-	33, // 21: dataplane.DataplaneService.CreateReplicaBdev:input_type -> dataplane.CreateReplicaBdevRequest
-	35, // 22: dataplane.DataplaneService.ReplicaStatus:input_type -> dataplane.ReplicaStatusRequest
-	37, // 23: dataplane.DataplaneService.InitChunkStore:input_type -> dataplane.InitChunkStoreRequest
-	39, // 24: dataplane.DataplaneService.ChunkStoreStats:input_type -> dataplane.ChunkStoreStatsRequest
-	41, // 25: dataplane.DataplaneService.WriteChunk:input_type -> dataplane.WriteChunkRequest
-	43, // 26: dataplane.DataplaneService.ReadChunk:input_type -> dataplane.ReadChunkRequest
-	45, // 27: dataplane.DataplaneService.DeleteChunk:input_type -> dataplane.DeleteChunkRequest
-	47, // 28: dataplane.DataplaneService.ChunkExists:input_type -> dataplane.ChunkExistsRequest
-	49, // 29: dataplane.DataplaneService.ListChunks:input_type -> dataplane.ListChunksRequest
-	51, // 30: dataplane.DataplaneService.GarbageCollect:input_type -> dataplane.GarbageCollectRequest
-	53, // 31: dataplane.DataplaneService.InitBackend:input_type -> dataplane.InitBackendRequest
-	55, // 32: dataplane.DataplaneService.CreateVolume:input_type -> dataplane.CreateVolumeRequest
-	57, // 33: dataplane.DataplaneService.DeleteVolume:input_type -> dataplane.DeleteVolumeRequest
-	63, // 34: dataplane.DataplaneService.SetVolumePolicy:input_type -> dataplane.SetVolumePolicyRequest
-	59, // 35: dataplane.DataplaneService.GetVersion:input_type -> dataplane.GetVersionRequest
-	61, // 36: dataplane.DataplaneService.Heartbeat:input_type -> dataplane.HeartbeatRequest
-	2,  // 37: dataplane.DataplaneService.CreateAioBdev:output_type -> dataplane.BdevInfo
-	2,  // 38: dataplane.DataplaneService.CreateMallocBdev:output_type -> dataplane.BdevInfo
-	4,  // 39: dataplane.DataplaneService.CreateLvolStore:output_type -> dataplane.LvolStoreInfo
-	2,  // 40: dataplane.DataplaneService.CreateLvol:output_type -> dataplane.BdevInfo
-	7,  // 41: dataplane.DataplaneService.DeleteBdev:output_type -> dataplane.DeleteBdevResponse
-	9,  // 42: dataplane.DataplaneService.ListBdevs:output_type -> dataplane.ListBdevsResponse
-	2,  // 43: dataplane.DataplaneService.GetBdevInfo:output_type -> dataplane.BdevInfo
-	12, // 44: dataplane.DataplaneService.ListLvolStores:output_type -> dataplane.ListLvolStoresResponse
-	14, // 45: dataplane.DataplaneService.InitTransport:output_type -> dataplane.InitTransportResponse
-	16, // 46: dataplane.DataplaneService.CreateNvmfTarget:output_type -> dataplane.NvmfTargetInfo
-	18, // 47: dataplane.DataplaneService.DeleteNvmfTarget:output_type -> dataplane.DeleteNvmfTargetResponse
-	20, // 48: dataplane.DataplaneService.SetAnaState:output_type -> dataplane.SetAnaStateResponse
-	22, // 49: dataplane.DataplaneService.GetAnaState:output_type -> dataplane.GetAnaStateResponse
-	25, // 50: dataplane.DataplaneService.ListSubsystems:output_type -> dataplane.ListSubsystemsResponse
-	27, // 51: dataplane.DataplaneService.ExportBdev:output_type -> dataplane.ExportBdevResponse
-	29, // 52: dataplane.DataplaneService.ConnectInitiator:output_type -> dataplane.ConnectInitiatorResponse
-	31, // 53: dataplane.DataplaneService.DisconnectInitiator:output_type -> dataplane.DisconnectInitiatorResponse
-	34, // 54: dataplane.DataplaneService.CreateReplicaBdev:output_type -> dataplane.CreateReplicaBdevResponse
-	36, // 55: dataplane.DataplaneService.ReplicaStatus:output_type -> dataplane.ReplicaStatusResponse
-	38, // 56: dataplane.DataplaneService.InitChunkStore:output_type -> dataplane.InitChunkStoreResponse
-	40, // 57: dataplane.DataplaneService.ChunkStoreStats:output_type -> dataplane.ChunkStoreStatsResponse
-	42, // 58: dataplane.DataplaneService.WriteChunk:output_type -> dataplane.WriteChunkResponse
-	44, // 59: dataplane.DataplaneService.ReadChunk:output_type -> dataplane.ReadChunkResponse
-	46, // 60: dataplane.DataplaneService.DeleteChunk:output_type -> dataplane.DeleteChunkResponse
-	48, // 61: dataplane.DataplaneService.ChunkExists:output_type -> dataplane.ChunkExistsResponse
-	50, // 62: dataplane.DataplaneService.ListChunks:output_type -> dataplane.ListChunksResponse
-	52, // 63: dataplane.DataplaneService.GarbageCollect:output_type -> dataplane.GarbageCollectResponse
-	54, // 64: dataplane.DataplaneService.InitBackend:output_type -> dataplane.InitBackendResponse
-	56, // 65: dataplane.DataplaneService.CreateVolume:output_type -> dataplane.CreateVolumeResponse
-	58, // 66: dataplane.DataplaneService.DeleteVolume:output_type -> dataplane.DeleteVolumeResponse
-	64, // 67: dataplane.DataplaneService.SetVolumePolicy:output_type -> dataplane.SetVolumePolicyResponse
-	60, // 68: dataplane.DataplaneService.GetVersion:output_type -> dataplane.GetVersionResponse
-	62, // 69: dataplane.DataplaneService.Heartbeat:output_type -> dataplane.HeartbeatResponse
-	37, // [37:70] is the sub-list for method output_type
-	4,  // [4:37] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	66, // 4: dataplane.TopologyNode.backends:type_name -> dataplane.TopologyBackend
+	65, // 5: dataplane.UpdateTopologyRequest.nodes:type_name -> dataplane.TopologyNode
+	0,  // 6: dataplane.DataplaneService.CreateAioBdev:input_type -> dataplane.CreateAioBdevRequest
+	1,  // 7: dataplane.DataplaneService.CreateMallocBdev:input_type -> dataplane.CreateMallocBdevRequest
+	3,  // 8: dataplane.DataplaneService.CreateLvolStore:input_type -> dataplane.CreateLvolStoreRequest
+	5,  // 9: dataplane.DataplaneService.CreateLvol:input_type -> dataplane.CreateLvolRequest
+	6,  // 10: dataplane.DataplaneService.DeleteBdev:input_type -> dataplane.DeleteBdevRequest
+	8,  // 11: dataplane.DataplaneService.ListBdevs:input_type -> dataplane.ListBdevsRequest
+	10, // 12: dataplane.DataplaneService.GetBdevInfo:input_type -> dataplane.GetBdevInfoRequest
+	11, // 13: dataplane.DataplaneService.ListLvolStores:input_type -> dataplane.ListLvolStoresRequest
+	13, // 14: dataplane.DataplaneService.InitTransport:input_type -> dataplane.InitTransportRequest
+	15, // 15: dataplane.DataplaneService.CreateNvmfTarget:input_type -> dataplane.CreateNvmfTargetRequest
+	17, // 16: dataplane.DataplaneService.DeleteNvmfTarget:input_type -> dataplane.DeleteNvmfTargetRequest
+	19, // 17: dataplane.DataplaneService.SetAnaState:input_type -> dataplane.SetAnaStateRequest
+	21, // 18: dataplane.DataplaneService.GetAnaState:input_type -> dataplane.GetAnaStateRequest
+	23, // 19: dataplane.DataplaneService.ListSubsystems:input_type -> dataplane.ListSubsystemsRequest
+	26, // 20: dataplane.DataplaneService.ExportBdev:input_type -> dataplane.ExportBdevRequest
+	28, // 21: dataplane.DataplaneService.ConnectInitiator:input_type -> dataplane.ConnectInitiatorRequest
+	30, // 22: dataplane.DataplaneService.DisconnectInitiator:input_type -> dataplane.DisconnectInitiatorRequest
+	33, // 23: dataplane.DataplaneService.CreateReplicaBdev:input_type -> dataplane.CreateReplicaBdevRequest
+	35, // 24: dataplane.DataplaneService.ReplicaStatus:input_type -> dataplane.ReplicaStatusRequest
+	37, // 25: dataplane.DataplaneService.InitChunkStore:input_type -> dataplane.InitChunkStoreRequest
+	39, // 26: dataplane.DataplaneService.ChunkStoreStats:input_type -> dataplane.ChunkStoreStatsRequest
+	41, // 27: dataplane.DataplaneService.WriteChunk:input_type -> dataplane.WriteChunkRequest
+	43, // 28: dataplane.DataplaneService.ReadChunk:input_type -> dataplane.ReadChunkRequest
+	45, // 29: dataplane.DataplaneService.DeleteChunk:input_type -> dataplane.DeleteChunkRequest
+	47, // 30: dataplane.DataplaneService.ChunkExists:input_type -> dataplane.ChunkExistsRequest
+	49, // 31: dataplane.DataplaneService.ListChunks:input_type -> dataplane.ListChunksRequest
+	51, // 32: dataplane.DataplaneService.GarbageCollect:input_type -> dataplane.GarbageCollectRequest
+	53, // 33: dataplane.DataplaneService.InitBackend:input_type -> dataplane.InitBackendRequest
+	55, // 34: dataplane.DataplaneService.CreateVolume:input_type -> dataplane.CreateVolumeRequest
+	57, // 35: dataplane.DataplaneService.DeleteVolume:input_type -> dataplane.DeleteVolumeRequest
+	63, // 36: dataplane.DataplaneService.SetVolumePolicy:input_type -> dataplane.SetVolumePolicyRequest
+	67, // 37: dataplane.DataplaneService.UpdateTopology:input_type -> dataplane.UpdateTopologyRequest
+	59, // 38: dataplane.DataplaneService.GetVersion:input_type -> dataplane.GetVersionRequest
+	61, // 39: dataplane.DataplaneService.Heartbeat:input_type -> dataplane.HeartbeatRequest
+	2,  // 40: dataplane.DataplaneService.CreateAioBdev:output_type -> dataplane.BdevInfo
+	2,  // 41: dataplane.DataplaneService.CreateMallocBdev:output_type -> dataplane.BdevInfo
+	4,  // 42: dataplane.DataplaneService.CreateLvolStore:output_type -> dataplane.LvolStoreInfo
+	2,  // 43: dataplane.DataplaneService.CreateLvol:output_type -> dataplane.BdevInfo
+	7,  // 44: dataplane.DataplaneService.DeleteBdev:output_type -> dataplane.DeleteBdevResponse
+	9,  // 45: dataplane.DataplaneService.ListBdevs:output_type -> dataplane.ListBdevsResponse
+	2,  // 46: dataplane.DataplaneService.GetBdevInfo:output_type -> dataplane.BdevInfo
+	12, // 47: dataplane.DataplaneService.ListLvolStores:output_type -> dataplane.ListLvolStoresResponse
+	14, // 48: dataplane.DataplaneService.InitTransport:output_type -> dataplane.InitTransportResponse
+	16, // 49: dataplane.DataplaneService.CreateNvmfTarget:output_type -> dataplane.NvmfTargetInfo
+	18, // 50: dataplane.DataplaneService.DeleteNvmfTarget:output_type -> dataplane.DeleteNvmfTargetResponse
+	20, // 51: dataplane.DataplaneService.SetAnaState:output_type -> dataplane.SetAnaStateResponse
+	22, // 52: dataplane.DataplaneService.GetAnaState:output_type -> dataplane.GetAnaStateResponse
+	25, // 53: dataplane.DataplaneService.ListSubsystems:output_type -> dataplane.ListSubsystemsResponse
+	27, // 54: dataplane.DataplaneService.ExportBdev:output_type -> dataplane.ExportBdevResponse
+	29, // 55: dataplane.DataplaneService.ConnectInitiator:output_type -> dataplane.ConnectInitiatorResponse
+	31, // 56: dataplane.DataplaneService.DisconnectInitiator:output_type -> dataplane.DisconnectInitiatorResponse
+	34, // 57: dataplane.DataplaneService.CreateReplicaBdev:output_type -> dataplane.CreateReplicaBdevResponse
+	36, // 58: dataplane.DataplaneService.ReplicaStatus:output_type -> dataplane.ReplicaStatusResponse
+	38, // 59: dataplane.DataplaneService.InitChunkStore:output_type -> dataplane.InitChunkStoreResponse
+	40, // 60: dataplane.DataplaneService.ChunkStoreStats:output_type -> dataplane.ChunkStoreStatsResponse
+	42, // 61: dataplane.DataplaneService.WriteChunk:output_type -> dataplane.WriteChunkResponse
+	44, // 62: dataplane.DataplaneService.ReadChunk:output_type -> dataplane.ReadChunkResponse
+	46, // 63: dataplane.DataplaneService.DeleteChunk:output_type -> dataplane.DeleteChunkResponse
+	48, // 64: dataplane.DataplaneService.ChunkExists:output_type -> dataplane.ChunkExistsResponse
+	50, // 65: dataplane.DataplaneService.ListChunks:output_type -> dataplane.ListChunksResponse
+	52, // 66: dataplane.DataplaneService.GarbageCollect:output_type -> dataplane.GarbageCollectResponse
+	54, // 67: dataplane.DataplaneService.InitBackend:output_type -> dataplane.InitBackendResponse
+	56, // 68: dataplane.DataplaneService.CreateVolume:output_type -> dataplane.CreateVolumeResponse
+	58, // 69: dataplane.DataplaneService.DeleteVolume:output_type -> dataplane.DeleteVolumeResponse
+	64, // 70: dataplane.DataplaneService.SetVolumePolicy:output_type -> dataplane.SetVolumePolicyResponse
+	68, // 71: dataplane.DataplaneService.UpdateTopology:output_type -> dataplane.UpdateTopologyResponse
+	60, // 72: dataplane.DataplaneService.GetVersion:output_type -> dataplane.GetVersionResponse
+	62, // 73: dataplane.DataplaneService.Heartbeat:output_type -> dataplane.HeartbeatResponse
+	40, // [40:74] is the sub-list for method output_type
+	6,  // [6:40] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_dataplane_dataplane_proto_init() }
@@ -3780,7 +4066,7 @@ func file_api_proto_dataplane_dataplane_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_dataplane_dataplane_proto_rawDesc), len(file_api_proto_dataplane_dataplane_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   65,
+			NumMessages:   69,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

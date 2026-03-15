@@ -50,6 +50,7 @@ const (
 	DataplaneService_CreateVolume_FullMethodName        = "/dataplane.DataplaneService/CreateVolume"
 	DataplaneService_DeleteVolume_FullMethodName        = "/dataplane.DataplaneService/DeleteVolume"
 	DataplaneService_SetVolumePolicy_FullMethodName     = "/dataplane.DataplaneService/SetVolumePolicy"
+	DataplaneService_UpdateTopology_FullMethodName      = "/dataplane.DataplaneService/UpdateTopology"
 	DataplaneService_GetVersion_FullMethodName          = "/dataplane.DataplaneService/GetVersion"
 	DataplaneService_Heartbeat_FullMethodName           = "/dataplane.DataplaneService/Heartbeat"
 )
@@ -124,6 +125,8 @@ type DataplaneServiceClient interface {
 	DeleteVolume(ctx context.Context, in *DeleteVolumeRequest, opts ...grpc.CallOption) (*DeleteVolumeResponse, error)
 	// SetVolumePolicy sets the replication policy for a volume.
 	SetVolumePolicy(ctx context.Context, in *SetVolumePolicyRequest, opts ...grpc.CallOption) (*SetVolumePolicyResponse, error)
+	// UpdateTopology pushes a full cluster topology snapshot to the dataplane.
+	UpdateTopology(ctx context.Context, in *UpdateTopologyRequest, opts ...grpc.CallOption) (*UpdateTopologyResponse, error)
 	// GetVersion returns the dataplane version.
 	GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error)
 	// Heartbeat is sent periodically by the Go agent. If the dataplane stops
@@ -461,6 +464,16 @@ func (c *dataplaneServiceClient) SetVolumePolicy(ctx context.Context, in *SetVol
 	return out, nil
 }
 
+func (c *dataplaneServiceClient) UpdateTopology(ctx context.Context, in *UpdateTopologyRequest, opts ...grpc.CallOption) (*UpdateTopologyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateTopologyResponse)
+	err := c.cc.Invoke(ctx, DataplaneService_UpdateTopology_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *dataplaneServiceClient) GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetVersionResponse)
@@ -551,6 +564,8 @@ type DataplaneServiceServer interface {
 	DeleteVolume(context.Context, *DeleteVolumeRequest) (*DeleteVolumeResponse, error)
 	// SetVolumePolicy sets the replication policy for a volume.
 	SetVolumePolicy(context.Context, *SetVolumePolicyRequest) (*SetVolumePolicyResponse, error)
+	// UpdateTopology pushes a full cluster topology snapshot to the dataplane.
+	UpdateTopology(context.Context, *UpdateTopologyRequest) (*UpdateTopologyResponse, error)
 	// GetVersion returns the dataplane version.
 	GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error)
 	// Heartbeat is sent periodically by the Go agent. If the dataplane stops
@@ -658,6 +673,9 @@ func (UnimplementedDataplaneServiceServer) DeleteVolume(context.Context, *Delete
 }
 func (UnimplementedDataplaneServiceServer) SetVolumePolicy(context.Context, *SetVolumePolicyRequest) (*SetVolumePolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetVolumePolicy not implemented")
+}
+func (UnimplementedDataplaneServiceServer) UpdateTopology(context.Context, *UpdateTopologyRequest) (*UpdateTopologyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateTopology not implemented")
 }
 func (UnimplementedDataplaneServiceServer) GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVersion not implemented")
@@ -1226,6 +1244,24 @@ func _DataplaneService_SetVolumePolicy_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataplaneService_UpdateTopology_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateTopologyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneServiceServer).UpdateTopology(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneService_UpdateTopology_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneServiceServer).UpdateTopology(ctx, req.(*UpdateTopologyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DataplaneService_GetVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetVersionRequest)
 	if err := dec(in); err != nil {
@@ -1384,6 +1420,10 @@ var DataplaneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetVolumePolicy",
 			Handler:    _DataplaneService_SetVolumePolicy_Handler,
+		},
+		{
+			MethodName: "UpdateTopology",
+			Handler:    _DataplaneService_UpdateTopology_Handler,
 		},
 		{
 			MethodName: "GetVersion",

@@ -49,6 +49,9 @@ service DataplaneService {
   // --- Policy Engine ---
   rpc SetVolumePolicy(SetVolumePolicyRequest) returns (SetVolumePolicyResponse);
 
+  // --- Topology ---
+  rpc UpdateTopology(UpdateTopologyRequest) returns (UpdateTopologyResponse);
+
   // --- Health & Fencing ---
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
@@ -315,5 +318,29 @@ message SetVolumePolicyRequest {
   uint32 desired_replicas = 2;
 }
 message SetVolumePolicyResponse {
+  bool accepted = 1;
+}
+
+// Topology messages
+message TopologyNode {
+  string node_id = 1;
+  string address = 2;
+  uint32 port = 3;
+  repeated TopologyBackend backends = 4;
+  string status = 5;
+}
+message TopologyBackend {
+  string id = 1;
+  string node_id = 2;
+  uint64 capacity_bytes = 3;
+  uint64 used_bytes = 4;
+  uint32 weight = 5;
+  string backend_type = 6;
+}
+message UpdateTopologyRequest {
+  uint64 generation = 1;
+  repeated TopologyNode nodes = 2;
+}
+message UpdateTopologyResponse {
   bool accepted = 1;
 }

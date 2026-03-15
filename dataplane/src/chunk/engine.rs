@@ -5,7 +5,7 @@
 //! then replicates full chunks (or distributes EC shards) to those nodes.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use log::warn;
 use sha2::{Digest, Sha256};
@@ -22,7 +22,7 @@ use crate::transport::chunk_client::ChunkClient;
 pub struct ChunkEngine {
     node_id: String,
     local_store: Arc<dyn ChunkStore>,
-    topology: ClusterMap,
+    topology: RwLock<ClusterMap>,
     /// Data protection scheme for this engine instance.
     protection: Protection,
     /// Cached gRPC connections to remote nodes, keyed by address.
@@ -37,7 +37,7 @@ impl ChunkEngine {
         Self {
             node_id,
             local_store,
-            topology,
+            topology: RwLock::new(topology),
             protection: Protection::Replication { factor: 1 },
             connections: Mutex::new(HashMap::new()),
             policy: None,
@@ -54,7 +54,7 @@ impl ChunkEngine {
         Self {
             node_id,
             local_store,
-            topology,
+            topology: RwLock::new(topology),
             protection: Protection::Replication { factor: 1 },
             connections: Mutex::new(HashMap::new()),
             policy: Some(policy),
@@ -71,7 +71,7 @@ impl ChunkEngine {
         Self {
             node_id,
             local_store,
-            topology,
+            topology: RwLock::new(topology),
             protection,
             connections: Mutex::new(HashMap::new()),
             policy: None,
@@ -89,7 +89,7 @@ impl ChunkEngine {
         Self {
             node_id,
             local_store,
-            topology,
+            topology: RwLock::new(topology),
             protection,
             connections: Mutex::new(HashMap::new()),
             policy: Some(policy),
@@ -105,6 +105,36 @@ impl ChunkEngine {
     /// Return the current protection scheme.
     pub fn protection(&self) -> &Protection {
         &self.protection
+    }
+
+    /// Replace the cluster topology with an updated snapshot.
+    /// Rejects updates with a generation <= the current one (except when
+    /// current is generation 0, which is the bootstrap placeholder).
+    pub fn update_topology(&self, new_topology: ClusterMap) -> bool {
+        let mut topo = self.topology.write().unwrap();
+        let current_gen = topo.generation();
+        let new_gen = new_topology.generation();
+        if current_gen > 0 && new_gen <= current_gen {
+            log::warn!(
+                "rejecting stale topology update: current={} proposed={}",
+                current_gen,
+                new_gen,
+            );
+            return false;
+        }
+        log::info!(
+            "topology updated: generation {} -> {}, nodes: {}",
+            current_gen,
+            new_gen,
+            new_topology.nodes().len(),
+        );
+        *topo = new_topology;
+        true
+    }
+
+    /// Returns the current topology generation.
+    pub fn topology_generation(&self) -> u64 {
+        self.topology.read().unwrap().generation()
     }
 
     /// Get or create a cached ChunkClient for the given address.
@@ -246,7 +276,8 @@ impl ChunkEngine {
         factor: u32,
         volume_id: &str,
     ) -> Result<()> {
-        let placements = crush::select(chunk_id, factor as usize, &self.topology);
+        let topo = self.topology.read().unwrap();
+        let placements = crush::select(chunk_id, factor as usize, &topo);
         log::debug!(
             "write_replicated chunk={} prepared_len={} factor={} placements={}",
             &chunk_id[..16],
@@ -312,7 +343,8 @@ impl ChunkEngine {
         volume_id: &str,
     ) -> Result<()> {
         let total_shards = (data_shards + parity_shards) as usize;
-        let placements = crush::select(chunk_id, total_shards, &self.topology);
+        let topo = self.topology.read().unwrap();
+        let placements = crush::select(chunk_id, total_shards, &topo);
 
         if placements.len() < data_shards as usize {
             return Err(DataPlaneError::ChunkEngineError(format!(
@@ -404,8 +436,8 @@ impl ChunkEngine {
             log::debug!("put_chunk_to_node local done: {:?}", r.is_ok());
             r
         } else {
-            let node = self
-                .topology
+            let topo = self.topology.read().unwrap();
+            let node = topo
                 .nodes()
                 .iter()
                 .find(|n| n.id == target_node)
@@ -415,6 +447,7 @@ impl ChunkEngine {
                     ))
                 })?;
             let addr = format!("http://{}:{}", node.address, node.port);
+            drop(topo);
             let client = self.get_client(&addr).await?;
             client.put(chunk_id, prepared).await
         }
@@ -425,8 +458,8 @@ impl ChunkEngine {
         if target_node == self.node_id {
             self.local_store.get(chunk_id).await
         } else {
-            let node = self
-                .topology
+            let topo = self.topology.read().unwrap();
+            let node = topo
                 .nodes()
                 .iter()
                 .find(|n| n.id == target_node)
@@ -436,6 +469,7 @@ impl ChunkEngine {
                     ))
                 })?;
             let addr = format!("http://{}:{}", node.address, node.port);
+            drop(topo);
             let client = self.get_client(&addr).await?;
             client.get(chunk_id).await
         }
@@ -525,7 +559,8 @@ impl ChunkEngine {
         parity_shards: u32,
     ) -> Result<Vec<u8>> {
         let total_shards = (data_shards + parity_shards) as usize;
-        let placements = crush::select(chunk_id, total_shards, &self.topology);
+        let topo = self.topology.read().unwrap();
+        let placements = crush::select(chunk_id, total_shards, &topo);
 
         let mut available: Vec<(usize, Vec<u8>)> = Vec::new();
 
