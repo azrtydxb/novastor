@@ -189,7 +189,7 @@ impl ChunkEngine {
     ) -> Result<Vec<ChunkMapEntry>> {
         let start_chunk_index = offset / CHUNK_SIZE as u64;
         let chunks = Self::split_into_chunks(data);
-        log::info!(
+        log::debug!(
             "ChunkEngine::write vol={} offset={} data_len={} chunks={}",
             volume_id,
             offset,
@@ -247,7 +247,7 @@ impl ChunkEngine {
         volume_id: &str,
     ) -> Result<()> {
         let placements = crush::select(chunk_id, factor as usize, &self.topology);
-        log::info!(
+        log::debug!(
             "write_replicated chunk={} prepared_len={} factor={} placements={}",
             &chunk_id[..16],
             prepared.len(),
@@ -392,7 +392,7 @@ impl ChunkEngine {
         prepared: &[u8],
         target_node: &str,
     ) -> Result<()> {
-        log::info!(
+        log::debug!(
             "put_chunk_to_node chunk={} len={} target={} local={}",
             &chunk_id[..16],
             prepared.len(),
@@ -401,7 +401,7 @@ impl ChunkEngine {
         );
         if target_node == self.node_id {
             let r = self.local_store.put(chunk_id, prepared).await;
-            log::info!("put_chunk_to_node local done: {:?}", r.is_ok());
+            log::debug!("put_chunk_to_node local done: {:?}", r.is_ok());
             r
         } else {
             let node = self

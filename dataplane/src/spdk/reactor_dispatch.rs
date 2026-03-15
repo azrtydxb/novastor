@@ -282,7 +282,7 @@ unsafe extern "C" fn async_write_io_done_cb(
     success: bool,
     ctx: *mut std::os::raw::c_void,
 ) {
-    log::info!("async_write_io_done_cb success={}", success);
+    log::debug!("async_write_io_done_cb success={}", success);
     let io_ctx = Box::from_raw(ctx as *mut AsyncWriteIoCtx);
 
     let result = if success {
@@ -299,7 +299,7 @@ unsafe extern "C" fn async_write_io_done_cb(
     let mut sender: AsyncCompletionSender<Result<()>> =
         AsyncCompletionSender::from_ptr(io_ctx.sender_ptr);
     sender.complete(result);
-    log::info!("async_write_io_done_cb sender.complete done");
+    log::debug!("async_write_io_done_cb sender.complete done");
 }
 
 /// Round up `val` to the next multiple of `align`.
@@ -713,7 +713,7 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
 
 /// Async version of [`bdev_write`]. Returns a future instead of blocking.
 pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Result<()> {
-    log::info!(
+    log::debug!(
         "bdev_write_async ENTER bdev={} offset={} len={}",
         bdev_name,
         offset,
@@ -726,7 +726,7 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
     let sender_addr = sender.into_ptr() as usize;
 
     send_to_reactor(move || unsafe {
-        log::info!(
+        log::debug!(
             "bdev_write_async REACTOR bdev={} offset={} len={}",
             name,
             offset,
@@ -768,7 +768,7 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
             ffi::spdk_bdev_get_block_size(bdev)
         } as u64;
         let aligned_len = align_up(data.len() as u64, block_size);
-        log::info!(
+        log::debug!(
             "bdev_write_async REACTOR open OK bdev={} block_size={} aligned_len={}",
             name,
             block_size,
@@ -808,7 +808,7 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
         });
         let io_ctx_ptr = Box::into_raw(io_ctx) as *mut std::os::raw::c_void;
 
-        log::info!(
+        log::debug!(
             "bdev_write_async REACTOR submitting spdk_bdev_write offset={} len={}",
             offset,
             aligned_len
@@ -834,11 +834,11 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
                 "spdk_bdev_write submit failed: rc={rc}"
             ))));
         } else {
-            log::info!("bdev_write_async REACTOR spdk_bdev_write submitted OK");
+            log::debug!("bdev_write_async REACTOR spdk_bdev_write submitted OK");
         }
     });
 
     let result = completion.wait().await;
-    log::info!("bdev_write_async completion received: {:?}", result.is_ok());
+    log::debug!("bdev_write_async completion received: {:?}", result.is_ok());
     result
 }

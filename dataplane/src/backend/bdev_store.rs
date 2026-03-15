@@ -331,7 +331,7 @@ impl ChunkStore for BdevChunkStore {
     async fn put(&self, chunk_id: &str, data: &[u8]) -> Result<()> {
         // Deduplication: if chunk already exists, skip.
         if self.index.read().unwrap().contains_key(chunk_id) {
-            log::info!("BdevChunkStore::put dedup hit chunk={}", &chunk_id[..16]);
+            log::debug!("BdevChunkStore::put dedup hit chunk={}", &chunk_id[..16]);
             return Ok(());
         }
 
@@ -341,7 +341,7 @@ impl ChunkStore for BdevChunkStore {
         })?;
 
         let offset = self.slot_to_offset(slot);
-        log::info!(
+        log::debug!(
             "BdevChunkStore::put chunk={} slot={} offset={} bdev={} data_len={}",
             &chunk_id[..16],
             slot,
@@ -362,7 +362,7 @@ impl ChunkStore for BdevChunkStore {
             self.allocator.lock().unwrap().free(slot);
             return Err(e);
         }
-        log::info!(
+        log::debug!(
             "BdevChunkStore::put bdev_write_async OK chunk={}",
             &chunk_id[..16]
         );

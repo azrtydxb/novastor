@@ -661,7 +661,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
                     let engine = get_chunk_engine()?;
                     let handle = get_tokio_handle()?;
 
-                    log::info!(
+                    log::debug!(
                         "novastor_bdev: WRITE io_pool start vol={} offset={} len={}",
                         volume_name,
                         offset,
@@ -670,7 +670,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
 
                     let entries = rmw_write(&volume_name, offset, &data, engine, handle)?;
 
-                    log::info!(
+                    log::debug!(
                         "novastor_bdev: WRITE io_pool done vol={} entries={}",
                         volume_name,
                         entries.len()
