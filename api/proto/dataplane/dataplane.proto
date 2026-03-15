@@ -110,6 +110,11 @@ service DataplaneService {
   // DeleteVolume deletes a volume from a backend.
   rpc DeleteVolume(DeleteVolumeRequest) returns (DeleteVolumeResponse);
 
+  // --- Policy Engine ---
+
+  // SetVolumePolicy sets the replication policy for a volume.
+  rpc SetVolumePolicy(SetVolumePolicyRequest) returns (SetVolumePolicyResponse);
+
   // --- Health & Fencing ---
 
   // GetVersion returns the dataplane version.
@@ -444,4 +449,17 @@ message HeartbeatRequest {
 message HeartbeatResponse {
   bool fenced = 1;
   string status = 2;
+}
+
+// ==========================================================================
+// Policy Engine messages
+// ==========================================================================
+
+message SetVolumePolicyRequest {
+  string volume_id = 1;
+  uint32 desired_replicas = 2;
+}
+
+message SetVolumePolicyResponse {
+  bool accepted = 1;
 }
