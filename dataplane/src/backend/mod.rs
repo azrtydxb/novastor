@@ -1,13 +1,11 @@
 //! Unified storage backend interface.
 //!
-//! All three data backends (raw disk, LVM, chunk) implement the same
-//! `StorageBackend` trait so the Go management plane can use any backend
-//! through the gRPC DataplaneService.
+//! Three backend types (Raw, LVM, File) implement the `StorageBackend` trait.
+//! All produce SPDK bdevs. The ChunkEngine sits above backends and stores
+//! content-addressed 4MB chunks on them via the async `ChunkStore` trait.
 
 #[cfg(feature = "spdk-sys")]
 pub mod bdev_store;
-#[cfg(feature = "spdk-sys")]
-pub mod chunk;
 pub mod chunk_store;
 #[cfg(feature = "spdk-sys")]
 pub mod file_store;

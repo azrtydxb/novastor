@@ -1,5 +1,5 @@
 syntax = "proto3";
-package novastor.dataplane;
+package dataplane;
 
 // DataplaneService is the single gRPC API between the Go management agent
 // and the Rust SPDK dataplane. It replaces ALL JSON-RPC communication.

@@ -90,6 +90,110 @@ fn io_pool() -> &'static threadpool::ThreadPool {
     IO_POOL.get_or_init(|| threadpool::ThreadPool::new(4))
 }
 
+/// Per-chunk lock to serialize concurrent RMW operations on the same chunk.
+/// Key: (volume_name, chunk_index). The Mutex<()> provides mutual exclusion.
+static CHUNK_LOCKS: OnceLock<Mutex<HashMap<(String, usize), Arc<Mutex<()>>>>> = OnceLock::new();
+
+fn chunk_lock(volume: &str, chunk_idx: usize) -> Arc<Mutex<()>> {
+    let locks = CHUNK_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = locks.lock().unwrap();
+    map.entry((volume.to_string(), chunk_idx))
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+/// Read-modify-write helper: ensures every write goes through full 4MB chunks.
+///
+/// For sub-chunk writes, reads the existing chunk, overlays the new data at the
+/// correct intra-chunk offset, and writes back the full 4MB chunk. This is
+/// essential because the ChunkEngine stores immutable content-addressed chunks
+/// and the read path expects full CHUNK_SIZE payloads.
+fn rmw_write(
+    volume_name: &str,
+    offset: u64,
+    data: &[u8],
+    engine: &ChunkEngine,
+    handle: &tokio::runtime::Handle,
+) -> Result<Vec<ChunkMapEntry>> {
+    let start_chunk = (offset / CHUNK_SIZE as u64) as usize;
+    let end_chunk =
+        ((offset + data.len() as u64 + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64) as usize;
+
+    let mut all_entries: Vec<ChunkMapEntry> = Vec::new();
+    let mut data_cursor = 0usize;
+
+    for chunk_idx in start_chunk..end_chunk {
+        // Serialize concurrent RMW on the same chunk to prevent lost updates.
+        let lock = chunk_lock(volume_name, chunk_idx);
+        let _guard = lock.lock().unwrap();
+
+        let chunk_start = chunk_idx as u64 * CHUNK_SIZE as u64;
+        let chunk_end = chunk_start + CHUNK_SIZE as u64;
+
+        // Determine the byte range within this chunk that the write covers.
+        let write_start_in_chunk = if offset > chunk_start {
+            (offset - chunk_start) as usize
+        } else {
+            0
+        };
+        let write_end_abs = offset + data.len() as u64;
+        let write_end_in_chunk = if write_end_abs < chunk_end {
+            (write_end_abs - chunk_start) as usize
+        } else {
+            CHUNK_SIZE
+        };
+        let write_len = write_end_in_chunk - write_start_in_chunk;
+
+        // If the write covers the entire chunk, skip the read step.
+        let full_chunk = if write_start_in_chunk == 0 && write_len >= CHUNK_SIZE {
+            data[data_cursor..data_cursor + CHUNK_SIZE].to_vec()
+        } else {
+            // Read existing chunk data (or zeros if unwritten).
+            let mut buf = vec![0u8; CHUNK_SIZE];
+            let maps = volume_chunk_maps().read().unwrap();
+            if let Some(chunk_map) = maps.get(volume_name) {
+                if chunk_idx < chunk_map.len() {
+                    if let Some(entry) = &chunk_map[chunk_idx] {
+                        let entries = vec![entry.clone()];
+                        drop(maps); // release lock before async call
+                        if let Ok(existing) =
+                            handle.block_on(engine.read(volume_name, chunk_start, &entries))
+                        {
+                            let copy_len = existing.len().min(CHUNK_SIZE);
+                            buf[..copy_len].copy_from_slice(&existing[..copy_len]);
+                        }
+                    }
+                }
+            }
+            // Overlay the new data.
+            buf[write_start_in_chunk..write_end_in_chunk]
+                .copy_from_slice(&data[data_cursor..data_cursor + write_len]);
+            buf
+        };
+
+        data_cursor += write_len;
+
+        // Write the full 4MB chunk through ChunkEngine.
+        let entries = handle.block_on(engine.write(volume_name, chunk_start, &full_chunk))?;
+
+        // Update chunk map immediately while still holding the chunk lock.
+        let mut maps = volume_chunk_maps().write().unwrap();
+        if let Some(chunk_map) = maps.get_mut(volume_name) {
+            for entry in &entries {
+                let idx = entry.chunk_index as usize;
+                if idx < chunk_map.len() {
+                    chunk_map[idx] = Some(entry.clone());
+                }
+            }
+        }
+        drop(maps);
+
+        all_entries.extend(entries);
+    }
+
+    Ok(all_entries)
+}
+
 /// Per-bdev tracking entry.
 struct NovastorBdevEntry {
     volume_name: String,
@@ -354,6 +458,8 @@ unsafe extern "C" fn bdev_io_type_supported_cb(
         io_type,
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_READ
             | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE
+            | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_FLUSH
+            | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES
     )
 }
 
@@ -383,6 +489,11 @@ unsafe extern "C" fn bdev_submit_request_cb(
     let volume_name = (*ctx).volume_name.clone();
 
     let io_type = (*bdev_io).type_ as u32;
+    log::debug!(
+        "novastor_bdev: submit_request io_type={} volume={}",
+        io_type,
+        volume_name
+    );
 
     match io_type {
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_READ => {
@@ -410,6 +521,11 @@ unsafe extern "C" fn bdev_submit_request_cb(
             }
 
             io_pool().execute(move || {
+                log::debug!(
+                    "novastor_bdev: READ io_pool offset={} len={}",
+                    offset,
+                    length
+                );
                 let result = (|| -> Result<Vec<u8>> {
                     let engine = get_chunk_engine()?;
                     let handle = get_tokio_handle()?;
@@ -449,11 +565,22 @@ unsafe extern "C" fn bdev_submit_request_cb(
                     let data = handle.block_on(engine.read(&volume_name, offset, &entries))?;
 
                     // Trim to the exact sub-chunk offset and length requested.
+                    // If the stored chunk is smaller than expected (legacy sub-chunk
+                    // write), pad with zeros to avoid panicking.
                     let chunk_aligned_start = start_chunk as u64 * CHUNK_SIZE as u64;
                     let sub_offset = (offset - chunk_aligned_start) as usize;
-                    let available = data.len().saturating_sub(sub_offset);
+                    if sub_offset >= data.len() {
+                        // Offset beyond stored data — return zeros.
+                        return Ok(vec![0u8; length as usize]);
+                    }
+                    let available = data.len() - sub_offset;
                     let to_return = std::cmp::min(available, length as usize);
-                    Ok(data[sub_offset..sub_offset + to_return].to_vec())
+                    let mut result = data[sub_offset..sub_offset + to_return].to_vec();
+                    // Pad with zeros if we couldn't satisfy the full request.
+                    if result.len() < length as usize {
+                        result.resize(length as usize, 0);
+                    }
+                    Ok(result)
                 })();
 
                 // Copy data into the iov buffers and complete I/O on the
@@ -534,20 +661,20 @@ unsafe extern "C" fn bdev_submit_request_cb(
                     let engine = get_chunk_engine()?;
                     let handle = get_tokio_handle()?;
 
-                    // Write through ChunkEngine (async → sync bridge).
-                    // ChunkEngine handles CRUSH placement, replication/EC fan-out.
-                    let entries = handle.block_on(engine.write(&volume_name, offset, &data))?;
+                    log::info!(
+                        "novastor_bdev: WRITE io_pool start vol={} offset={} len={}",
+                        volume_name,
+                        offset,
+                        data.len()
+                    );
 
-                    // Update the local chunk map cache with the returned entries.
-                    let mut maps = volume_chunk_maps().write().unwrap();
-                    if let Some(chunk_map) = maps.get_mut(&volume_name) {
-                        for entry in &entries {
-                            let idx = entry.chunk_index as usize;
-                            if idx < chunk_map.len() {
-                                chunk_map[idx] = Some(entry.clone());
-                            }
-                        }
-                    }
+                    let entries = rmw_write(&volume_name, offset, &data, engine, handle)?;
+
+                    log::info!(
+                        "novastor_bdev: WRITE io_pool done vol={} entries={}",
+                        volume_name,
+                        entries.len()
+                    );
 
                     Ok(())
                 })();
@@ -565,8 +692,44 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 });
             });
         }
+        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_FLUSH => {
+            // Flush is a no-op — chunk writes are durable once acknowledged.
+            ffi::spdk_bdev_io_complete(
+                bdev_io,
+                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+            );
+        }
+        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES => {
+            let bdev_params = (*bdev_io).u.bdev.as_ref();
+            let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
+            let length = bdev_params.num_blocks * (*bdev).blocklen as u64;
+            let bdev_io_addr = bdev_io as usize;
+
+            let data = vec![0u8; length as usize];
+
+            io_pool().execute(move || {
+                let result = (|| -> Result<()> {
+                    let engine = get_chunk_engine()?;
+                    let handle = get_tokio_handle()?;
+                    rmw_write(&volume_name, offset, &data, engine, handle)?;
+                    Ok(())
+                })();
+
+                let status = match result {
+                    Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                    Err(e) => {
+                        error!("novastor_bdev: write_zeroes failed: {}", e);
+                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                    }
+                };
+
+                reactor_dispatch::send_to_reactor(move || unsafe {
+                    ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
+                });
+            });
+        }
         _ => {
-            // Unsupported I/O type. SPDK_BDEV_IO_STATUS_FAILED = -1.
+            // Unsupported I/O type.
             ffi::spdk_bdev_io_complete(
                 bdev_io,
                 ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,

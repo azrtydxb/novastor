@@ -1,16 +1,16 @@
-//! Raw Disk backend — direct block I/O on NVMe bdevs.
+//! Raw Disk backend — direct block I/O on NVMe/block device bdevs.
 //!
-//! The Raw backend attaches unbound NVMe devices directly as SPDK NVMe bdevs.
-//! No filesystem is created on the device. Volumes are 1:1 mappings to the
-//! underlying NVMe namespace.
+//! The Raw backend creates SPDK io_uring bdevs on block devices (e.g.,
+//! /dev/nvme0n1). No filesystem is created on the device. Volumes are 1:1
+//! mappings to the underlying block device.
 //!
 //! This is the highest-performance backend: zero overhead from filesystems or
-//! logical volume management. Suitable for dedicated NVMe devices that should
+//! logical volume management. Suitable for dedicated devices that should
 //! be used entirely by NovaStor.
 //!
 //! Snapshots use full block copies between bdevs.
 
-use crate::config::{LocalBdevConfig, NvmeBdevConfig};
+use crate::config::LocalBdevConfig;
 use crate::error::{DataPlaneError, Result};
 use crate::spdk::bdev_manager::BdevManager;
 use crate::spdk::reactor_dispatch;
@@ -21,20 +21,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::traits::*;
 
-/// Global bdev manager for creating/managing NVMe bdevs.
+/// Global bdev manager for creating/managing bdevs.
 static RAW_BDEV_MANAGER: OnceLock<BdevManager> = OnceLock::new();
 
 fn bdev_manager() -> &'static BdevManager {
     RAW_BDEV_MANAGER.get_or_init(BdevManager::new)
 }
 
-/// Tracks a raw NVMe volume's metadata.
+/// Tracks a raw volume's metadata.
 struct RawVolume {
     name: String,
-    /// The underlying SPDK bdev name (e.g., "nvme0n1").
+    /// The underlying SPDK bdev name (e.g., "raw_nvme-replicated").
     bdev_name: String,
-    /// PCIe BDF address of the NVMe device.
-    pcie_addr: String,
+    /// Block device path (e.g., "/dev/nvme0n2").
+    device_path: String,
     size_bytes: u64,
     block_size: u32,
     num_blocks: u64,
@@ -92,7 +92,7 @@ impl RawDiskBackend {
 
     fn volume_info(&self, vol: &RawVolume) -> VolumeInfo {
         VolumeInfo {
-            name: vol.name.clone(),
+            name: vol.bdev_name.clone(),
             backend: BackendType::RawDisk,
             size_bytes: vol.size_bytes,
             used_bytes: vol.size_bytes,
@@ -113,41 +113,41 @@ impl StorageBackend for RawDiskBackend {
     fn create_volume(&self, name: &str, size_bytes: u64, _thin: bool) -> Result<VolumeInfo> {
         info!("raw_disk: creating volume '{}' ({}B)", name, size_bytes);
 
-        // The volume name must include a PCIe address in the format
-        // "<name>@<pcie_addr>" (e.g., "vol1@0000:00:04.0"). The Go agent
-        // passes this after discovering available NVMe devices.
-        let (vol_name, pcie_addr) = if let Some(idx) = name.find('@') {
+        // The volume name must include a device path in the format
+        // "<name>@<device_path>" (e.g., "vol1@/dev/nvme0n2"). The Go agent
+        // passes this after discovering available block devices.
+        let (vol_name, device_path) = if let Some(idx) = name.find('@') {
             (&name[..idx], &name[idx + 1..])
         } else {
             return Err(DataPlaneError::BdevError(format!(
-                "raw_disk: volume name must be '<name>@<pcie_addr>', got '{}'",
+                "raw_disk: volume name must be '<name>@<device_path>', got '{}'",
                 name
             )));
         };
 
-        let controller_name = format!("raw_{}", vol_name);
+        let bdev_name = format!("raw_{}", vol_name);
 
-        // Attach the NVMe device via SPDK.
-        let config = NvmeBdevConfig {
-            name: controller_name.clone(),
-            pcie_addr: pcie_addr.to_string(),
+        // Create a uring bdev on the block device.
+        let config = LocalBdevConfig {
+            name: bdev_name.clone(),
+            device_path: device_path.to_string(),
+            block_size: 512,
         };
-        let bdev_info = bdev_manager().attach_nvme_bdev(&config)?;
+        let bdev_info = bdev_manager().create_aio_bdev(&config)?;
 
         let actual_size = bdev_info.num_blocks * bdev_info.block_size as u64;
         if actual_size < size_bytes {
-            // Device is smaller than requested — unregister and fail.
             let _ = bdev_manager().delete_bdev(&bdev_info.name);
             return Err(DataPlaneError::BdevError(format!(
                 "raw_disk: device at {} is {}B, need {}B",
-                pcie_addr, actual_size, size_bytes
+                device_path, actual_size, size_bytes
             )));
         }
 
         let vol = RawVolume {
             name: vol_name.to_string(),
             bdev_name: bdev_info.name.clone(),
-            pcie_addr: pcie_addr.to_string(),
+            device_path: device_path.to_string(),
             size_bytes: actual_size,
             block_size: bdev_info.block_size,
             num_blocks: bdev_info.num_blocks,
@@ -406,7 +406,7 @@ impl StorageBackend for RawDiskBackend {
         let vol = RawVolume {
             name: clone_name.to_string(),
             bdev_name: clone_bdev,
-            pcie_addr: String::new(),
+            device_path: String::new(),
             size_bytes: size,
             block_size,
             num_blocks: size / block_size as u64,

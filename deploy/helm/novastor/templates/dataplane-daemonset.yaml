@@ -39,7 +39,12 @@ spec:
             - {{ .Values.dataplane.reactorMask | quote }}
             - --mem-size
             - {{ .Values.dataplane.memSize | quote }}
+            - --grpc-port
+            - "9500"
           ports:
+            - name: grpc
+              containerPort: 9500
+              protocol: TCP
             - name: nvmeof
               containerPort: 4430
               protocol: TCP
@@ -56,6 +61,8 @@ spec:
               mountPath: /dev/shm
             - name: spdk-socket
               mountPath: /var/tmp
+            - name: chunk-data
+              mountPath: /var/lib/novastor/chunks
           resources:
             {{- toYaml .Values.dataplane.resources | nindent 12 }}
       volumes:
@@ -75,6 +82,10 @@ spec:
         - name: spdk-socket
           hostPath:
             path: /var/tmp
+            type: DirectoryOrCreate
+        - name: chunk-data
+          hostPath:
+            path: /var/lib/novastor/chunks
             type: DirectoryOrCreate
       {{- with .Values.dataplane.nodeSelector }}
       nodeSelector:

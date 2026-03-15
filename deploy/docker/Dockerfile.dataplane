@@ -24,7 +24,13 @@ RUN git clone --depth 1 --branch ${SPDK_VERSION} https://github.com/spdk/spdk.gi
 
 WORKDIR /spdk
 RUN ./scripts/pkgdep.sh || true
-RUN ./configure --disable-tests --disable-unit-tests
+# Enable uring for bdev_uring module. Ubuntu 22.04's liburing is too old for
+# SPDK's accel/uring and sock/uring modules (missing io_uring_buf), but
+# bdev_uring compiles fine. Patch out the broken modules after configure.
+RUN ./configure --disable-tests --disable-unit-tests --with-uring && \
+    sed -i 's/CONFIG_URING_ACCEL=y/CONFIG_URING_ACCEL=n/' mk/config.mk && \
+    rm -f module/sock/uring/uring.c && \
+    touch module/sock/uring/uring.c
 RUN make -j$(nproc)
 
 # Install to /spdk-out. make install with DESTDIR puts everything under

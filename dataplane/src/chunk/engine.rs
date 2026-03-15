@@ -189,6 +189,13 @@ impl ChunkEngine {
     ) -> Result<Vec<ChunkMapEntry>> {
         let start_chunk_index = offset / CHUNK_SIZE as u64;
         let chunks = Self::split_into_chunks(data);
+        log::info!(
+            "ChunkEngine::write vol={} offset={} data_len={} chunks={}",
+            volume_id,
+            offset,
+            data.len(),
+            chunks.len()
+        );
         let mut entries = Vec::with_capacity(chunks.len());
 
         for (i, raw_chunk) in chunks.iter().enumerate() {
@@ -240,6 +247,13 @@ impl ChunkEngine {
         volume_id: &str,
     ) -> Result<()> {
         let placements = crush::select(chunk_id, factor as usize, &self.topology);
+        log::info!(
+            "write_replicated chunk={} prepared_len={} factor={} placements={}",
+            &chunk_id[..16],
+            prepared.len(),
+            factor,
+            placements.len()
+        );
         if placements.is_empty() {
             return Err(DataPlaneError::ChunkEngineError(format!(
                 "CRUSH returned no placement for chunk {chunk_id}"
@@ -378,8 +392,17 @@ impl ChunkEngine {
         prepared: &[u8],
         target_node: &str,
     ) -> Result<()> {
+        log::info!(
+            "put_chunk_to_node chunk={} len={} target={} local={}",
+            &chunk_id[..16],
+            prepared.len(),
+            target_node,
+            target_node == self.node_id
+        );
         if target_node == self.node_id {
-            self.local_store.put(chunk_id, prepared).await
+            let r = self.local_store.put(chunk_id, prepared).await;
+            log::info!("put_chunk_to_node local done: {:?}", r.is_ok());
+            r
         } else {
             let node = self
                 .topology

@@ -2,7 +2,7 @@
 
 use crate::config::DataPlaneConfig;
 use crate::error::{DataPlaneError, Result};
-use log::info;
+use log::{info, warn};
 
 #[allow(
     non_camel_case_types,
@@ -50,19 +50,25 @@ pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
         opts.rpc_addr = rpc_sock.as_ptr();
 
         // Right-size iobuf pools for NVMe-oF TCP transport.
-        // NVMe-oF TCP needs ~383 large buffers; 512 gives headroom.
-        // small=2048*8K=16MB, large=512*132K=66MB → ~82MB total.
+        // NVMe-oF TCP needs ~383 large buffers per poll group. Use 2048 to
+        // ensure the pool never starves — insufficient buffers cause I/O hangs.
+        // small=4096*8K=32MB, large=2048*132K=264MB → ~296MB total.
         let mut iobuf_opts: ffi::spdk_iobuf_opts = std::mem::zeroed();
         ffi::spdk_iobuf_get_opts(&mut iobuf_opts, std::mem::size_of::<ffi::spdk_iobuf_opts>());
-        iobuf_opts.small_pool_count = 2048;
-        iobuf_opts.large_pool_count = 512;
-        ffi::spdk_iobuf_set_opts(&iobuf_opts);
         info!(
-            "iobuf pools: small={}x{}B, large={}x{}B",
+            "iobuf defaults from get_opts: small={}x{}B, large={}x{}B, opts_size={}",
             iobuf_opts.small_pool_count,
             iobuf_opts.small_bufsize,
             iobuf_opts.large_pool_count,
-            iobuf_opts.large_bufsize
+            iobuf_opts.large_bufsize,
+            std::mem::size_of_val(&iobuf_opts),
+        );
+        iobuf_opts.small_pool_count = 4096;
+        iobuf_opts.large_pool_count = 2048;
+        let rc = ffi::spdk_iobuf_set_opts(&iobuf_opts);
+        info!(
+            "spdk_iobuf_set_opts rc={}, requested: small={}, large={}",
+            rc, iobuf_opts.small_pool_count, iobuf_opts.large_pool_count
         );
 
         // Package config for the startup callback. The callback runs

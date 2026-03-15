@@ -37,7 +37,7 @@ impl PolicyEngine {
     /// * `node_id` — identifier for this node (used by `ChunkOperations` to
     ///   decide whether I/O is local or remote).
     /// * `location_store` — persistent store tracking chunk-to-node mappings.
-    /// * `local_store` — the local chunk backend for same-node I/O.
+    /// * `local_store` — the local chunk store for same-node I/O.
     /// * `topology` — initial cluster topology snapshot.
     pub fn new(
         node_id: String,

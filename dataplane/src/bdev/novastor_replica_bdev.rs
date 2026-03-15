@@ -5,9 +5,9 @@
 //! quorum write / policy-based read logic executes, then completions are
 //! sent back to the reactor via `spdk_thread_send_msg`.
 //!
-//! This follows the same pattern as `novastor_bdev.rs` (the ChunkBackend
+//! This follows the same pattern as `novastor_bdev.rs` (the ChunkEngine
 //! SPDK bdev module), but routes I/O through the replica fan-out layer
-//! instead of the chunk backend.
+//! instead of the chunk engine.
 
 use crate::bdev::replica::ReplicaBdev;
 use crate::error::{DataPlaneError, Result};

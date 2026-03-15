@@ -39,14 +39,6 @@ struct Args {
     log_level: String,
 }
 
-/// Global tokio runtime handle — available to all modules.
-static TOKIO_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
-
-/// Get the global tokio runtime handle.
-pub fn tokio_handle() -> &'static tokio::runtime::Handle {
-    TOKIO_HANDLE.get().expect("tokio runtime not initialized")
-}
-
 fn main() {
     let args = Args::parse();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&args.log_level))
@@ -64,9 +56,7 @@ fn main() {
         .enable_all()
         .build()
         .expect("failed to create tokio runtime");
-    TOKIO_HANDLE
-        .set(runtime.handle().clone())
-        .expect("tokio handle already set");
+    novastor_dataplane::set_tokio_handle(runtime.handle().clone());
     info!("tokio runtime started (2 worker threads)");
 
     #[cfg(feature = "spdk-sys")]

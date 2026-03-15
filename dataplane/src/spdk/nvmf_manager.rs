@@ -280,12 +280,14 @@ impl NvmfManager {
                 unsafe {
                     let tgt = tgt_ptr.as_ptr() as *mut ffi::spdk_nvmf_tgt;
 
-                    // Create the subsystem.
+                    // Create the subsystem. num_ns sets max NSID which also constrains
+                    // ANA group IDs (ANAGRPID must be ≤ max NSID). Use 1 since each
+                    // volume subsystem has exactly one namespace.
                     let subsystem = ffi::spdk_nvmf_subsystem_create(
                         tgt,
                         nqn_c.as_ptr() as *const c_char,
                         ffi::spdk_nvmf_subtype_SPDK_NVMF_SUBTYPE_NVME,
-                        0, // num_ns — will add namespace separately
+                        1, // num_ns — one namespace per volume
                     );
                     if subsystem.is_null() {
                         return Err(DataPlaneError::NvmfTargetError(format!(
@@ -425,7 +427,7 @@ impl NvmfManager {
             )));
         }
 
-        let info = SubsystemInfo {
+        let sub_info = SubsystemInfo {
             nqn: nqn.clone(),
             bdev_name: config.bdev_name.clone(),
             listen_address: config.listen_address.clone(),
@@ -433,8 +435,12 @@ impl NvmfManager {
             ana_group_id: config.ana_group_id,
             ana_state: config.ana_state.clone(),
         };
-        self.subsystems.lock().unwrap().insert(nqn, info.clone());
-        Ok(info)
+        self.subsystems
+            .lock()
+            .unwrap()
+            .insert(nqn.clone(), sub_info.clone());
+
+        Ok(sub_info)
     }
 
     pub fn delete_target(&self, volume_id: &str) -> Result<()> {
@@ -753,29 +759,40 @@ impl NvmfManager {
         let ana_enabled = sub_info.ana_group_id > 0;
 
         if ana_enabled {
-            reactor_dispatch::dispatch_sync(move || unsafe {
+            // spdk_nvmf_subsystem_set_ana_state is async — it pauses the subsystem,
+            // sets the state, and resumes. We MUST provide a callback; passing NULL
+            // causes a segfault when SPDK tries to invoke it.
+            let completion = Arc::new(Completion::new());
+            let completion_clone = completion.clone();
+
+            reactor_dispatch::send_to_reactor(move || unsafe {
                 let tgt = tgt_ptr.as_ptr() as *mut ffi::spdk_nvmf_tgt;
                 let subsystem =
                     ffi::spdk_nvmf_tgt_find_subsystem(tgt, nqn_c.as_ptr() as *const c_char);
-                if !subsystem.is_null() {
-                    let state = match ana_state_owned.as_str() {
-                        "optimized" => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_OPTIMIZED_STATE,
-                        "non_optimized" => {
-                            ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_NON_OPTIMIZED_STATE
-                        }
-                        "inaccessible" => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_INACCESSIBLE_STATE,
-                        _ => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_OPTIMIZED_STATE,
-                    };
-                    ffi::spdk_nvmf_subsystem_set_ana_state(
-                        subsystem,
-                        std::ptr::null(),
-                        state,
-                        ana_group_id,
-                        None,
-                        std::ptr::null_mut(),
-                    );
+                if subsystem.is_null() {
+                    completion_clone.complete(());
+                    return;
                 }
+                let state = match ana_state_owned.as_str() {
+                    "optimized" => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_OPTIMIZED_STATE,
+                    "non_optimized" | "non-optimized" => {
+                        ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_NON_OPTIMIZED_STATE
+                    }
+                    "inaccessible" => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_INACCESSIBLE_STATE,
+                    _ => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_OPTIMIZED_STATE,
+                };
+                let cb_arg = Arc::into_raw(completion_clone) as *mut c_void;
+                ffi::spdk_nvmf_subsystem_set_ana_state(
+                    subsystem,
+                    std::ptr::null(),
+                    state,
+                    ana_group_id,
+                    Some(ana_state_done_cb),
+                    cb_arg,
+                );
             });
+
+            completion.wait();
         } else {
             error!(
                 "ANA reporting not enabled on subsystem (ana_group_id=0), skipping set_ana_state"
@@ -797,8 +814,15 @@ impl NvmfManager {
 }
 
 // ---------------------------------------------------------------------------
-// SPDK FFI callbacks — create target chain
+// SPDK FFI callbacks
 // ---------------------------------------------------------------------------
+
+/// Callback for `spdk_nvmf_subsystem_set_ana_state`. Signals the Completion
+/// so the calling thread unblocks.
+unsafe extern "C" fn ana_state_done_cb(cb_arg: *mut c_void, _status: i32) {
+    let completion = Arc::from_raw(cb_arg as *const Completion<()>);
+    completion.complete(());
+}
 
 /// Callback after `spdk_nvmf_subsystem_add_listener` completes.
 /// On success, starts the subsystem. On failure, signals the completion.

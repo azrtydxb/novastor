@@ -1,8 +1,8 @@
 //! Unified storage backend trait.
 //!
-//! Every backend (raw disk, LVM, chunk) implements this trait identically.
-//! The Go management plane picks a backend per-volume at creation time; after
-//! that all operations are backend-agnostic.
+//! Every backend (Raw, LVM, File) implements this trait identically.
+//! All three produce SPDK bdevs. The ChunkEngine sits above backends
+//! and stores content-addressed 4MB chunks on them.
 
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
@@ -46,20 +46,26 @@ pub struct SnapshotInfo {
 }
 
 /// Backend type discriminator.
+///
+/// There are exactly three backend types. The ChunkEngine is NOT a backend —
+/// it is the layer above backends that stores content-addressed 4MB chunks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackendType {
+    /// Raw block device (io_uring bdev on NVMe/block device).
     RawDisk,
+    /// SPDK lvol store on a block device.
     Lvm,
-    Chunk,
+    /// File on a mounted filesystem (SPDK AIO bdev).
+    File,
 }
 
 impl std::fmt::Display for BackendType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BackendType::RawDisk => write!(f, "raw_disk"),
+            BackendType::RawDisk => write!(f, "raw"),
             BackendType::Lvm => write!(f, "lvm"),
-            BackendType::Chunk => write!(f, "chunk"),
+            BackendType::File => write!(f, "file"),
         }
     }
 }

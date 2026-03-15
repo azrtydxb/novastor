@@ -18,7 +18,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	novastorev1alpha1 "github.com/azrtydxb/novastor/api/v1alpha1"
 	"github.com/azrtydxb/novastor/internal/agent"
 	"github.com/azrtydxb/novastor/internal/agent/device"
 	"github.com/azrtydxb/novastor/internal/agent/failover"
@@ -27,6 +33,9 @@ import (
 	"github.com/azrtydxb/novastor/internal/metadata"
 	"github.com/azrtydxb/novastor/internal/metrics"
 	"github.com/azrtydxb/novastor/internal/transport"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
 
 var (
@@ -94,7 +103,7 @@ func main() {
 	tlsClientKey := flag.String("tls-client-key", "", "Path to client key for outbound mTLS connections to metadata service")
 	tlsRotationInterval := flag.Duration("tls-rotation-interval", 5*time.Minute, "Interval for TLS certificate rotation checks")
 	dataplaneAddr := flag.String("dataplane-addr", "localhost:9500", "Address of the Rust gRPC dataplane")
-	spdkBaseBdev := flag.String("spdk-base-bdev", "NVMe0n1", "SPDK bdev name used as the base device for the chunk backend (e.g. NVMe0n1, Malloc0)")
+	spdkBaseBdev := flag.String("spdk-base-bdev", "NVMe0n1", "SPDK bdev name used as the base device for the storage backend (e.g. NVMe0n1, Malloc0)")
 	testMode := flag.Bool("test-mode", false, "Enable test mode: allows Malloc bdev auto-creation (NOT for production use)")
 	flag.Parse()
 
@@ -231,12 +240,13 @@ func main() {
 
 	// Register NVMe-oF target service. SPDK dataplane is always required;
 	// all data-path I/O goes through the Rust dataplane via gRPC.
+	var spdkServer *agent.SPDKTargetServer
 	if *hostIP == "" {
 		logging.L.Info("NVMe-oF target service disabled (--host-ip not set)")
 	} else if metaClient == nil {
 		logging.L.Warn("NVMe-oF target service disabled: no metadata connection")
 	} else {
-		spdkServer := agent.NewSPDKTargetServer(*hostIP, *spdkBaseBdev, *testMode, dpClient, metaClient)
+		spdkServer = agent.NewSPDKTargetServer(*hostIP, *spdkBaseBdev, *testMode, dpClient, metaClient)
 		spdkServer.Register(srv)
 		logging.L.Info("NVMe-oF target service registered", zap.String("hostIP", *hostIP))
 
@@ -286,6 +296,45 @@ func main() {
 					logging.L.Error("dataplane reports FENCED state")
 				}
 			}
+		}
+	}()
+
+	// Start controller-runtime manager for BackendAssignment reconciler.
+	ctrllog.SetLogger(ctrlzap.New(ctrlzap.UseDevMode(false)))
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(novastorev1alpha1.AddToScheme(scheme))
+
+	restCfg, cfgErr := config.GetConfig()
+	if cfgErr != nil {
+		logging.L.Fatal("failed to get kubeconfig for controller-runtime", zap.Error(cfgErr))
+	}
+
+	mgr, mgrErr := ctrl.NewManager(restCfg, ctrl.Options{
+		Scheme: scheme,
+		// Disable metrics/health servers — we already run our own.
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: "",
+	})
+	if mgrErr != nil {
+		logging.L.Fatal("failed to create controller-runtime manager", zap.Error(mgrErr))
+	}
+
+	baReconciler := &agent.BackendAssignmentReconciler{
+		Client:   mgr.GetClient(),
+		NodeName: *nodeID,
+		DPClient: dpClient,
+		Logger:   logging.L,
+		BaseBdev: *spdkBaseBdev,
+	}
+	if err := baReconciler.SetupWithManager(mgr); err != nil {
+		logging.L.Fatal("failed to setup BackendAssignment reconciler", zap.Error(err))
+	}
+	logging.L.Info("BackendAssignment reconciler registered", zap.String("nodeName", *nodeID))
+
+	go func() {
+		if err := mgr.Start(ctx); err != nil {
+			logging.L.Error("controller-runtime manager error", zap.Error(err))
 		}
 	}()
 

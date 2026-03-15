@@ -1,5 +1,5 @@
 syntax = "proto3";
-package novastor.chunk;
+package chunk;
 
 service ChunkService {
   rpc PutChunk(stream PutChunkRequest) returns (PutChunkResponse);

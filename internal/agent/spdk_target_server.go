@@ -40,7 +40,7 @@ type SPDKTargetServer struct {
 	dpClient   *dataplane.Client
 	metaClient *metadata.GRPCClient
 
-	// chunkInit tracks whether the chunk backend has been initialised.
+	// chunkInit tracks whether the chunk store has been initialised.
 	// Uses mutex+bool instead of sync.Once so transient failures can be retried.
 	initMu   sync.Mutex
 	initDone bool
@@ -50,7 +50,7 @@ type SPDKTargetServer struct {
 // NewSPDKTargetServer creates an SPDKTargetServer that exposes NVMe-oF targets
 // through the SPDK data-plane process reachable via the provided gRPC client.
 // baseBdev is the name of the SPDK bdev to use as the backing device for the
-// chunk backend (e.g. "NVMe0n1" for real NVMe drives, "Malloc0" for testing).
+// storage backend (e.g. "NVMe0n1" for real NVMe drives, "Malloc0" for testing).
 // testMode must be true to allow Malloc bdev auto-creation; in production this
 // should always be false and only real NVMe/AIO bdevs are accepted.
 func NewSPDKTargetServer(hostIP, baseBdev string, testMode bool, dpClient *dataplane.Client, metaClient *metadata.GRPCClient) *SPDKTargetServer {
@@ -73,17 +73,17 @@ func (s *SPDKTargetServer) Register(srv *grpc.Server) {
 	pb.RegisterNVMeTargetServiceServer(srv, s)
 }
 
-// ensureChunkBackend initialises the chunk storage backend on the SPDK
-// data-plane. The underlying bdev is determined by baseBdev (e.g. "NVMe0n1"
-// for real NVMe drives, "Malloc0" for testing). This is called lazily so the
-// agent can start even if the storage bdev isn't immediately available.
+// ensureChunkStore initialises the chunk store on the SPDK data-plane.
+// The underlying bdev is determined by baseBdev (e.g. "NVMe0n1" for real
+// NVMe drives, "Malloc0" for testing). This is called lazily so the agent
+// can start even if the storage bdev isn't immediately available.
 //
-// The chunk backend stores data as content-addressed 4MB chunks on the bdev,
-// matching the NovaStor architecture: Backend → Chunk Engine → NVMe-oF.
+// The chunk store sits atop the storage backend and stores content-addressed
+// 4MB chunks. Architecture: Backend (Raw/LVM/File) → Chunk Engine → NVMe-oF.
 //
 // Uses mutex+bool instead of sync.Once so transient init failures (e.g.
 // dataplane not ready yet) can be retried on subsequent CreateTarget calls.
-func (s *SPDKTargetServer) ensureChunkBackend() error {
+func (s *SPDKTargetServer) ensureChunkStore() error {
 	s.initMu.Lock()
 	defer s.initMu.Unlock()
 
@@ -125,7 +125,7 @@ func (s *SPDKTargetServer) ensureChunkBackend() error {
 		)
 	}
 
-	logging.L.Info("spdk target: chunk backend initialised",
+	logging.L.Info("spdk target: chunk store initialised",
 		zap.String("baseBdev", s.baseBdev),
 	)
 
@@ -147,21 +147,24 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 		return nil, status.Error(codes.InvalidArgument, "size_bytes must be positive")
 	}
 
-	// Ensure chunk backend is ready.
-	if err := s.ensureChunkBackend(); err != nil {
-		return nil, status.Errorf(codes.Internal, "chunk backend init: %v", err)
+	// Ensure chunk store is ready.
+	if err := s.ensureChunkStore(); err != nil {
+		return nil, status.Errorf(codes.Internal, "chunk store init: %v", err)
 	}
 
-	// Create chunk volume via Rust data-plane gRPC. This also registers an SPDK
-	// bdev named "novastor_<volumeID>" that bridges block I/O to the chunk engine.
+	// Create volume via Rust data-plane gRPC. This registers an SPDK bdev
+	// named "novastor_<volumeID>" that bridges block I/O to the chunk engine.
+	// The volume is a virtual bdev backed by content-addressed 4MB chunks —
+	// it does NOT map to a physical device. The backend type is irrelevant
+	// at volume creation time; only the chunk engine matters.
 	bdevName, _, err := s.dpClient.CreateVolume("chunk", volumeID, uint64(sizeBytes))
 	if err != nil {
-		logging.L.Error("spdk target: failed to create chunk volume",
+		logging.L.Error("spdk target: failed to create volume",
 			zap.String("volumeID", volumeID),
 			zap.Int64("sizeBytes", sizeBytes),
 			zap.Error(err),
 		)
-		return nil, status.Errorf(codes.Internal, "creating chunk volume for %s: %v", volumeID, err)
+		return nil, status.Errorf(codes.Internal, "creating volume for %s: %v", volumeID, err)
 	}
 
 	logging.L.Info("spdk target: chunk volume created",
@@ -178,9 +181,9 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	anaGroupID := req.GetAnaGroupId()
 	nqn, err := s.dpClient.CreateNvmfTarget(volumeID, bdevName, s.hostIP, spdkTargetPort, anaState, anaGroupID)
 	if err != nil {
-		// Cleanup chunk volume on failure.
+		// Cleanup volume on failure.
 		if delErr := s.dpClient.DeleteVolume("chunk", volumeID); delErr != nil {
-			logging.L.Warn("spdk target: failed to clean up chunk volume",
+			logging.L.Warn("spdk target: failed to clean up volume",
 				zap.String("volumeID", volumeID),
 				zap.Error(delErr),
 			)
@@ -207,7 +210,7 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	}, nil
 }
 
-// DeleteTarget removes the NVMe-oF target and the chunk volume via the data-plane.
+// DeleteTarget removes the NVMe-oF target and the volume via the data-plane.
 func (s *SPDKTargetServer) DeleteTarget(ctx context.Context, req *pb.DeleteTargetRequest) (*pb.DeleteTargetResponse, error) {
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
@@ -222,10 +225,10 @@ func (s *SPDKTargetServer) DeleteTarget(ctx context.Context, req *pb.DeleteTarge
 		)
 	}
 
-	// Remove the chunk volume via Rust data-plane (best-effort).
-	// This also destroys the novastor_<volumeID> SPDK bdev.
+	// Remove the volume via Rust data-plane (best-effort).
+	// This destroys the novastor_<volumeID> virtual bdev and its chunk map.
 	if err := s.dpClient.DeleteVolume("chunk", volumeID); err != nil {
-		logging.L.Warn("spdk target: failed to delete chunk volume",
+		logging.L.Warn("spdk target: failed to delete volume",
 			zap.String("volumeID", volumeID),
 			zap.Error(err),
 		)

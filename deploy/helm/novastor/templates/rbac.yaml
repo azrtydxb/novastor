@@ -10,6 +10,7 @@ rules:
   - apiGroups: ["novastor.io"]
     resources:
       - storagepools
+      - backendassignments
       - blockvolumes
       - sharedfilesystems
       - objectstores
@@ -18,6 +19,7 @@ rules:
   - apiGroups: ["novastor.io"]
     resources:
       - storagepools/status
+      - backendassignments/status
       - blockvolumes/status
       - sharedfilesystems/status
       - objectstores/status
@@ -26,6 +28,7 @@ rules:
   - apiGroups: ["novastor.io"]
     resources:
       - storagepools/finalizers
+      - backendassignments/finalizers
       - blockvolumes/finalizers
       - sharedfilesystems/finalizers
       - objectstores/finalizers

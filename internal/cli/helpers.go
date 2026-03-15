@@ -8,14 +8,29 @@ import (
 	"text/tabwriter"
 
 	"github.com/azrtydxb/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/transport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 // connectMeta creates a gRPC connection to the metadata service using the
-// address from the --meta-addr flag.
+// address from the --meta-addr flag. When TLS flags are provided, mTLS is used.
 func connectMeta() (*metadata.GRPCClient, error) {
-	return metadata.Dial(metaAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	var opts []grpc.DialOption
+	if tlsCA != "" && tlsCert != "" && tlsKey != "" {
+		tlsOpt, err := transport.NewClientTLS(transport.TLSConfig{
+			CACertPath: tlsCA,
+			CertPath:   tlsCert,
+			KeyPath:    tlsKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("configuring TLS: %w", err)
+		}
+		opts = append(opts, tlsOpt)
+	} else {
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+	return metadata.Dial(metaAddr, opts...)
 }
 
 // printTable renders headers and rows as a neatly aligned table using tabwriter.

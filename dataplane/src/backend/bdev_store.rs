@@ -5,7 +5,11 @@
 //! devices and LVM logical volumes — the BdevChunkStore doesn't care
 //! which type of bdev it operates on.
 
-use crate::backend::chunk_store::{ChunkStore, ChunkStoreStats, CHUNK_SIZE};
+use crate::backend::chunk_store::{ChunkHeader, ChunkStore, ChunkStoreStats, CHUNK_SIZE};
+
+/// On-disk slot size: data payload (CHUNK_SIZE) + per-chunk header,
+/// rounded up to a 512-byte boundary so all offsets are sector-aligned.
+const SLOT_SIZE: u64 = ((CHUNK_SIZE as u64 + ChunkHeader::SIZE as u64) + 511) & !511;
 use crate::error::{DataPlaneError, Result};
 use crate::spdk::reactor_dispatch;
 use async_trait::async_trait;
@@ -292,15 +296,15 @@ impl BdevChunkStore {
         // We need total_slots to size bitmap+index, but total_slots depends on
         // the reserved region. Solve iteratively: estimate slots from full capacity,
         // compute reserved, then recalculate slots from remaining space.
-        let estimated_slots = capacity_bytes / CHUNK_SIZE as u64;
+        let estimated_slots = capacity_bytes / SLOT_SIZE;
         let bitmap_size = (estimated_slots + 7) / 8;
         let index_size = estimated_slots * IndexEntry::SIZE as u64;
         let per_copy = Superblock::SIZE as u64 + bitmap_size + index_size;
         // Align total reserved (2 copies) up to 4MB boundary for clean data region start.
-        let reserved = align_up(per_copy * 2, CHUNK_SIZE as u64);
+        let reserved = align_up(per_copy * 2, SLOT_SIZE);
 
         let data_capacity = capacity_bytes.saturating_sub(reserved);
-        let total_slots = data_capacity / CHUNK_SIZE as u64;
+        let total_slots = data_capacity / SLOT_SIZE;
 
         Self {
             bdev_name: bdev_name.to_string(),
@@ -313,7 +317,7 @@ impl BdevChunkStore {
 
     /// Convert a slot number to a byte offset on the bdev.
     fn slot_to_offset(&self, slot: u64) -> u64 {
-        self.data_region_offset + slot * CHUNK_SIZE as u64
+        self.data_region_offset + slot * SLOT_SIZE
     }
 
     /// Get the bdev name.
@@ -327,6 +331,7 @@ impl ChunkStore for BdevChunkStore {
     async fn put(&self, chunk_id: &str, data: &[u8]) -> Result<()> {
         // Deduplication: if chunk already exists, skip.
         if self.index.read().unwrap().contains_key(chunk_id) {
+            log::info!("BdevChunkStore::put dedup hit chunk={}", &chunk_id[..16]);
             return Ok(());
         }
 
@@ -336,13 +341,31 @@ impl ChunkStore for BdevChunkStore {
         })?;
 
         let offset = self.slot_to_offset(slot);
+        log::info!(
+            "BdevChunkStore::put chunk={} slot={} offset={} bdev={} data_len={}",
+            &chunk_id[..16],
+            slot,
+            offset,
+            self.bdev_name,
+            data.len()
+        );
 
         // Write data to the bdev via async reactor dispatch.
         if let Err(e) = reactor_dispatch::bdev_write_async(&self.bdev_name, offset, data).await {
+            log::error!(
+                "BdevChunkStore::put bdev_write_async FAILED: {} bdev={} offset={}",
+                e,
+                self.bdev_name,
+                offset
+            );
             // Roll back allocation on failure.
             self.allocator.lock().unwrap().free(slot);
             return Err(e);
         }
+        log::info!(
+            "BdevChunkStore::put bdev_write_async OK chunk={}",
+            &chunk_id[..16]
+        );
 
         // Record in index.
         self.index
@@ -364,7 +387,7 @@ impl ChunkStore for BdevChunkStore {
         };
 
         let offset = self.slot_to_offset(slot);
-        reactor_dispatch::bdev_read_async(&self.bdev_name, offset, CHUNK_SIZE as u64).await
+        reactor_dispatch::bdev_read_async(&self.bdev_name, offset, SLOT_SIZE).await
     }
 
     async fn delete(&self, chunk_id: &str) -> Result<()> {
@@ -392,8 +415,8 @@ impl ChunkStore for BdevChunkStore {
         Ok(ChunkStoreStats {
             backend_name: self.bdev_name.clone(),
             total_bytes: self.capacity_bytes,
-            used_bytes: alloc.used_slots() * CHUNK_SIZE as u64,
-            data_bytes: index.len() as u64 * CHUNK_SIZE as u64,
+            used_bytes: alloc.used_slots() * SLOT_SIZE,
+            data_bytes: index.len() as u64 * SLOT_SIZE,
             chunk_count: index.len() as u64,
         })
     }

@@ -101,7 +101,7 @@ service DataplaneService {
 
   // --- Backend Management ---
 
-  // InitBackend initialises a storage backend (raw_disk, lvm, or chunk).
+  // InitBackend initialises a storage backend (raw, lvm, or file).
   rpc InitBackend(InitBackendRequest) returns (InitBackendResponse);
 
   // CreateVolume creates a volume on a backend.
@@ -399,7 +399,7 @@ message GarbageCollectResponse {
 // ==========================================================================
 
 message InitBackendRequest {
-  // backend_type: "raw_disk", "lvm", or "chunk"
+  // backend_type: "raw", "lvm", or "file"
   string backend_type = 1;
   // config is backend-specific JSON configuration
   string config_json = 2;

@@ -59,7 +59,7 @@ spec:
             - --host-ip=$(HOST_IP)
             - --pod-ip=$(POD_IP)
             - --heartbeat-interval={{ .Values.agent.heartbeatInterval }}
-            - --spdk-socket=/var/tmp/novastor-spdk.sock
+            - --dataplane-addr=localhost:9500
             - --spdk-base-bdev={{ .Values.agent.spdkBaseBdev | default "NVMe0n1" }}
             {{- if .Values.agent.testMode }}
             - --test-mode

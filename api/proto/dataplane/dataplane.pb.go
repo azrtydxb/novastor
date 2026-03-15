@@ -2816,7 +2816,7 @@ type InitBackendRequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	// backend_type: "raw_disk", "lvm", or "chunk"
+	// backend_type: "raw", "lvm", or "file"
 	BackendType string `protobuf:"bytes,1,opt,name=backend_type,json=backendType,proto3" json:"backend_type,omitempty"`
 	// config is backend-specific JSON configuration
 	ConfigJson string `protobuf:"bytes,2,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`

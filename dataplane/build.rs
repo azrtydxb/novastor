@@ -110,8 +110,6 @@ fn main() {
         .file("src/nvme_wrapper.c")
         .include(&spdk_include)
         .compile("nvme_wrapper");
-
-    let spdk_include = format!("{}/include", spdk_dir);
     if PathBuf::from(&spdk_include).exists() {
         let bindings = bindgen::Builder::default()
             .header("src/spdk_wrapper.h")

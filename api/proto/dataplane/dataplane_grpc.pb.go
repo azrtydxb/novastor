@@ -115,7 +115,7 @@ type DataplaneServiceClient interface {
 	ListChunks(ctx context.Context, in *ListChunksRequest, opts ...grpc.CallOption) (*ListChunksResponse, error)
 	// GarbageCollect removes orphan chunks not referenced by any volume.
 	GarbageCollect(ctx context.Context, in *GarbageCollectRequest, opts ...grpc.CallOption) (*GarbageCollectResponse, error)
-	// InitBackend initialises a storage backend (raw_disk, lvm, or chunk).
+	// InitBackend initialises a storage backend (raw, lvm, or file).
 	InitBackend(ctx context.Context, in *InitBackendRequest, opts ...grpc.CallOption) (*InitBackendResponse, error)
 	// CreateVolume creates a volume on a backend.
 	CreateVolume(ctx context.Context, in *CreateVolumeRequest, opts ...grpc.CallOption) (*CreateVolumeResponse, error)
@@ -530,7 +530,7 @@ type DataplaneServiceServer interface {
 	ListChunks(context.Context, *ListChunksRequest) (*ListChunksResponse, error)
 	// GarbageCollect removes orphan chunks not referenced by any volume.
 	GarbageCollect(context.Context, *GarbageCollectRequest) (*GarbageCollectResponse, error)
-	// InitBackend initialises a storage backend (raw_disk, lvm, or chunk).
+	// InitBackend initialises a storage backend (raw, lvm, or file).
 	InitBackend(context.Context, *InitBackendRequest) (*InitBackendResponse, error)
 	// CreateVolume creates a volume on a backend.
 	CreateVolume(context.Context, *CreateVolumeRequest) (*CreateVolumeResponse, error)

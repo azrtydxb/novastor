@@ -16,3 +16,16 @@ pub mod policy;
 #[cfg(feature = "spdk-sys")]
 pub mod spdk;
 pub mod transport;
+
+/// Global tokio runtime handle — set by the binary entry point before SPDK init.
+static TOKIO_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
+
+/// Register the tokio runtime handle (called from main.rs).
+pub fn set_tokio_handle(handle: tokio::runtime::Handle) {
+    TOKIO_HANDLE.set(handle).expect("tokio handle already set");
+}
+
+/// Get the global tokio runtime handle.
+pub fn tokio_handle() -> &'static tokio::runtime::Handle {
+    TOKIO_HANDLE.get().expect("tokio runtime not initialized")
+}

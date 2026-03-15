@@ -28,4 +28,22 @@ if ! grep -q hugetlbfs /proc/mounts 2>/dev/null; then
     grep -i huge /proc/mounts 2>/dev/null || echo "(still none)"
 fi
 
+# Pre-load vfio-pci kernel module for SPDK NVMe device access.
+# The NVMe device must be unbound from the kernel nvme driver and bound
+# to vfio-pci before SPDK can attach it. Loading the module here avoids
+# needing nsenter from the SPDK reactor thread.
+echo "Loading vfio-pci module..."
+if [ -x /sbin/modprobe ]; then
+    modprobe vfio-pci 2>/dev/null || true
+else
+    # Container may not have modprobe; use nsenter to host (privileged pod)
+    nsenter -t 1 -m -- modprobe vfio-pci 2>/dev/null || true
+fi
+# Verify
+if [ -d /sys/bus/pci/drivers/vfio-pci ]; then
+    echo "vfio-pci driver loaded"
+else
+    echo "WARNING: vfio-pci driver not available"
+fi
+
 exec /usr/local/bin/novastor-dataplane "$@"

@@ -56,7 +56,7 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 	t.Logf("data-plane version: %s", ver)
 
 	// Step 1: Create a malloc bdev for testing (no real disk needed).
-	t.Log("creating malloc bdev for chunk backend")
+	t.Log("creating malloc bdev for storage backend")
 	if _, err := client.CreateMallocBdev("e2e-base", 256, 512); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("CreateMallocBdev failed: %v", err)
@@ -74,13 +74,13 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 		t.Log("chunk store already initialised, reusing")
 	}
 
-	// Step 3: Create a chunk volume (returns the bdev name and size).
-	t.Log("creating chunk volume")
-	bdevName, sizeBytes, err := client.CreateVolume("chunk", testVolumeID, 128*1024*1024)
+	// Step 3: Create a volume (returns the bdev name and size).
+	t.Log("creating volume")
+	bdevName, sizeBytes, err := client.CreateVolume("raw", testVolumeID, 128*1024*1024)
 	if err != nil {
 		t.Fatalf("CreateVolume failed: %v", err)
 	}
-	t.Logf("chunk volume bdev: %s, size: %d", bdevName, sizeBytes)
+	t.Logf("volume bdev: %s, size: %d", bdevName, sizeBytes)
 
 	// Step 4: Create an NVMe-oF target exposing the chunk volume bdev.
 	t.Log("creating NVMe-oF target")
@@ -100,8 +100,8 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 		t.Errorf("DeleteNvmfTarget failed: %v", err)
 	}
 
-	t.Log("cleaning up chunk volume")
-	if err := client.DeleteVolume("chunk", testVolumeID); err != nil {
+	t.Log("cleaning up volume")
+	if err := client.DeleteVolume("raw", testVolumeID); err != nil {
 		t.Errorf("DeleteVolume failed: %v", err)
 	}
 

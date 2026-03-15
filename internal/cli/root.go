@@ -8,6 +8,9 @@ import "github.com/spf13/cobra"
 var (
 	metaAddr string
 	output   string
+	tlsCA    string
+	tlsCert  string
+	tlsKey   string
 	rootCmd  = &cobra.Command{
 		Use:   "novastorctl",
 		Short: "NovaStor CLI - manage your unified storage cluster",
@@ -18,6 +21,9 @@ var (
 func init() {
 	rootCmd.PersistentFlags().StringVar(&metaAddr, "meta-addr", "localhost:7001", "Metadata service gRPC address")
 	rootCmd.PersistentFlags().StringVarP(&output, "output", "o", "", "Output format (json)")
+	rootCmd.PersistentFlags().StringVar(&tlsCA, "tls-ca", "", "Path to CA certificate for mTLS")
+	rootCmd.PersistentFlags().StringVar(&tlsCert, "tls-cert", "", "Path to client certificate for mTLS")
+	rootCmd.PersistentFlags().StringVar(&tlsKey, "tls-key", "", "Path to client key for mTLS")
 }
 
 // Execute runs the root command.
