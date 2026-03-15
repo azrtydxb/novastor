@@ -10,6 +10,8 @@ pub enum BackendType {
     Bdev,
     /// Regular file-backed storage.
     File,
+    /// LVM logical volume managed via SPDK lvol store.
+    Lvm,
 }
 
 /// A single storage backend (device) on a node.
