@@ -203,7 +203,7 @@ fn cleanup_volume_locks(volume_name: &str) {
     if let Some(locks) = CHUNK_LOCKS.get() {
         let mut map = locks.lock().unwrap();
         let before = map.len();
-        map.retain(|(vol, _)| vol != volume_name);
+        map.retain(|key, _| key.0 != volume_name);
         let removed = before - map.len();
         if removed > 0 {
             info!(

@@ -10,6 +10,7 @@ pub struct DataPlaneConfig {
     pub transport_type: String,
     pub listen_address: String,
     pub listen_port: u16,
+    pub grpc_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
