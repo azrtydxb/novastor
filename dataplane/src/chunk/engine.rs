@@ -513,7 +513,8 @@ impl ChunkEngine {
             // use a single placement (legacy compatibility).
             Protection::ErasureCoding { .. } => 1,
         };
-        let placements = crush::select(chunk_id, factor, &self.topology);
+        let topo = self.topology.read().unwrap();
+        let placements = crush::select(chunk_id, factor, &topo);
         if placements.is_empty() {
             return Err(DataPlaneError::ChunkEngineError(
                 "CRUSH returned no placement".into(),
