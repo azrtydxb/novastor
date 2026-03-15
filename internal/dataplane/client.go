@@ -462,6 +462,26 @@ func (c *Client) ListLvolStores() ([]*pb.LvolStoreInfo, error) {
 }
 
 // --------------------------------------------------------------------------
+// Policy Engine
+// --------------------------------------------------------------------------
+
+// SetVolumePolicy sets the replication policy for a volume. The desired
+// replicas parameter controls how many copies of each chunk the policy
+// engine should maintain across the cluster.
+func (c *Client) SetVolumePolicy(volumeID string, desiredReplicas uint32) (bool, error) {
+	ctx, cancel := c.ctx()
+	defer cancel()
+	resp, err := c.svc.SetVolumePolicy(ctx, &pb.SetVolumePolicyRequest{
+		VolumeId:        volumeID,
+		DesiredReplicas: desiredReplicas,
+	})
+	if err != nil {
+		return false, fmt.Errorf("set volume policy for %s: %w", volumeID, err)
+	}
+	return resp.GetAccepted(), nil
+}
+
+// --------------------------------------------------------------------------
 // Health & Fencing
 // --------------------------------------------------------------------------
 

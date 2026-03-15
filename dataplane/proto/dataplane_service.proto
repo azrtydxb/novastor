@@ -46,6 +46,9 @@ service DataplaneService {
   rpc CreateVolume(CreateVolumeRequest) returns (CreateVolumeResponse);
   rpc DeleteVolume(DeleteVolumeRequest) returns (DeleteVolumeResponse);
 
+  // --- Policy Engine ---
+  rpc SetVolumePolicy(SetVolumePolicyRequest) returns (SetVolumePolicyResponse);
+
   // --- Health & Fencing ---
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
@@ -304,4 +307,13 @@ message HeartbeatRequest {
 message HeartbeatResponse {
   bool fenced = 1;
   string status = 2;
+}
+
+// Policy Engine messages
+message SetVolumePolicyRequest {
+  string volume_id = 1;
+  uint32 desired_replicas = 2;
+}
+message SetVolumePolicyResponse {
+  bool accepted = 1;
 }

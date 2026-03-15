@@ -19,6 +19,7 @@ use crate::transport::dataplane_proto::*;
 use crate::backend::traits::StorageBackend;
 use crate::bdev::chunk_io::{ChunkStore, CHUNK_SIZE};
 use crate::config::{BlobstoreConfig, LocalBdevConfig, LvolConfig, NvmfInitiatorConfig};
+use crate::policy::engine::PolicyEngine;
 use crate::spdk::bdev_manager::BdevManager;
 use crate::spdk::nvmf_manager::NvmfManager;
 
@@ -60,6 +61,29 @@ static GRPC_BACKENDS: OnceLock<Mutex<std::collections::HashMap<String, Arc<dyn S
 
 fn grpc_backends() -> &'static Mutex<std::collections::HashMap<String, Arc<dyn StorageBackend>>> {
     GRPC_BACKENDS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Global registry of policy engines, keyed by bdev name.
+static GRPC_POLICY_ENGINES: OnceLock<Mutex<std::collections::HashMap<String, Arc<PolicyEngine>>>> =
+    OnceLock::new();
+
+fn grpc_policy_engines() -> &'static Mutex<std::collections::HashMap<String, Arc<PolicyEngine>>> {
+    GRPC_POLICY_ENGINES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn get_policy_engine(bdev_name: &str) -> Result<Arc<PolicyEngine>, Status> {
+    let engines = grpc_policy_engines().lock().unwrap();
+    engines.get(bdev_name).cloned().ok_or_else(|| {
+        Status::not_found(format!("policy engine for '{}' not initialised", bdev_name))
+    })
+}
+
+/// Return the first available policy engine (for RPCs that don't specify a bdev).
+fn get_any_policy_engine() -> Result<Arc<PolicyEngine>, Status> {
+    let engines = grpc_policy_engines().lock().unwrap();
+    engines.values().next().cloned().ok_or_else(|| {
+        Status::failed_precondition("no policy engine initialised — call InitChunkStore first")
+    })
 }
 
 fn get_backend(key: &str) -> Result<Arc<dyn StorageBackend>, Status> {
@@ -522,13 +546,16 @@ impl DataplaneService for DataplaneServiceImpl {
             .unwrap()
             .insert(req.bdev_name.clone(), store);
 
-        // Wire up the ChunkEngine for the novastor bdev module.
+        // Wire up the ChunkEngine with PolicyEngine for the novastor bdev module.
         // Create a BdevChunkStore (async ChunkStore impl) on this bdev, then
-        // wrap it in a ChunkEngine with a single-node CRUSH topology.
+        // wrap it in a ChunkEngine with policy tracking via a single-node CRUSH
+        // topology. The PolicyEngine is registered globally so SetVolumePolicy
+        // RPCs can reach it.
         {
             use crate::backend::bdev_store::BdevChunkStore;
             use crate::chunk::engine::ChunkEngine;
             use crate::metadata::topology::{Backend, BackendType, ClusterMap, Node, NodeStatus};
+            use crate::policy::location_store::ChunkLocationStore;
 
             let chunk_store =
                 std::sync::Arc::new(BdevChunkStore::new(&req.bdev_name, capacity_bytes));
@@ -551,12 +578,72 @@ impl DataplaneService for DataplaneServiceImpl {
                 status: NodeStatus::Online,
             });
 
-            let engine = std::sync::Arc::new(ChunkEngine::new(node_id, chunk_store, topology));
+            // Create the redb-backed location store for chunk→node mappings.
+            let policy_db_dir = format!("/var/lib/novastor/policy");
+            std::fs::create_dir_all(&policy_db_dir)
+                .map_err(|e| Status::internal(format!("create policy db directory: {e}")))?;
+            let policy_db_path = format!("{}/{}.redb", policy_db_dir, req.bdev_name);
+            let location_store = Arc::new(
+                ChunkLocationStore::open(&policy_db_path)
+                    .map_err(|e| Status::internal(format!("open policy location store: {e}")))?,
+            );
+
+            // Create the PolicyEngine and register it globally.
+            let policy_engine = Arc::new(PolicyEngine::new(
+                node_id.clone(),
+                location_store,
+                chunk_store.clone(),
+                topology.clone(),
+            ));
+
+            grpc_policy_engines()
+                .lock()
+                .unwrap()
+                .insert(req.bdev_name.clone(), policy_engine.clone());
+
+            // Use ChunkEngine::with_policy so every write records chunk
+            // locations and volume references in the policy engine.
+            let engine = std::sync::Arc::new(ChunkEngine::with_policy(
+                node_id,
+                chunk_store,
+                topology,
+                policy_engine.clone(),
+            ));
 
             let handle = tokio::runtime::Handle::current();
             crate::bdev::novastor_bdev::set_chunk_engine(engine, handle);
+
+            // Spawn a background reconciliation loop that runs every 30 seconds.
+            let reconcile_engine = policy_engine;
+            let reconcile_bdev = req.bdev_name.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                loop {
+                    interval.tick().await;
+                    match reconcile_engine.reconcile().await {
+                        Ok(action_count) => {
+                            if action_count > 0 {
+                                log::info!(
+                                    "policy reconcile [{}]: {} corrective action(s) executed",
+                                    reconcile_bdev,
+                                    action_count,
+                                );
+                            } else {
+                                log::debug!(
+                                    "policy reconcile [{}]: all chunks healthy",
+                                    reconcile_bdev,
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("policy reconcile [{}] error: {}", reconcile_bdev, e,);
+                        }
+                    }
+                }
+            });
+
             log::info!(
-                "init_chunk_store: ChunkEngine initialised for bdev '{}'",
+                "init_chunk_store: ChunkEngine + PolicyEngine initialised for bdev '{}' (reconcile loop started)",
                 req.bdev_name,
             );
 
@@ -973,6 +1060,38 @@ impl DataplaneService for DataplaneServiceImpl {
             }
         }
         Ok(Response::new(DeleteVolumeResponse {}))
+    }
+
+    // ========================================================================
+    // Policy Engine
+    // ========================================================================
+
+    async fn set_volume_policy(
+        &self,
+        request: Request<SetVolumePolicyRequest>,
+    ) -> Result<Response<SetVolumePolicyResponse>, Status> {
+        let req = request.into_inner();
+        if req.volume_id.is_empty() {
+            return Err(Status::invalid_argument("volume_id is required"));
+        }
+        if req.desired_replicas == 0 {
+            return Err(Status::invalid_argument(
+                "desired_replicas must be at least 1",
+            ));
+        }
+
+        let engine = get_any_policy_engine()?;
+        let policy =
+            crate::policy::types::VolumePolicy::new(req.volume_id.clone(), req.desired_replicas);
+        engine.set_policy(policy).await;
+
+        log::info!(
+            "set_volume_policy: volume={} desired_replicas={}",
+            req.volume_id,
+            req.desired_replicas,
+        );
+
+        Ok(Response::new(SetVolumePolicyResponse { accepted: true }))
     }
 
     // ========================================================================
