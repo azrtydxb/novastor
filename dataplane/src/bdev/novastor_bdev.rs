@@ -14,6 +14,7 @@
 use crate::backend::chunk_store::CHUNK_SIZE;
 use crate::chunk::engine::ChunkEngine;
 use crate::error::{DataPlaneError, Result};
+use crate::metadata::store::MetadataStore;
 use crate::metadata::types::ChunkMapEntry;
 use crate::spdk::reactor_dispatch;
 use log::{error, info, warn};
@@ -60,6 +61,100 @@ fn volume_chunk_maps() -> &'static RwLock<HashMap<String, Vec<Option<ChunkMapEnt
 pub fn volume_chunk_maps_ref(
 ) -> Option<&'static RwLock<HashMap<String, Vec<Option<ChunkMapEntry>>>>> {
     VOLUME_CHUNK_MAPS.get()
+}
+
+/// Persistent metadata store for chunk maps and volume definitions.
+/// Write-through: every update to VOLUME_CHUNK_MAPS is also persisted here.
+static METADATA_STORE: OnceLock<Arc<MetadataStore>> = OnceLock::new();
+
+/// Set the metadata store used for persisting chunk maps across restarts.
+/// Must be called once during init_chunk_store, before any I/O.
+pub fn set_metadata_store(store: Arc<MetadataStore>) {
+    if METADATA_STORE.set(store).is_err() {
+        info!("novastor_bdev: metadata store already set, ignoring");
+    }
+}
+
+fn get_metadata_store() -> Option<&'static Arc<MetadataStore>> {
+    METADATA_STORE.get()
+}
+
+/// Public accessor for the metadata store (used by delete_volume cleanup).
+pub fn metadata_store_ref() -> Option<&'static Arc<MetadataStore>> {
+    METADATA_STORE.get()
+}
+
+/// Load all persisted chunk maps from the MetadataStore into VOLUME_CHUNK_MAPS.
+///
+/// Called once at startup (after set_metadata_store) to restore volume chunk
+/// maps that were persisted before the last dataplane restart.
+pub fn load_chunk_maps_from_store() {
+    let store = match get_metadata_store() {
+        Some(s) => s,
+        None => {
+            warn!("novastor_bdev: load_chunk_maps_from_store called but no metadata store set");
+            return;
+        }
+    };
+
+    // Load all volumes to know their chunk counts.
+    let volumes = match store.list_volumes() {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(
+                "novastor_bdev: failed to list volumes from metadata store: {}",
+                e
+            );
+            return;
+        }
+    };
+
+    if volumes.is_empty() {
+        info!("novastor_bdev: no persisted volumes found in metadata store");
+        return;
+    }
+
+    let mut maps = volume_chunk_maps().write().unwrap();
+    let mut total_entries = 0usize;
+
+    for vol in &volumes {
+        // Load the chunk map entries for this volume.
+        let entries = match store.list_chunk_map(&vol.id) {
+            Ok(e) => e,
+            Err(e) => {
+                warn!(
+                    "novastor_bdev: failed to load chunk map for volume '{}': {}",
+                    vol.id, e
+                );
+                continue;
+            }
+        };
+
+        // Create the chunk map vector, sized to the volume's chunk count.
+        let num_chunks = vol.chunk_count as usize;
+        let mut chunk_map = vec![None; num_chunks];
+
+        for entry in &entries {
+            let idx = entry.chunk_index as usize;
+            if idx < chunk_map.len() {
+                chunk_map[idx] = Some(entry.clone());
+            } else {
+                warn!(
+                    "novastor_bdev: chunk index {} exceeds volume '{}' chunk count {}",
+                    idx, vol.id, num_chunks
+                );
+            }
+        }
+
+        total_entries += entries.len();
+        maps.insert(vol.id.clone(), chunk_map);
+    }
+
+    info!(
+        "novastor_bdev: loaded {} chunk map entries across {} volumes from metadata store",
+        total_entries,
+        volumes.len()
+    );
 }
 
 /// Set the chunk engine that NovaStor bdevs will use for I/O.
@@ -188,6 +283,20 @@ fn rmw_write(
         }
         drop(maps);
 
+        // Write-through: persist each chunk map entry to the metadata store.
+        // Failures are logged but do not fail the I/O — the in-memory map
+        // is authoritative for the current session.
+        if let Some(store) = get_metadata_store() {
+            for entry in &entries {
+                if let Err(e) = store.put_chunk_map(volume_name, entry) {
+                    warn!(
+                        "novastor_bdev: failed to persist chunk map entry (vol={}, idx={}): {}",
+                        volume_name, entry.chunk_index, e
+                    );
+                }
+            }
+        }
+
         all_entries.extend(entries);
     }
 
@@ -236,6 +345,29 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
         let mut maps = volume_chunk_maps().write().unwrap();
         maps.entry(volume_name.to_string())
             .or_insert_with(|| vec![None; num_chunks as usize]);
+    }
+
+    // Persist the volume definition so chunk maps can be restored on restart.
+    if let Some(store) = get_metadata_store() {
+        use crate::metadata::types::{Protection, VolumeDefinition, VolumeStatus};
+        let vol = VolumeDefinition {
+            id: volume_name.to_string(),
+            name: volume_name.to_string(),
+            size_bytes,
+            protection: Protection::Replication { factor: 1 },
+            status: VolumeStatus::Available,
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            chunk_count: num_chunks,
+        };
+        if let Err(e) = store.put_volume(&vol) {
+            warn!(
+                "novastor_bdev: failed to persist volume definition '{}': {}",
+                volume_name, e
+            );
+        }
     }
 
     let block_size: u32 = 512;

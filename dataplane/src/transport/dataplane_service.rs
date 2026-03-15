@@ -559,6 +559,38 @@ impl DataplaneService for DataplaneServiceImpl {
                 "init_chunk_store: ChunkEngine initialised for bdev '{}'",
                 req.bdev_name,
             );
+
+            // Open the persistent metadata store and restore any previously
+            // persisted chunk maps so volumes survive dataplane restarts.
+            let metadata_dir = format!("/var/lib/novastor/metadata");
+            if let Err(e) = std::fs::create_dir_all(&metadata_dir) {
+                log::warn!(
+                    "init_chunk_store: failed to create metadata directory '{}': {}",
+                    metadata_dir,
+                    e,
+                );
+            } else {
+                let db_path = format!("{}/{}.redb", metadata_dir, req.bdev_name);
+                match crate::metadata::store::MetadataStore::open(&db_path) {
+                    Ok(store) => {
+                        let store = std::sync::Arc::new(store);
+                        crate::bdev::novastor_bdev::set_metadata_store(store);
+                        crate::bdev::novastor_bdev::load_chunk_maps_from_store();
+                        log::info!(
+                            "init_chunk_store: MetadataStore opened at '{}', chunk maps restored",
+                            db_path,
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "init_chunk_store: failed to open metadata store at '{}': {} — \
+                             chunk maps will not persist across restarts",
+                            db_path,
+                            e,
+                        );
+                    }
+                }
+            }
         }
 
         Ok(Response::new(InitChunkStoreResponse {
@@ -907,9 +939,38 @@ impl DataplaneService for DataplaneServiceImpl {
         // ALL volumes are novastor_bdevs on top of ChunkEngine.
         crate::bdev::novastor_bdev::destroy(&req.name)
             .map_err(|e| Status::internal(format!("destroy novastor bdev: {e}")))?;
-        // Clean up the chunk map for this volume.
+        // Clean up the chunk map for this volume (in-memory and persistent).
         if let Some(maps) = crate::bdev::novastor_bdev::volume_chunk_maps_ref() {
             maps.write().unwrap().remove(&req.name);
+        }
+        if let Some(store) = crate::bdev::novastor_bdev::metadata_store_ref() {
+            if let Err(e) = store.delete_volume(&req.name) {
+                log::warn!(
+                    "delete_volume: failed to remove volume '{}' from metadata store: {}",
+                    req.name,
+                    e
+                );
+            }
+            // Delete all chunk map entries for this volume.
+            match store.list_chunk_map(&req.name) {
+                Ok(entries) => {
+                    for entry in &entries {
+                        if let Err(e) = store.delete_chunk_map(&req.name, entry.chunk_index) {
+                            log::warn!(
+                                "delete_volume: failed to remove chunk map entry (vol={}, idx={}): {}",
+                                req.name, entry.chunk_index, e,
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "delete_volume: failed to list chunk maps for '{}': {}",
+                        req.name,
+                        e
+                    );
+                }
+            }
         }
         Ok(Response::new(DeleteVolumeResponse {}))
     }
