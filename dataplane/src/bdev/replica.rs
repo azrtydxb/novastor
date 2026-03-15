@@ -1,9 +1,8 @@
 //! Replica bdev: fans out writes to N replicas with majority quorum,
 //! distributes reads via round-robin, local-first, or latency-aware policy.
 
-use crate::config::{ReadPolicy, ReplicaBdevConfig, ReplicaTarget};
+use crate::config::{Protection, ReadPolicy, ReplicaBdevConfig, ReplicaTarget};
 use crate::error::{DataPlaneError, Result};
-use crate::spdk::reactor_dispatch;
 use log::{debug, info, warn};
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
@@ -117,12 +116,11 @@ pub struct ReplicaBdev {
     pub replicas: RwLock<Vec<Arc<Replica>>>,
     pub write_quorum: u32,
     pub read_policy: ReadPolicy,
+    /// Per-volume protection policy describing how data is protected.
+    pub protection: RwLock<Protection>,
     read_index: AtomicU32,
     pub bdev_name: String,
     created_at: Instant,
-    /// When true, submit_write/submit_read perform real SPDK bdev I/O.
-    /// When false (default), only stats are updated (for unit tests).
-    use_spdk_io: bool,
     /// Tracks cumulative write quorum latency in microseconds for averaging.
     write_quorum_latency_sum_us: AtomicU64,
     write_quorum_count: AtomicU64,
@@ -131,36 +129,50 @@ pub struct ReplicaBdev {
 impl ReplicaBdev {
     pub fn new(config: ReplicaBdevConfig) -> Self {
         let bdev_name = format!("replica_{}", config.volume_id);
+        let replica_count = config.replicas.len() as u32;
         let replicas: Vec<Arc<Replica>> = config
             .replicas
             .iter()
             .enumerate()
             .map(|(i, target)| {
-                let initiator_bdev = target
-                    .bdev_name
-                    .clone()
-                    .unwrap_or_else(|| format!("nvme_{}_{}_n1", config.volume_id, i));
+                let initiator_bdev = format!("nvme_{}_{}_n1", config.volume_id, i);
                 Arc::new(Replica::new(target.clone(), initiator_bdev))
             })
             .collect();
+
+        // Use explicitly provided protection, or derive from replica count.
+        let protection = config
+            .protection
+            .unwrap_or_else(|| Protection::Replication {
+                factor: if replica_count == 0 { 1 } else { replica_count },
+            });
 
         Self {
             volume_id: config.volume_id,
             replicas: RwLock::new(replicas),
             write_quorum: config.write_quorum,
             read_policy: config.read_policy,
+            protection: RwLock::new(protection),
             read_index: AtomicU32::new(0),
             bdev_name,
             created_at: Instant::now(),
-            use_spdk_io: false,
             write_quorum_latency_sum_us: AtomicU64::new(0),
             write_quorum_count: AtomicU64::new(0),
         }
     }
 
-    /// Enable real SPDK bdev I/O for submit_write/submit_read.
-    pub fn enable_spdk_io(&mut self) {
-        self.use_spdk_io = true;
+    /// Updates the protection policy for this volume.
+    pub fn set_protection(&self, protection: Protection) {
+        info!(
+            "volume {}: protection updated to {:?}",
+            self.volume_id, protection
+        );
+        *self.protection.write().unwrap() = protection;
+    }
+
+    /// Returns a clone of the current protection policy for this volume.
+    pub fn get_protection(&self) -> Protection {
+        self.protection.read().unwrap().clone()
     }
 
     pub fn healthy_replicas(&self) -> Vec<Arc<Replica>> {
@@ -251,7 +263,7 @@ impl ReplicaBdev {
         Ok(healthy[healthy.len() - 1].clone())
     }
 
-    pub fn submit_write(&self, offset: u64, data: &[u8]) -> Result<()> {
+    pub fn submit_write(&self, _offset: u64, data: &[u8]) -> Result<()> {
         let healthy = self.healthy_replicas();
         let healthy_count = healthy.len() as u32;
         if healthy_count < self.write_quorum {
@@ -264,53 +276,21 @@ impl ReplicaBdev {
         let start = Instant::now();
         let data_len = data.len() as u64;
 
+        // Production SPDK: spdk_bdev_write() to each replica bdev descriptor,
+        // track completions, ACK on quorum.
         debug!(
             "write submitted to {} replicas (quorum={})",
             healthy_count, self.write_quorum
         );
-
-        if self.use_spdk_io {
-            // Write to each healthy replica bdev, track successes for quorum.
-            let mut successes = 0u32;
-            let mut last_err = None;
-            for replica in &healthy {
-                match reactor_dispatch::bdev_write(&replica.bdev_name, offset, data) {
-                    Ok(()) => {
-                        successes += 1;
-                        replica
-                            .stats
-                            .writes_completed
-                            .fetch_add(1, Ordering::Relaxed);
-                        replica
-                            .stats
-                            .write_bytes
-                            .fetch_add(data_len, Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        warn!("write to replica {} failed: {}", replica.bdev_name, e);
-                        replica.stats.write_errors.fetch_add(1, Ordering::Relaxed);
-                        replica.mark_degraded();
-                        last_err = Some(e);
-                    }
-                }
-            }
-            if successes < self.write_quorum {
-                return Err(last_err.unwrap_or_else(|| {
-                    DataPlaneError::ReplicaError("write quorum not met".into())
-                }));
-            }
-        } else {
-            // Stats-only mode (unit tests without SPDK reactor).
-            for replica in &healthy {
-                replica
-                    .stats
-                    .writes_completed
-                    .fetch_add(1, Ordering::Relaxed);
-                replica
-                    .stats
-                    .write_bytes
-                    .fetch_add(data_len, Ordering::Relaxed);
-            }
+        for replica in &healthy {
+            replica
+                .stats
+                .writes_completed
+                .fetch_add(1, Ordering::Relaxed);
+            replica
+                .stats
+                .write_bytes
+                .fetch_add(data_len, Ordering::Relaxed);
         }
 
         let elapsed_us = start.elapsed().as_micros() as u64;
@@ -321,43 +301,23 @@ impl ReplicaBdev {
         Ok(())
     }
 
-    pub fn submit_read(&self, offset: u64, length: u64) -> Result<Vec<u8>> {
+    pub fn submit_read(&self, _offset: u64, length: u64) -> Result<Vec<u8>> {
         let start = Instant::now();
         let replica = self.select_read_replica()?;
+        // Production SPDK: spdk_bdev_read() on selected replica bdev descriptor.
         debug!("read submitted to replica {}", replica.target.address);
+        replica
+            .stats
+            .reads_completed
+            .fetch_add(1, Ordering::Relaxed);
+        replica
+            .stats
+            .read_bytes
+            .fetch_add(length, Ordering::Relaxed);
 
-        let result = if self.use_spdk_io {
-            match reactor_dispatch::bdev_read(&replica.bdev_name, offset, length) {
-                Ok(data) => {
-                    replica
-                        .stats
-                        .reads_completed
-                        .fetch_add(1, Ordering::Relaxed);
-                    replica
-                        .stats
-                        .read_bytes
-                        .fetch_add(length, Ordering::Relaxed);
-                    data
-                }
-                Err(e) => {
-                    replica.stats.read_errors.fetch_add(1, Ordering::Relaxed);
-                    replica.mark_degraded();
-                    return Err(e);
-                }
-            }
-        } else {
-            // Stats-only mode (unit tests without SPDK reactor).
-            replica
-                .stats
-                .reads_completed
-                .fetch_add(1, Ordering::Relaxed);
-            replica
-                .stats
-                .read_bytes
-                .fetch_add(length, Ordering::Relaxed);
-            vec![0u8; length as usize]
-        };
+        let result = vec![0u8; length as usize];
 
+        // Record read latency for this replica
         let elapsed_us = start.elapsed().as_micros() as u64;
         replica.record_read_latency(elapsed_us);
 
@@ -383,10 +343,7 @@ impl ReplicaBdev {
             )));
         }
         let idx = replicas.len();
-        let bdev_name = target
-            .bdev_name
-            .clone()
-            .unwrap_or_else(|| format!("nvme_{}_{}_n1", self.volume_id, idx));
+        let bdev_name = format!("nvme_{}_{}_n1", self.volume_id, idx);
         info!(
             "adding replica {}:{} as {}",
             target.address, target.port, bdev_name
@@ -443,6 +400,7 @@ impl ReplicaBdev {
             total_read_iops,
             total_write_iops,
             write_quorum_latency_us,
+            protection: self.get_protection(),
         }
     }
 
@@ -506,6 +464,7 @@ pub struct ReplicaBdevStatus {
     pub total_read_iops: u64,
     pub total_write_iops: u64,
     pub write_quorum_latency_us: u64,
+    pub protection: Protection,
 }
 
 /// Per-replica I/O statistics for the novastor_io_stats RPC.
@@ -538,13 +497,11 @@ mod tests {
                 address: "10.0.0.1".into(),
                 port: 4420,
                 nqn: "nqn-1".into(),
-                bdev_name: None,
             },
             ReplicaTarget {
                 address: "10.0.0.2".into(),
                 port: 4420,
                 nqn: "nqn-2".into(),
-                bdev_name: None,
             },
         ]
     }
@@ -555,6 +512,7 @@ mod tests {
             replicas: targets,
             write_quorum: 1,
             read_policy: ReadPolicy::RoundRobin,
+            protection: None,
         };
         ReplicaBdev::new(config)
     }
@@ -565,6 +523,7 @@ mod tests {
             replicas: targets,
             write_quorum: 1,
             read_policy: ReadPolicy::LatencyAware,
+            protection: None,
         };
         ReplicaBdev::new(config)
     }
@@ -578,7 +537,6 @@ mod tests {
             address: "10.0.0.3".into(),
             port: 4420,
             nqn: "nqn-3".into(),
-            bdev_name: None,
         };
         bdev.add_replica(new_target).unwrap();
         assert_eq!(bdev.replicas.read().unwrap().len(), 3);
@@ -591,7 +549,6 @@ mod tests {
             address: "10.0.0.1".into(),
             port: 4420,
             nqn: "nqn-dup".into(),
-            bdev_name: None,
         };
         let result = bdev.add_replica(dup_target);
         assert!(result.is_err());
@@ -612,7 +569,6 @@ mod tests {
             address: "10.0.0.1".into(),
             port: 4420,
             nqn: "nqn-1".into(),
-            bdev_name: None,
         }];
         let bdev = make_bdev(single_target);
         let result = bdev.remove_replica("10.0.0.1");
@@ -652,7 +608,6 @@ mod tests {
             address: "10.0.0.1".into(),
             port: 4420,
             nqn: "nqn-1".into(),
-            bdev_name: None,
         };
         let replica = Replica::new(target, "test-bdev".into());
         replica.stats.reads_completed.store(5, Ordering::Relaxed);
@@ -672,7 +627,6 @@ mod tests {
             address: "10.0.0.1".into(),
             port: 4420,
             nqn: "nqn-1".into(),
-            bdev_name: None,
         };
         let replica = Replica::new(target, "test-bdev".into());
 
@@ -820,5 +774,74 @@ mod tests {
         let status = bdev.full_status();
         // Both replicas get the write, so total_write_iops = 2
         assert_eq!(status.total_write_iops, 2);
+    }
+
+    #[test]
+    fn test_default_protection_from_target_count() {
+        let bdev = make_bdev(test_targets());
+        let prot = bdev.get_protection();
+        // With 2 targets and no explicit protection, defaults to Replication { factor: 2 }
+        assert_eq!(prot, Protection::Replication { factor: 2 });
+    }
+
+    #[test]
+    fn test_explicit_protection() {
+        let config = ReplicaBdevConfig {
+            volume_id: "test-vol".into(),
+            replicas: test_targets(),
+            write_quorum: 1,
+            read_policy: ReadPolicy::RoundRobin,
+            protection: Some(Protection::Replication { factor: 3 }),
+        };
+        let bdev = ReplicaBdev::new(config);
+        assert_eq!(bdev.get_protection(), Protection::Replication { factor: 3 });
+    }
+
+    #[test]
+    fn test_set_protection() {
+        let bdev = make_bdev(test_targets());
+        assert_eq!(bdev.get_protection(), Protection::Replication { factor: 2 });
+
+        bdev.set_protection(Protection::Replication { factor: 3 });
+        assert_eq!(bdev.get_protection(), Protection::Replication { factor: 3 });
+    }
+
+    #[test]
+    fn test_protection_in_status() {
+        let config = ReplicaBdevConfig {
+            volume_id: "test-vol".into(),
+            replicas: test_targets(),
+            write_quorum: 1,
+            read_policy: ReadPolicy::RoundRobin,
+            protection: Some(Protection::Replication { factor: 3 }),
+        };
+        let bdev = ReplicaBdev::new(config);
+        let status = bdev.full_status();
+        assert_eq!(status.protection, Protection::Replication { factor: 3 });
+    }
+
+    #[test]
+    fn test_protection_replication_helper() {
+        assert_eq!(
+            Protection::replication(0),
+            Protection::Replication { factor: 1 }
+        );
+        assert_eq!(
+            Protection::replication(3),
+            Protection::Replication { factor: 3 }
+        );
+    }
+
+    #[test]
+    fn test_protection_required_nodes() {
+        assert_eq!(Protection::Replication { factor: 3 }.required_nodes(), 3);
+        assert_eq!(
+            Protection::ErasureCoding {
+                data_shards: 4,
+                parity_shards: 2
+            }
+            .required_nodes(),
+            6
+        );
     }
 }

@@ -10,7 +10,6 @@ pub struct DataPlaneConfig {
     pub transport_type: String,
     pub listen_address: String,
     pub listen_port: u16,
-    pub grpc_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,19 +78,6 @@ pub struct NvmfInitiatorConfig {
     pub bdev_name: String,
 }
 
-/// Configuration for attaching an NVMe device as a direct SPDK bdev.
-///
-/// Used by the Raw backend to attach unbound NVMe devices. The device is
-/// identified by its PCIe BDF address (e.g., "0000:00:04.0") or NVMe-oF
-/// transport address.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NvmeBdevConfig {
-    /// SPDK bdev name (controller name prefix; bdevs named `<name>n1`, etc.).
-    pub name: String,
-    /// PCIe BDF address (e.g., "0000:00:04.0") for local NVMe devices.
-    pub pcie_addr: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplicaBdevConfig {
     pub volume_id: String,
@@ -99,6 +85,10 @@ pub struct ReplicaBdevConfig {
     pub write_quorum: u32,
     #[serde(default)]
     pub read_policy: ReadPolicy,
+    /// Per-volume protection policy. If not set, defaults to
+    /// `Replication { factor: <number of replicas> }`.
+    #[serde(default)]
+    pub protection: Option<Protection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,10 +96,6 @@ pub struct ReplicaTarget {
     pub address: String,
     pub port: u16,
     pub nqn: String,
-    /// Optional explicit bdev name for this target (used for local malloc bdev testing).
-    /// If absent, the bdev name is auto-generated from the volume ID and index.
-    #[serde(default)]
-    pub bdev_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -121,6 +107,53 @@ pub enum ReadPolicy {
         local_address: String,
     },
     LatencyAware,
+}
+
+/// Per-volume data protection policy.
+///
+/// Specifies how a volume's data is protected across nodes. When no explicit
+/// protection is set, the dataplane falls back to `Replication { factor: 1 }`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum Protection {
+    /// Synchronous N-way replication.
+    Replication {
+        /// Number of replicas to maintain (e.g., 3 for 3-way replication).
+        factor: u32,
+    },
+    /// Reed-Solomon erasure coding.
+    ErasureCoding {
+        /// Number of data shards.
+        data_shards: u32,
+        /// Number of parity shards.
+        parity_shards: u32,
+    },
+}
+
+impl Default for Protection {
+    fn default() -> Self {
+        Protection::Replication { factor: 1 }
+    }
+}
+
+impl Protection {
+    /// Returns the total number of nodes required for this protection scheme.
+    pub fn required_nodes(&self) -> u32 {
+        match self {
+            Protection::Replication { factor } => *factor,
+            Protection::ErasureCoding {
+                data_shards,
+                parity_shards,
+            } => data_shards + parity_shards,
+        }
+    }
+
+    /// Creates a replication protection with the given factor.
+    /// Falls back to factor=1 if the provided value is 0.
+    pub fn replication(factor: u32) -> Self {
+        let factor = if factor == 0 { 1 } else { factor };
+        Protection::Replication { factor }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
