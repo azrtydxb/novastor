@@ -97,6 +97,10 @@ pub struct ReplicaTarget {
     pub address: String,
     pub port: u16,
     pub nqn: String,
+    /// Optional explicit bdev name for this target (used for local malloc bdev testing).
+    /// If absent, the bdev name is auto-generated from the volume ID and index.
+    #[serde(default)]
+    pub bdev_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
