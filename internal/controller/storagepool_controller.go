@@ -42,7 +42,7 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	logger.Info("reconciling StoragePool", "name", req.Name, "namespace", req.Namespace)
 
 	// Count nodes matching the nodeSelector.
-	nodeCount, totalCapacity, err := r.countMatchingNodes(ctx, pool.Spec.NodeSelector)
+	nodeCount, err := r.countMatchingNodes(ctx, pool.Spec.NodeSelector)
 	if err != nil {
 		meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
@@ -87,10 +87,10 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	// Pool is valid and nodes match.
+	// Pool is valid and nodes match. Capacity comes from actual backend devices.
 	pool.Status.Phase = "Ready"
 	pool.Status.NodeCount = nodeCount
-	pool.Status.TotalCapacity = totalCapacity
+	pool.Status.TotalCapacity = r.aggregateBackendCapacity(ctx, pool.Name)
 
 	meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
@@ -234,34 +234,44 @@ func (r *StoragePoolReconciler) buildAssignmentSpec(
 }
 
 // countMatchingNodes lists nodes matching the given label selector and returns
-// the count and aggregate allocatable storage capacity.
-func (r *StoragePoolReconciler) countMatchingNodes(ctx context.Context, selector *metav1.LabelSelector) (int, string, error) {
+// the count. Capacity is computed separately from BackendAssignments.
+func (r *StoragePoolReconciler) countMatchingNodes(ctx context.Context, selector *metav1.LabelSelector) (int, error) {
 	var nodeList corev1.NodeList
 
 	listOpts := []client.ListOption{}
 	if selector != nil {
 		sel, err := metav1.LabelSelectorAsSelector(selector)
 		if err != nil {
-			return 0, "0", fmt.Errorf("invalid label selector: %w", err)
+			return 0, fmt.Errorf("invalid label selector: %w", err)
 		}
 		listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: sel})
 	}
 
 	if err := r.List(ctx, &nodeList, listOpts...); err != nil {
-		return 0, "0", err
+		return 0, err
 	}
 
-	count := len(nodeList.Items)
+	return len(nodeList.Items), nil
+}
+
+// aggregateBackendCapacity sums the capacity reported by all Ready BackendAssignments
+// for a given pool. This reflects actual device capacity, not Kubernetes node resources.
+func (r *StoragePoolReconciler) aggregateBackendCapacity(ctx context.Context, poolName string) string {
+	var baList novastorev1alpha1.BackendAssignmentList
+	if err := r.List(ctx, &baList, client.MatchingLabels{
+		"novastor.io/pool": poolName,
+	}); err != nil {
+		return "0"
+	}
+
 	var totalBytes int64
-	for i := range nodeList.Items {
-		if ephemeral, ok := nodeList.Items[i].Status.Allocatable[corev1.ResourceEphemeralStorage]; ok {
-			totalBytes += ephemeral.Value()
+	for i := range baList.Items {
+		if baList.Items[i].Status.Phase == "Ready" {
+			totalBytes += baList.Items[i].Status.Capacity
 		}
 	}
 
-	// Format capacity as human-readable.
-	capacity := formatCapacity(totalBytes)
-	return count, capacity, nil
+	return formatCapacity(totalBytes)
 }
 
 // formatCapacity converts bytes to a human-readable string.
