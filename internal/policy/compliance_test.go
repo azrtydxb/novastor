@@ -101,7 +101,7 @@ func (m *mockPoolLookup) GetPool(_ context.Context, name string) (*v1alpha1.Stor
 func TestReplicationChecker_CheckChunk(t *testing.T) {
 	tests := []struct {
 		name           string
-		pool           *v1alpha1.StoragePool
+		volume         *VolumeMeta
 		placement      *PlacementMap
 		availableNodes map[string]bool
 		wantStatus     ComplianceStatus
@@ -110,14 +110,14 @@ func TestReplicationChecker_CheckChunk(t *testing.T) {
 	}{
 		{
 			name: "fully compliant - all replicas available",
-			pool: &v1alpha1.StoragePool{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-pool"},
-				Spec: v1alpha1.StoragePoolSpec{
-					DataProtection: v1alpha1.DataProtectionSpec{
-						Mode: "replication",
-						Replication: &v1alpha1.ReplicationSpec{
-							Factor: 3,
-						},
+			volume: &VolumeMeta{
+				VolumeID: "vol1",
+				Pool:     "test-pool",
+				ChunkIDs: []string{"chunk1"},
+				DataProtection: &v1alpha1.DataProtectionSpec{
+					Mode: "replication",
+					Replication: &v1alpha1.ReplicationSpec{
+						Factor: 3,
 					},
 				},
 			},
@@ -136,14 +136,14 @@ func TestReplicationChecker_CheckChunk(t *testing.T) {
 		},
 		{
 			name: "under replicated - one replica down",
-			pool: &v1alpha1.StoragePool{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-pool"},
-				Spec: v1alpha1.StoragePoolSpec{
-					DataProtection: v1alpha1.DataProtectionSpec{
-						Mode: "replication",
-						Replication: &v1alpha1.ReplicationSpec{
-							Factor: 3,
-						},
+			volume: &VolumeMeta{
+				VolumeID: "vol1",
+				Pool:     "test-pool",
+				ChunkIDs: []string{"chunk1"},
+				DataProtection: &v1alpha1.DataProtectionSpec{
+					Mode: "replication",
+					Replication: &v1alpha1.ReplicationSpec{
+						Factor: 3,
 					},
 				},
 			},
@@ -162,14 +162,14 @@ func TestReplicationChecker_CheckChunk(t *testing.T) {
 		},
 		{
 			name: "unavailable - all replicas down",
-			pool: &v1alpha1.StoragePool{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-pool"},
-				Spec: v1alpha1.StoragePoolSpec{
-					DataProtection: v1alpha1.DataProtectionSpec{
-						Mode: "replication",
-						Replication: &v1alpha1.ReplicationSpec{
-							Factor: 3,
-						},
+			volume: &VolumeMeta{
+				VolumeID: "vol1",
+				Pool:     "test-pool",
+				ChunkIDs: []string{"chunk1"},
+				DataProtection: &v1alpha1.DataProtectionSpec{
+					Mode: "replication",
+					Replication: &v1alpha1.ReplicationSpec{
+						Factor: 3,
 					},
 				},
 			},
@@ -199,13 +199,8 @@ func TestReplicationChecker_CheckChunk(t *testing.T) {
 			}
 
 			checker := NewReplicationChecker(metaClient, nodeChecker)
-			volume := &VolumeMeta{
-				VolumeID: "vol1",
-				Pool:     tt.pool.Name,
-				ChunkIDs: []string{tt.placement.ChunkID},
-			}
 
-			result, err := checker.CheckChunk(ctx, tt.placement.ChunkID, volume, tt.pool)
+			result, err := checker.CheckChunk(ctx, tt.placement.ChunkID, tt.volume)
 			if err != nil {
 				t.Fatalf("CheckChunk failed: %v", err)
 			}
@@ -226,7 +221,7 @@ func TestReplicationChecker_CheckChunk(t *testing.T) {
 func TestErasureCodingChecker_CheckChunk(t *testing.T) {
 	tests := []struct {
 		name           string
-		pool           *v1alpha1.StoragePool
+		volume         *VolumeMeta
 		placement      *PlacementMap
 		availableNodes map[string]bool
 		wantStatus     ComplianceStatus
@@ -234,15 +229,15 @@ func TestErasureCodingChecker_CheckChunk(t *testing.T) {
 	}{
 		{
 			name: "fully compliant - all shards available",
-			pool: &v1alpha1.StoragePool{
-				ObjectMeta: metav1.ObjectMeta{Name: "ec-pool"},
-				Spec: v1alpha1.StoragePoolSpec{
-					DataProtection: v1alpha1.DataProtectionSpec{
-						Mode: "erasureCoding",
-						ErasureCoding: &v1alpha1.ErasureCodingSpec{
-							DataShards:   4,
-							ParityShards: 2,
-						},
+			volume: &VolumeMeta{
+				VolumeID: "vol1",
+				Pool:     "ec-pool",
+				ChunkIDs: []string{"chunk1"},
+				DataProtection: &v1alpha1.DataProtectionSpec{
+					Mode: "erasureCoding",
+					ErasureCoding: &v1alpha1.ErasureCodingSpec{
+						DataShards:   4,
+						ParityShards: 2,
 					},
 				},
 			},
@@ -263,15 +258,15 @@ func TestErasureCodingChecker_CheckChunk(t *testing.T) {
 		},
 		{
 			name: "under replicated - some shards lost but still recoverable",
-			pool: &v1alpha1.StoragePool{
-				ObjectMeta: metav1.ObjectMeta{Name: "ec-pool"},
-				Spec: v1alpha1.StoragePoolSpec{
-					DataProtection: v1alpha1.DataProtectionSpec{
-						Mode: "erasureCoding",
-						ErasureCoding: &v1alpha1.ErasureCodingSpec{
-							DataShards:   4,
-							ParityShards: 2,
-						},
+			volume: &VolumeMeta{
+				VolumeID: "vol1",
+				Pool:     "ec-pool",
+				ChunkIDs: []string{"chunk1"},
+				DataProtection: &v1alpha1.DataProtectionSpec{
+					Mode: "erasureCoding",
+					ErasureCoding: &v1alpha1.ErasureCodingSpec{
+						DataShards:   4,
+						ParityShards: 2,
 					},
 				},
 			},
@@ -292,15 +287,15 @@ func TestErasureCodingChecker_CheckChunk(t *testing.T) {
 		},
 		{
 			name: "unavailable - insufficient shards for recovery",
-			pool: &v1alpha1.StoragePool{
-				ObjectMeta: metav1.ObjectMeta{Name: "ec-pool"},
-				Spec: v1alpha1.StoragePoolSpec{
-					DataProtection: v1alpha1.DataProtectionSpec{
-						Mode: "erasureCoding",
-						ErasureCoding: &v1alpha1.ErasureCodingSpec{
-							DataShards:   4,
-							ParityShards: 2,
-						},
+			volume: &VolumeMeta{
+				VolumeID: "vol1",
+				Pool:     "ec-pool",
+				ChunkIDs: []string{"chunk1"},
+				DataProtection: &v1alpha1.DataProtectionSpec{
+					Mode: "erasureCoding",
+					ErasureCoding: &v1alpha1.ErasureCodingSpec{
+						DataShards:   4,
+						ParityShards: 2,
 					},
 				},
 			},
@@ -332,13 +327,8 @@ func TestErasureCodingChecker_CheckChunk(t *testing.T) {
 			}
 
 			checker := NewErasureCodingChecker(metaClient, nodeChecker)
-			volume := &VolumeMeta{
-				VolumeID: "vol1",
-				Pool:     tt.pool.Name,
-				ChunkIDs: []string{tt.placement.ChunkID},
-			}
 
-			result, err := checker.CheckChunk(ctx, tt.placement.ChunkID, volume, tt.pool)
+			result, err := checker.CheckChunk(ctx, tt.placement.ChunkID, tt.volume)
 			if err != nil {
 				t.Fatalf("CheckChunk failed: %v", err)
 			}
@@ -356,22 +346,16 @@ func TestErasureCodingChecker_CheckChunk(t *testing.T) {
 func TestPolicyEngine_CheckVolumeCompliance(t *testing.T) {
 	ctx := context.Background()
 
-	pool := &v1alpha1.StoragePool{
-		ObjectMeta: metav1.ObjectMeta{Name: "replica-pool"},
-		Spec: v1alpha1.StoragePoolSpec{
-			DataProtection: v1alpha1.DataProtectionSpec{
-				Mode: "replication",
-				Replication: &v1alpha1.ReplicationSpec{
-					Factor: 3,
-				},
-			},
-		},
-	}
-
 	volume := &VolumeMeta{
 		VolumeID: "vol1",
 		Pool:     "replica-pool",
 		ChunkIDs: []string{"chunk1", "chunk2", "chunk3"},
+		DataProtection: &v1alpha1.DataProtectionSpec{
+			Mode: "replication",
+			Replication: &v1alpha1.ReplicationSpec{
+				Factor: 3,
+			},
+		},
 	}
 
 	nodeChecker := &mockNodeChecker{
@@ -395,7 +379,7 @@ func TestPolicyEngine_CheckVolumeCompliance(t *testing.T) {
 
 	engine := NewPolicyEngine(metaClient, nodeChecker)
 
-	report, err := engine.CheckVolumeCompliance(ctx, volume, pool)
+	report, err := engine.CheckVolumeCompliance(ctx, volume)
 	if err != nil {
 		t.Fatalf("CheckVolumeCompliance failed: %v", err)
 	}
@@ -423,14 +407,7 @@ func TestPolicyEngine_CheckPoolCompliance(t *testing.T) {
 
 	pool := &v1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-pool"},
-		Spec: v1alpha1.StoragePoolSpec{
-			DataProtection: v1alpha1.DataProtectionSpec{
-				Mode: "replication",
-				Replication: &v1alpha1.ReplicationSpec{
-					Factor: 3,
-				},
-			},
-		},
+		Spec:       v1alpha1.StoragePoolSpec{},
 	}
 
 	volumes := map[string]*VolumeMeta{
@@ -438,11 +415,23 @@ func TestPolicyEngine_CheckPoolCompliance(t *testing.T) {
 			VolumeID: "vol1",
 			Pool:     "test-pool",
 			ChunkIDs: []string{"chunk1", "chunk2"},
+			DataProtection: &v1alpha1.DataProtectionSpec{
+				Mode: "replication",
+				Replication: &v1alpha1.ReplicationSpec{
+					Factor: 3,
+				},
+			},
 		},
 		"vol2": {
 			VolumeID: "vol2",
 			Pool:     "test-pool",
 			ChunkIDs: []string{"chunk3"},
+			DataProtection: &v1alpha1.DataProtectionSpec{
+				Mode: "replication",
+				Replication: &v1alpha1.ReplicationSpec{
+					Factor: 3,
+				},
+			},
 		},
 	}
 
@@ -492,20 +481,19 @@ func TestReconciler_ScanAndEnqueue(t *testing.T) {
 
 	pool := &v1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-pool"},
-		Spec: v1alpha1.StoragePoolSpec{
-			DataProtection: v1alpha1.DataProtectionSpec{
-				Mode: "replication",
-				Replication: &v1alpha1.ReplicationSpec{
-					Factor: 3,
-				},
-			},
-		},
+		Spec:       v1alpha1.StoragePoolSpec{},
 	}
 
 	volume := &VolumeMeta{
 		VolumeID: "vol1",
 		Pool:     "test-pool",
 		ChunkIDs: []string{"chunk1", "chunk2"},
+		DataProtection: &v1alpha1.DataProtectionSpec{
+			Mode: "replication",
+			Replication: &v1alpha1.ReplicationSpec{
+				Factor: 3,
+			},
+		},
 	}
 
 	nodeChecker := &mockNodeChecker{

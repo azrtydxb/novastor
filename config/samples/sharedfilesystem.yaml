@@ -6,5 +6,10 @@ spec:
   pool: ssd-erasurecoded
   capacity: "1Ti"
   accessMode: ReadWriteMany
+  dataProtection:
+    mode: replication
+    replication:
+      factor: 3
+      writeQuorum: 2
   export:
     protocol: nfs

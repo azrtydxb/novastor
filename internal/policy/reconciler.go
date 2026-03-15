@@ -334,7 +334,7 @@ func (r *Reconciler) repairReplicatedChunk(ctx context.Context, task RepairTask,
 }
 
 // repairErasureChunk regenerates a lost shard.
-func (r *Reconciler) repairErasureChunk(ctx context.Context, task RepairTask, pool *v1alpha1.StoragePool, healthyNodes []string) error {
+func (r *Reconciler) repairErasureChunk(ctx context.Context, task RepairTask, _ *v1alpha1.StoragePool, healthyNodes []string) error {
 	if len(task.AvailableNodes) == 0 {
 		return fmt.Errorf("no available shards for chunk %s", task.ChunkID)
 	}
@@ -343,11 +343,16 @@ func (r *Reconciler) repairErasureChunk(ctx context.Context, task RepairTask, po
 		return fmt.Errorf("shard replicator not configured")
 	}
 
-	ecSpec := pool.Spec.DataProtection.ErasureCoding
-	if ecSpec == nil {
-		return fmt.Errorf("pool has nil erasure coding spec")
+	// Get erasure coding config from volume metadata.
+	volume, err := r.metaClient.GetVolumeMeta(ctx, task.VolumeID)
+	if err != nil {
+		return fmt.Errorf("getting volume metadata for %s: %w", task.VolumeID, err)
+	}
+	if volume == nil || volume.DataProtection == nil || volume.DataProtection.ErasureCoding == nil {
+		return fmt.Errorf("volume %s has nil erasure coding spec", task.VolumeID)
 	}
 
+	ecSpec := volume.DataProtection.ErasureCoding
 	dataShards := ecSpec.DataShards
 	if dataShards == 0 {
 		dataShards = 4

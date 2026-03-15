@@ -4,6 +4,11 @@ metadata:
   name: app-assets
 spec:
   pool: ssd-erasurecoded
+  dataProtection:
+    mode: replication
+    replication:
+      factor: 3
+      writeQuorum: 2
   endpoint:
     service:
       port: 9000

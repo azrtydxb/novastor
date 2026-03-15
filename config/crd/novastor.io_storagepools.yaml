@@ -12,11 +12,11 @@ spec:
     listKind: StoragePoolList
     plural: storagepools
     singular: storagepool
-  scope: Namespaced
+  scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.dataProtection.mode
-      name: Mode
+    - jsonPath: .spec.backendType
+      name: Backend
       type: string
     - jsonPath: .status.nodeCount
       name: Nodes
@@ -52,44 +52,6 @@ spec:
             type: object
           spec:
             properties:
-              dataProtection:
-                description: DataProtection configures how data is protected in this
-                  pool.
-                properties:
-                  erasureCoding:
-                    properties:
-                      dataShards:
-                        default: 4
-                        minimum: 2
-                        type: integer
-                      parityShards:
-                        default: 2
-                        minimum: 1
-                        type: integer
-                    required:
-                    - dataShards
-                    - parityShards
-                    type: object
-                  mode:
-                    enum:
-                    - replication
-                    - erasureCoding
-                    type: string
-                  replication:
-                    properties:
-                      factor:
-                        default: 3
-                        maximum: 5
-                        minimum: 1
-                        type: integer
-                      writeQuorum:
-                        type: integer
-                    required:
-                    - factor
-                    type: object
-                required:
-                - mode
-                type: object
               deviceFilter:
                 description: DeviceFilter specifies which devices on selected nodes
                   to use.
@@ -149,8 +111,35 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
+              backendType:
+                description: |-
+                  BackendType selects the storage backend for this pool.
+                  - "file": File on existing mounted filesystem → SPDK AIO bdev
+                  - "lvm": SPDK lvol store on unbound NVMe device (thin provisioning, snapshots)
+                  - "raw": Direct SPDK NVMe bdev on unbound NVMe device (highest performance)
+                default: lvm
+                enum:
+                - file
+                - lvm
+                - raw
+                type: string
+              fileBackend:
+                description: FileBackend configures the file backend. Only used when backendType
+                  is "file".
+                properties:
+                  maxCapacityBytes:
+                    description: MaxCapacityBytes limits the total capacity of the file backend.
+                    format: int64
+                    type: integer
+                  path:
+                    default: /var/lib/novastor/file
+                    description: Path is the directory path for the file backend.
+                    type: string
+                required:
+                - path
+                type: object
             required:
-            - dataProtection
+            - backendType
             type: object
           status:
             properties:
@@ -210,8 +199,6 @@ spec:
                   - type
                   type: object
                 type: array
-              dataProtection:
-                type: string
               nodeCount:
                 type: integer
               phase:

@@ -45,7 +45,7 @@ impl GrpcServerHandle {
 /// The gRPC server hosting all inter-node services.
 pub struct GrpcServer {
     config: GrpcServerConfig,
-    chunk_store: Arc<dyn ChunkStore>,
+    chunk_store: Option<Arc<dyn ChunkStore>>,
     bdev_manager: Option<Arc<BdevManager>>,
     nvmf_manager: Option<Arc<NvmfManager>>,
 }
@@ -54,7 +54,17 @@ impl GrpcServer {
     pub fn new(config: GrpcServerConfig, chunk_store: Arc<dyn ChunkStore>) -> Self {
         Self {
             config,
-            chunk_store,
+            chunk_store: Some(chunk_store),
+            bdev_manager: None,
+            nvmf_manager: None,
+        }
+    }
+
+    /// Create a server without a chunk store (dataplane management only).
+    pub fn new_management_only(config: GrpcServerConfig) -> Self {
+        Self {
+            config,
+            chunk_store: None,
             bdev_manager: None,
             nvmf_manager: None,
         }
@@ -80,8 +90,7 @@ impl GrpcServer {
                 crate::error::DataPlaneError::TransportError(format!("invalid listen address: {e}"))
             })?;
 
-        let chunk_svc = ChunkServiceImpl::new(self.chunk_store.clone());
-        let chunk_server = ChunkServiceServer::new(chunk_svc);
+        let chunk_store = self.chunk_store.clone();
 
         let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
             crate::error::DataPlaneError::TransportError(format!("bind failed: {e}"))
@@ -96,23 +105,45 @@ impl GrpcServer {
         let nvmf_mgr = self.nvmf_manager.clone();
 
         let task = tokio::spawn(async move {
-            let mut builder = tonic::transport::Server::builder();
-            let router = builder.add_service(chunk_server);
+            let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
-            // Register DataplaneService if managers are available.
-            if let (Some(bdev_mgr), Some(nvmf_mgr)) = (bdev_mgr, nvmf_mgr) {
-                let dp_svc = DataplaneServiceImpl::new(bdev_mgr, nvmf_mgr);
-                let dp_server = DataplaneServiceServer::new(dp_svc);
-                router
-                    .add_service(dp_server)
-                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
-                    .await
-                    .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
-            } else {
-                router
-                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
-                    .await
-                    .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
+            // Tonic's add_service changes the router type at compile time, so
+            // we branch based on which services are available.
+            match (chunk_store, bdev_mgr, nvmf_mgr) {
+                // Full services: ChunkService + DataplaneService
+                (Some(cs), Some(bm), Some(nm)) => {
+                    tonic::transport::Server::builder()
+                        .add_service(ChunkServiceServer::new(ChunkServiceImpl::new(cs)))
+                        .add_service(DataplaneServiceServer::new(DataplaneServiceImpl::new(
+                            bm, nm,
+                        )))
+                        .serve_with_incoming(incoming)
+                        .await
+                        .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
+                }
+                // Chunk store unavailable — DataplaneService only
+                (None, Some(bm), Some(nm)) => {
+                    log::warn!("chunk store unavailable — DataplaneService only");
+                    tonic::transport::Server::builder()
+                        .add_service(DataplaneServiceServer::new(DataplaneServiceImpl::new(
+                            bm, nm,
+                        )))
+                        .serve_with_incoming(incoming)
+                        .await
+                        .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
+                }
+                // ChunkService only (no dataplane managers)
+                (Some(cs), _, _) => {
+                    tonic::transport::Server::builder()
+                        .add_service(ChunkServiceServer::new(ChunkServiceImpl::new(cs)))
+                        .serve_with_incoming(incoming)
+                        .await
+                        .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
+                }
+                // Nothing available
+                (None, _, _) => {
+                    log::error!("no services available for gRPC server");
+                }
             }
         });
 

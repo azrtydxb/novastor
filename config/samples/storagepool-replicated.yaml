@@ -6,11 +6,7 @@ spec:
   nodeSelector:
     matchLabels:
       storage-tier: nvme
+  backendType: raw
   deviceFilter:
     type: nvme
     minSize: "100Gi"
-  dataProtection:
-    mode: replication
-    replication:
-      factor: 3
-      writeQuorum: 2

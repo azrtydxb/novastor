@@ -17,6 +17,7 @@ mod ffi {
 
 /// Data passed to the SPDK startup callback via the arg pointer.
 struct SpdkStartupData {
+    grpc_port: u16,
     listen_port: u16,
 }
 
@@ -69,6 +70,7 @@ pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
         // SPDK subsystems (bdev, nvmf) are guaranteed to be ready before
         // the gRPC server accepts connections.
         let startup_data = Box::new(SpdkStartupData {
+            grpc_port: config.grpc_port,
             listen_port: config.listen_port,
         });
         let arg = Box::into_raw(startup_data) as *mut std::os::raw::c_void;
@@ -89,14 +91,50 @@ unsafe extern "C" fn spdk_startup_cb(arg: *mut std::os::raw::c_void) {
     info!("SPDK startup callback: subsystems initialized");
 
     // Recover the startup data passed through the arg pointer.
-    let _data = Box::from_raw(arg as *mut SpdkStartupData);
+    let data = Box::from_raw(arg as *mut SpdkStartupData);
 
-    // Initialise SPDK managers. These are used by the gRPC
-    // DataplaneService to manage bdevs and NVMe-oF targets.
-    // SPDK's native RPC socket is available for SPDK-internal operations
-    // (e.g. bdev_nvme_attach_controller), but the Go agent communicates
-    // exclusively via gRPC (invariant #5).
-    info!("SPDK subsystems ready, awaiting gRPC connections");
+    // Create SPDK managers for bdev and NVMe-oF target operations.
+    let bdev_manager = std::sync::Arc::new(crate::spdk::bdev_manager::BdevManager::new());
+    let nvmf_manager = std::sync::Arc::new(crate::spdk::nvmf_manager::NvmfManager::new(
+        data.listen_port,
+    ));
+
+    let grpc_port = data.grpc_port;
+    let bdev_mgr = bdev_manager.clone();
+    let nvmf_mgr = nvmf_manager.clone();
+
+    // Spawn the gRPC server on the tokio runtime. The server runs on
+    // background threads (not the SPDK reactor thread).
+    //
+    // The dataplane does NOT create a chunk store on its own. The Go agent
+    // calls InitChunkStore via gRPC with the real NVMe bdev name (e.g.
+    // "NVMe0n1") after SPDK auto-probes the local NVMe devices. This ensures
+    // the chunk engine uses the actual NVMe drives, not file-backed stores.
+    let handle = crate::tokio_handle();
+    handle.spawn(async move {
+        let config = crate::transport::server::GrpcServerConfig {
+            listen_address: "0.0.0.0".to_string(),
+            port: grpc_port,
+        };
+
+        let server = crate::transport::server::GrpcServer::new_management_only(config)
+            .with_dataplane(bdev_mgr, nvmf_mgr);
+
+        match server.start().await {
+            Ok(_handle) => {
+                info!("gRPC DataplaneService listening on 0.0.0.0:{}", grpc_port);
+                std::mem::forget(_handle);
+            }
+            Err(e) => {
+                log::error!("failed to start gRPC server: {}", e);
+            }
+        }
+    });
+
+    info!(
+        "SPDK subsystems ready, gRPC server launching on port {}",
+        grpc_port
+    );
 }
 
 pub fn shutdown_spdk_env() {

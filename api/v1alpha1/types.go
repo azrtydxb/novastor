@@ -9,12 +9,12 @@ import (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.dataProtection.mode`
+// +kubebuilder:printcolumn:name="Backend",type=string,JSONPath=`.spec.backendType`
 // +kubebuilder:printcolumn:name="Nodes",type=integer,JSONPath=`.status.nodeCount`
 // +kubebuilder:printcolumn:name="Capacity",type=string,JSONPath=`.status.totalCapacity`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// StoragePool defines a set of storage nodes and their data protection policy.
+// StoragePool defines a set of storage nodes and their backend configuration.
 type StoragePool struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -42,9 +42,6 @@ type StoragePoolSpec struct {
 
 	// FileBackend configures the file backend. Only used when backendType is "file".
 	FileBackend *FileBackendSpec `json:"fileBackend,omitempty"`
-
-	// DataProtection configures how data is protected in this pool.
-	DataProtection DataProtectionSpec `json:"dataProtection"`
 }
 
 // FileBackendSpec configures the file backend (directory on existing filesystem).
@@ -90,12 +87,11 @@ type ErasureCodingSpec struct {
 }
 
 type StoragePoolStatus struct {
-	Phase          string             `json:"phase,omitempty"`
-	NodeCount      int                `json:"nodeCount,omitempty"`
-	TotalCapacity  string             `json:"totalCapacity,omitempty"`
-	UsedCapacity   string             `json:"usedCapacity,omitempty"`
-	DataProtection string             `json:"dataProtection,omitempty"`
-	Conditions     []metav1.Condition `json:"conditions,omitempty"`
+	Phase         string             `json:"phase,omitempty"`
+	NodeCount     int                `json:"nodeCount,omitempty"`
+	TotalCapacity string             `json:"totalCapacity,omitempty"`
+	UsedCapacity  string             `json:"usedCapacity,omitempty"`
+	Conditions    []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -109,6 +105,7 @@ type StoragePoolList struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Pool",type=string,JSONPath=`.spec.pool`
 // +kubebuilder:printcolumn:name="Size",type=string,JSONPath=`.spec.size`
+// +kubebuilder:printcolumn:name="Protection",type=string,JSONPath=`.spec.dataProtection.mode`
 // +kubebuilder:printcolumn:name="Access",type=string,JSONPath=`.spec.accessMode`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 
@@ -125,6 +122,8 @@ type BlockVolumeSpec struct {
 	Size string `json:"size"`
 	// +kubebuilder:validation:Enum=ReadWriteOnce;ReadOnlyMany
 	AccessMode string `json:"accessMode"`
+	// DataProtection configures how this volume's data is protected.
+	DataProtection DataProtectionSpec `json:"dataProtection"`
 	// Quota specifies an optional per-volume quota limit.
 	// When set, the volume cannot grow beyond this size.
 	// +optional
@@ -151,6 +150,7 @@ type BlockVolumeList struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Pool",type=string,JSONPath=`.spec.pool`
 // +kubebuilder:printcolumn:name="Capacity",type=string,JSONPath=`.spec.capacity`
+// +kubebuilder:printcolumn:name="Protection",type=string,JSONPath=`.spec.dataProtection.mode`
 // +kubebuilder:printcolumn:name="Protocol",type=string,JSONPath=`.spec.export.protocol`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 
@@ -166,8 +166,10 @@ type SharedFilesystemSpec struct {
 	Pool     string `json:"pool"`
 	Capacity string `json:"capacity"`
 	// +kubebuilder:validation:Enum=ReadWriteMany;ReadOnlyMany
-	AccessMode string      `json:"accessMode"`
-	Export     *ExportSpec `json:"export,omitempty"`
+	AccessMode string `json:"accessMode"`
+	// DataProtection configures how this filesystem's data is protected.
+	DataProtection DataProtectionSpec `json:"dataProtection"`
+	Export         *ExportSpec        `json:"export,omitempty"`
 	// Image overrides the NFS filer container image. Defaults to novastor/novastor-filer:v0.1.0.
 	// +optional
 	Image string `json:"image,omitempty"`
@@ -194,6 +196,7 @@ type SharedFilesystemList struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Pool",type=string,JSONPath=`.spec.pool`
+// +kubebuilder:printcolumn:name="Protection",type=string,JSONPath=`.spec.dataProtection.mode`
 // +kubebuilder:printcolumn:name="Port",type=integer,JSONPath=`.spec.endpoint.service.port`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 
@@ -206,9 +209,11 @@ type ObjectStore struct {
 }
 
 type ObjectStoreSpec struct {
-	Pool         string             `json:"pool"`
-	Endpoint     ObjectEndpointSpec `json:"endpoint"`
-	BucketPolicy *BucketPolicySpec  `json:"bucketPolicy,omitempty"`
+	Pool string `json:"pool"`
+	// DataProtection configures how this object store's data is protected.
+	DataProtection DataProtectionSpec `json:"dataProtection"`
+	Endpoint       ObjectEndpointSpec `json:"endpoint"`
+	BucketPolicy   *BucketPolicySpec  `json:"bucketPolicy,omitempty"`
 	// Image overrides the S3 gateway container image. Defaults to novastor/novastor-s3gw:v0.1.0.
 	// +optional
 	Image string `json:"image,omitempty"`
@@ -243,6 +248,75 @@ type ObjectStoreList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ObjectStore `json:"items"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Pool",type=string,JSONPath=`.spec.poolRef`
+// +kubebuilder:printcolumn:name="Node",type=string,JSONPath=`.spec.nodeName`
+// +kubebuilder:printcolumn:name="Backend",type=string,JSONPath=`.spec.backendType`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Device",type=string,JSONPath=`.status.device`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// BackendAssignment binds a storage backend to a specific node for a StoragePool.
+// Created by the StoragePool controller, provisioned by the node agent.
+type BackendAssignment struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              BackendAssignmentSpec   `json:"spec,omitempty"`
+	Status            BackendAssignmentStatus `json:"status,omitempty"`
+}
+
+type BackendAssignmentSpec struct {
+	// PoolRef is the name of the StoragePool this assignment belongs to.
+	PoolRef string `json:"poolRef"`
+
+	// NodeName is the node this assignment targets.
+	NodeName string `json:"nodeName"`
+
+	// BackendType is the backend type (copied from StoragePool).
+	// +kubebuilder:validation:Enum=file;lvm;raw
+	BackendType string `json:"backendType"`
+
+	// DeviceFilter specifies which devices to use (copied from StoragePool).
+	// For raw/lvm backends only.
+	DeviceFilter *DeviceFilter `json:"deviceFilter,omitempty"`
+
+	// FileBackend configures the file backend (copied from StoragePool).
+	// For file backend only.
+	FileBackend *FileBackendSpec `json:"fileBackend,omitempty"`
+}
+
+type BackendAssignmentStatus struct {
+	// Phase is the provisioning state.
+	// +kubebuilder:validation:Enum=Pending;Provisioning;Ready;Failed
+	Phase string `json:"phase,omitempty"`
+
+	// Device is the resolved device path (e.g., /dev/nvme0n1).
+	Device string `json:"device,omitempty"`
+
+	// PCIeAddr is the PCIe BDF address for NVMe devices.
+	PCIeAddr string `json:"pcieAddr,omitempty"`
+
+	// BdevName is the SPDK bdev name created on this device.
+	BdevName string `json:"bdevName,omitempty"`
+
+	// Capacity is the device capacity in bytes.
+	Capacity int64 `json:"capacity,omitempty"`
+
+	// Message provides details about the current phase (e.g., error details).
+	Message string `json:"message,omitempty"`
+
+	// Conditions represent the latest available observations.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type BackendAssignmentList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []BackendAssignment `json:"items"`
 }
 
 // +kubebuilder:object:root=true

@@ -1,22 +1,25 @@
 //! NovaStor custom SPDK bdev module.
 //!
-//! This module bridges SPDK's block device layer to the ChunkBackend.
-//! Each volume created via the ChunkBackend is registered as an SPDK bdev
-//! named `novastor_<volume_id>`. When SPDK's NVMe-oF subsystem submits I/O
-//! to this bdev, the module offloads the work to a thread pool which calls
-//! ChunkBackend::read/write, then completes the I/O back on the reactor.
+//! This module bridges SPDK's block device layer to the ChunkEngine.
+//! Each volume is registered as an SPDK bdev named `novastor_<volume_id>`.
+//! When SPDK's NVMe-oF subsystem submits I/O to this bdev, the module
+//! offloads the work to a thread pool which calls ChunkEngine::read/write
+//! (async, bridged via tokio Handle::block_on), then completes the I/O
+//! back on the reactor.
 //!
 //! The bdev is purely virtual — it has no underlying physical device of its
-//! own. The ChunkBackend internally stores chunks on real SPDK bdevs via
-//! the BdevChunkStore.
+//! own. The ChunkEngine stores chunks on backend SPDK bdevs via the
+//! BdevChunkStore, with CRUSH placement, replication, and EC support.
 
-use crate::backend::traits::StorageBackend;
+use crate::backend::chunk_store::CHUNK_SIZE;
+use crate::chunk::engine::ChunkEngine;
 use crate::error::{DataPlaneError, Result};
+use crate::metadata::types::ChunkMapEntry;
 use crate::spdk::reactor_dispatch;
-use log::{error, info};
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_void};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 #[allow(
     non_camel_case_types,
@@ -36,21 +39,48 @@ fn bdev_registry() -> &'static Mutex<HashMap<String, NovastorBdevEntry>> {
     NOVASTOR_BDEVS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The ChunkBackend shared across all NovaStor bdevs.
-static CHUNK_BACKEND: OnceLock<Arc<dyn StorageBackend>> = OnceLock::new();
+/// The ChunkEngine shared across all NovaStor bdevs.
+static CHUNK_ENGINE: OnceLock<Arc<ChunkEngine>> = OnceLock::new();
 
-/// Set the chunk backend that NovaStor bdevs will use for I/O.
-/// Must be called once after `backend.init_chunk` initialises the backend.
-pub fn set_chunk_backend(backend: Arc<dyn StorageBackend>) {
-    if CHUNK_BACKEND.set(backend).is_err() {
-        info!("novastor_bdev: chunk backend already set, ignoring");
-    }
+/// Tokio runtime handle for blocking on async ChunkEngine calls from
+/// the synchronous thread pool workers.
+static TOKIO_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
+
+/// Per-volume chunk map: maps volume_name → (chunk_index → ChunkMapEntry).
+/// Updated on writes and used for reads. This is the local cache of the
+/// volume-to-chunk mapping (authoritative source is the metadata service).
+static VOLUME_CHUNK_MAPS: OnceLock<RwLock<HashMap<String, Vec<Option<ChunkMapEntry>>>>> =
+    OnceLock::new();
+
+fn volume_chunk_maps() -> &'static RwLock<HashMap<String, Vec<Option<ChunkMapEntry>>>> {
+    VOLUME_CHUNK_MAPS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-fn get_chunk_backend() -> Result<&'static Arc<dyn StorageBackend>> {
-    CHUNK_BACKEND
+/// Public accessor for volume chunk maps (used by delete_volume cleanup).
+pub fn volume_chunk_maps_ref(
+) -> Option<&'static RwLock<HashMap<String, Vec<Option<ChunkMapEntry>>>>> {
+    VOLUME_CHUNK_MAPS.get()
+}
+
+/// Set the chunk engine that NovaStor bdevs will use for I/O.
+/// Must be called once after the backend and chunk store are initialised.
+pub fn set_chunk_engine(engine: Arc<ChunkEngine>, handle: tokio::runtime::Handle) {
+    if CHUNK_ENGINE.set(engine).is_err() {
+        info!("novastor_bdev: chunk engine already set, ignoring");
+    }
+    let _ = TOKIO_HANDLE.set(handle);
+}
+
+fn get_chunk_engine() -> Result<&'static Arc<ChunkEngine>> {
+    CHUNK_ENGINE
         .get()
-        .ok_or_else(|| DataPlaneError::BdevError("chunk backend not initialised".into()))
+        .ok_or_else(|| DataPlaneError::BdevError("chunk engine not initialised".into()))
+}
+
+fn get_tokio_handle() -> Result<&'static tokio::runtime::Handle> {
+    TOKIO_HANDLE
+        .get()
+        .ok_or_else(|| DataPlaneError::BdevError("tokio handle not set".into()))
 }
 
 /// Thread pool for offloading ChunkBackend I/O from the reactor thread.
@@ -91,11 +121,19 @@ unsafe impl Sync for BdevCtx {}
 /// bdev named `novastor_<volume_name>` with the given size. The bdev can then
 /// be referenced by `nvmf_create_target`.
 pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
-    let backend = get_chunk_backend()?;
+    // Verify the chunk engine is ready.
+    let _engine = get_chunk_engine()?;
     let bdev_name = format!("novastor_{}", volume_name);
 
-    // Verify the volume exists.
-    let info = backend.stat_volume(volume_name)?;
+    // Initialise an empty chunk map for this volume.
+    let num_chunks = (size_bytes + crate::backend::chunk_store::CHUNK_SIZE as u64 - 1)
+        / crate::backend::chunk_store::CHUNK_SIZE as u64;
+    {
+        let mut maps = volume_chunk_maps().write().unwrap();
+        maps.entry(volume_name.to_string())
+            .or_insert_with(|| vec![None; num_chunks as usize]);
+    }
+
     let block_size: u32 = 512;
     let num_blocks = size_bytes / block_size as u64;
 
@@ -180,11 +218,10 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
     );
 
     info!(
-        "novastor_bdev: registered bdev '{}' (volume='{}', size={}B, healthy={})",
+        "novastor_bdev: registered bdev '{}' (volume='{}', size={}B)",
         format!("novastor_{}", volume_name),
         volume_name,
-        info.size_bytes,
-        info.healthy
+        size_bytes,
     );
 
     Ok(format!("novastor_{}", volume_name))
@@ -373,10 +410,51 @@ unsafe extern "C" fn bdev_submit_request_cb(
             }
 
             io_pool().execute(move || {
-                let result = match get_chunk_backend() {
-                    Ok(backend) => backend.read(&volume_name, offset, length),
-                    Err(e) => Err(e),
-                };
+                let result = (|| -> Result<Vec<u8>> {
+                    let engine = get_chunk_engine()?;
+                    let handle = get_tokio_handle()?;
+
+                    // Look up the chunk map entries for this offset range.
+                    let start_chunk = (offset / CHUNK_SIZE as u64) as usize;
+                    let end_chunk =
+                        ((offset + length + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64) as usize;
+
+                    let maps = volume_chunk_maps().read().unwrap();
+                    let chunk_map = maps.get(&volume_name).ok_or_else(|| {
+                        DataPlaneError::BdevError(format!(
+                            "no chunk map for volume '{}'",
+                            volume_name
+                        ))
+                    })?;
+
+                    // Collect entries for the requested range.
+                    let mut entries: Vec<ChunkMapEntry> = Vec::new();
+                    let mut has_unwritten = false;
+                    for idx in start_chunk..end_chunk.min(chunk_map.len()) {
+                        match &chunk_map[idx] {
+                            Some(entry) => entries.push(entry.clone()),
+                            None => {
+                                has_unwritten = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // If any chunks in the range have never been written, return zeros.
+                    if has_unwritten || entries.is_empty() {
+                        return Ok(vec![0u8; length as usize]);
+                    }
+
+                    // Read through ChunkEngine (async → sync bridge).
+                    let data = handle.block_on(engine.read(&volume_name, offset, &entries))?;
+
+                    // Trim to the exact sub-chunk offset and length requested.
+                    let chunk_aligned_start = start_chunk as u64 * CHUNK_SIZE as u64;
+                    let sub_offset = (offset - chunk_aligned_start) as usize;
+                    let available = data.len().saturating_sub(sub_offset);
+                    let to_return = std::cmp::min(available, length as usize);
+                    Ok(data[sub_offset..sub_offset + to_return].to_vec())
+                })();
 
                 // Copy data into the iov buffers and complete I/O on the
                 // reactor thread to guarantee the bdev_io and its iov buffers
@@ -452,10 +530,27 @@ unsafe extern "C" fn bdev_submit_request_cb(
             }
 
             io_pool().execute(move || {
-                let result = match get_chunk_backend() {
-                    Ok(backend) => backend.write(&volume_name, offset, &data),
-                    Err(e) => Err(e),
-                };
+                let result = (|| -> Result<()> {
+                    let engine = get_chunk_engine()?;
+                    let handle = get_tokio_handle()?;
+
+                    // Write through ChunkEngine (async → sync bridge).
+                    // ChunkEngine handles CRUSH placement, replication/EC fan-out.
+                    let entries = handle.block_on(engine.write(&volume_name, offset, &data))?;
+
+                    // Update the local chunk map cache with the returned entries.
+                    let mut maps = volume_chunk_maps().write().unwrap();
+                    if let Some(chunk_map) = maps.get_mut(&volume_name) {
+                        for entry in &entries {
+                            let idx = entry.chunk_index as usize;
+                            if idx < chunk_map.len() {
+                                chunk_map[idx] = Some(entry.clone());
+                            }
+                        }
+                    }
+
+                    Ok(())
+                })();
 
                 let status = match result {
                     Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,

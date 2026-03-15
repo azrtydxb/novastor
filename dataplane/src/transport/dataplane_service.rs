@@ -16,6 +16,7 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::transport::dataplane_proto::dataplane_service_server::DataplaneService;
 use crate::transport::dataplane_proto::*;
 
+use crate::backend::traits::StorageBackend;
 use crate::bdev::chunk_io::{ChunkStore, CHUNK_SIZE};
 use crate::config::{BlobstoreConfig, LocalBdevConfig, LvolConfig, NvmfInitiatorConfig};
 use crate::spdk::bdev_manager::BdevManager;
@@ -51,6 +52,22 @@ static GRPC_CHUNK_STORES: OnceLock<Mutex<std::collections::HashMap<String, Arc<C
 
 fn grpc_chunk_stores() -> &'static Mutex<std::collections::HashMap<String, Arc<ChunkStore>>> {
     GRPC_CHUNK_STORES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Global registry of storage backends, keyed by a label (e.g., pool name or backend type).
+static GRPC_BACKENDS: OnceLock<Mutex<std::collections::HashMap<String, Arc<dyn StorageBackend>>>> =
+    OnceLock::new();
+
+fn grpc_backends() -> &'static Mutex<std::collections::HashMap<String, Arc<dyn StorageBackend>>> {
+    GRPC_BACKENDS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn get_backend(key: &str) -> Result<Arc<dyn StorageBackend>, Status> {
+    let backends = grpc_backends().lock().unwrap();
+    backends
+        .get(key)
+        .cloned()
+        .ok_or_else(|| Status::not_found(format!("backend '{}' not initialised", key)))
 }
 
 fn get_chunk_store(bdev_name: &str) -> Result<Arc<ChunkStore>, Status> {
@@ -469,10 +486,32 @@ impl DataplaneService for DataplaneServiceImpl {
         request: Request<InitChunkStoreRequest>,
     ) -> Result<Response<InitChunkStoreResponse>, Status> {
         let req = request.into_inner();
+
+        // If chunk store already exists for this bdev, return its stats.
+        if let Some(existing) = grpc_chunk_stores()
+            .lock()
+            .unwrap()
+            .get(&req.bdev_name)
+            .cloned()
+        {
+            let stats = existing.stats();
+            let total_slots = stats.capacity_bytes / CHUNK_SIZE as u64;
+            log::info!(
+                "init_chunk_store: '{}' already initialised, returning stats",
+                req.bdev_name
+            );
+            return Ok(Response::new(InitChunkStoreResponse {
+                total_slots,
+                used_slots: stats.chunk_count,
+                chunk_size: CHUNK_SIZE as u64,
+            }));
+        }
+
         // Look up the bdev to get its capacity for the chunk store.
-        let bdev_info = self.bdev_manager.get_bdev(&req.bdev_name).ok_or_else(|| {
-            Status::not_found(format!("bdev '{}' not found", req.bdev_name))
-        })?;
+        let bdev_info = self
+            .bdev_manager
+            .get_bdev(&req.bdev_name)
+            .ok_or_else(|| Status::not_found(format!("bdev '{}' not found", req.bdev_name)))?;
         let capacity_bytes = bdev_info.num_blocks * bdev_info.block_size as u64;
         let store = ChunkStore::new(&req.bdev_name, capacity_bytes);
         let stats = store.stats();
@@ -481,7 +520,47 @@ impl DataplaneService for DataplaneServiceImpl {
         grpc_chunk_stores()
             .lock()
             .unwrap()
-            .insert(req.bdev_name, store);
+            .insert(req.bdev_name.clone(), store);
+
+        // Wire up the ChunkEngine for the novastor bdev module.
+        // Create a BdevChunkStore (async ChunkStore impl) on this bdev, then
+        // wrap it in a ChunkEngine with a single-node CRUSH topology.
+        {
+            use crate::backend::bdev_store::BdevChunkStore;
+            use crate::chunk::engine::ChunkEngine;
+            use crate::metadata::topology::{Backend, BackendType, ClusterMap, Node, NodeStatus};
+
+            let chunk_store =
+                std::sync::Arc::new(BdevChunkStore::new(&req.bdev_name, capacity_bytes));
+
+            // Build a single-node topology so CRUSH always places locally.
+            let node_id = format!("local-{}", req.bdev_name);
+            let mut topology = ClusterMap::new(0);
+            topology.add_node(Node {
+                id: node_id.clone(),
+                address: "127.0.0.1".to_string(),
+                port: 9500,
+                backends: vec![Backend {
+                    id: format!("{}-be", req.bdev_name),
+                    node_id: node_id.clone(),
+                    capacity_bytes,
+                    used_bytes: 0,
+                    weight: 100,
+                    backend_type: BackendType::Bdev,
+                }],
+                status: NodeStatus::Online,
+            });
+
+            let engine = std::sync::Arc::new(ChunkEngine::new(node_id, chunk_store, topology));
+
+            let handle = tokio::runtime::Handle::current();
+            crate::bdev::novastor_bdev::set_chunk_engine(engine, handle);
+            log::info!(
+                "init_chunk_store: ChunkEngine initialised for bdev '{}'",
+                req.bdev_name,
+            );
+        }
+
         Ok(Response::new(InitChunkStoreResponse {
             total_slots,
             used_slots: stats.chunk_count,
@@ -657,31 +736,131 @@ impl DataplaneService for DataplaneServiceImpl {
             req.backend_type,
             req.config_json
         );
+        let config: serde_json::Value = serde_json::from_str(&req.config_json)
+            .map_err(|e| Status::invalid_argument(format!("invalid config JSON: {e}")))?;
+
         match req.backend_type.as_str() {
-            "chunk" => {
-                // Init chunk backend on bdev
-                let config: serde_json::Value =
-                    serde_json::from_str(&req.config_json).map_err(|e| {
-                        Status::invalid_argument(format!("invalid config JSON: {e}"))
-                    })?;
+            "raw" => {
+                // Raw device backend: attach a block device via io_uring bdev.
+                // This works on all platforms (no IOMMU/vfio-pci required).
+                // Config: {"device_path": "/dev/nvme0n1", "name": "raw_nvme0"}
+                let device_path = config["device_path"]
+                    .as_str()
+                    .ok_or_else(|| Status::invalid_argument("device_path required in config"))?;
+                let name = config["name"]
+                    .as_str()
+                    .ok_or_else(|| Status::invalid_argument("name required in config"))?;
+
+                // If bdev already exists, skip creation.
+                if self.bdev_manager.get_bdev(name).is_some() {
+                    log::info!("init_backend: raw bdev '{}' already exists, reusing", name);
+                } else {
+                    let local_config = LocalBdevConfig {
+                        name: name.to_string(),
+                        device_path: device_path.to_string(),
+                        block_size: 512,
+                    };
+                    self.bdev_manager
+                        .create_aio_bdev(&local_config)
+                        .map_err(|e| Status::internal(format!("create raw uring bdev: {e}")))?;
+                }
+
+                // Register backend if not already present.
+                let mut backends = grpc_backends().lock().unwrap();
+                if !backends.contains_key(name) {
+                    backends.insert(
+                        name.to_string(),
+                        Arc::new(crate::backend::raw_disk::RawDiskBackend::new()),
+                    );
+                }
+
+                log::info!(
+                    "init_backend: raw uring backend '{}' on {}",
+                    name,
+                    device_path
+                );
+                Ok(Response::new(InitBackendResponse {}))
+            }
+            "lvm" => {
+                // LVM backend: create an SPDK lvol store on an existing bdev.
+                // Config: {"bdev_name": "NVMe0n1", "lvs_name": "novastor_lvs", "cluster_size": 1048576}
                 let bdev_name = config["bdev_name"]
                     .as_str()
                     .ok_or_else(|| Status::invalid_argument("bdev_name required in config"))?;
-                // Look up bdev capacity.
-                let bdev_info =
-                    self.bdev_manager.get_bdev(bdev_name).ok_or_else(|| {
-                        Status::not_found(format!("bdev '{}' not found", bdev_name))
-                    })?;
-                let capacity_bytes = bdev_info.num_blocks * bdev_info.block_size as u64;
-                let chunk_store = ChunkStore::new(bdev_name, capacity_bytes);
-                grpc_chunk_stores()
+                let lvs_name = config["lvs_name"]
+                    .as_str()
+                    .ok_or_else(|| Status::invalid_argument("lvs_name required in config"))?;
+                let cluster_size = config["cluster_size"].as_u64().unwrap_or(1024 * 1024) as u32;
+
+                let bs_config = BlobstoreConfig {
+                    base_bdev: bdev_name.to_string(),
+                    cluster_size,
+                };
+                self.bdev_manager
+                    .create_lvol_store(&bs_config)
+                    .map_err(|e| Status::internal(format!("create lvol store: {e}")))?;
+
+                let backend = Arc::new(crate::backend::lvm::LvmBackend::new(lvs_name));
+                grpc_backends()
                     .lock()
                     .unwrap()
-                    .insert(bdev_name.to_string(), Arc::new(chunk_store));
+                    .insert(lvs_name.to_string(), backend);
+
+                log::info!(
+                    "init_backend: lvm backend '{}' on bdev '{}'",
+                    lvs_name,
+                    bdev_name
+                );
                 Ok(Response::new(InitBackendResponse {}))
             }
-            other => Err(Status::unimplemented(format!(
-                "backend type '{}' init not yet implemented via gRPC",
+            "file" => {
+                // File backend: create an SPDK AIO bdev backed by a file on a mounted filesystem.
+                // Config: {"path": "/var/lib/novastor/pool1", "capacity_bytes": 1099511627776, "name": "file_pool1"}
+                let path = config["path"]
+                    .as_str()
+                    .ok_or_else(|| Status::invalid_argument("path required in config"))?;
+                let capacity_bytes = config["capacity_bytes"]
+                    .as_u64()
+                    .ok_or_else(|| Status::invalid_argument("capacity_bytes required in config"))?;
+                let name = config["name"].as_str().unwrap_or("file_backend");
+
+                // Create the backing file and AIO bdev.
+                std::fs::create_dir_all(path)
+                    .map_err(|e| Status::internal(format!("create directory {}: {}", path, e)))?;
+                let backing_file = format!("{}/novastor-chunks.dat", path);
+                {
+                    let f = std::fs::OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(false)
+                        .open(&backing_file)
+                        .map_err(|e| Status::internal(format!("create backing file: {e}")))?;
+                    let current_size = f.metadata().map(|m| m.len()).unwrap_or(0);
+                    if current_size < capacity_bytes {
+                        f.set_len(capacity_bytes)
+                            .map_err(|e| Status::internal(format!("set backing file size: {e}")))?;
+                    }
+                }
+
+                let aio_config = LocalBdevConfig {
+                    name: name.to_string(),
+                    device_path: backing_file.clone(),
+                    block_size: 4096,
+                };
+                self.bdev_manager
+                    .create_aio_bdev(&aio_config)
+                    .map_err(|e| Status::internal(format!("create AIO bdev: {e}")))?;
+
+                log::info!(
+                    "init_backend: file backend '{}' at '{}' ({}B)",
+                    name,
+                    backing_file,
+                    capacity_bytes
+                );
+                Ok(Response::new(InitBackendResponse {}))
+            }
+            other => Err(Status::invalid_argument(format!(
+                "unknown backend type '{}' — expected raw, lvm, or file",
                 other
             ))),
         }
@@ -703,21 +882,16 @@ impl DataplaneService for DataplaneServiceImpl {
             req.name,
             req.size_bytes
         );
-        match req.backend_type.as_str() {
-            "chunk" => {
-                let bdev =
-                    crate::bdev::novastor_bdev::create(&req.name, req.size_bytes)
-                        .map_err(|e| Status::internal(format!("create novastor bdev: {e}")))?;
-                Ok(Response::new(CreateVolumeResponse {
-                    name: bdev,
-                    size_bytes: req.size_bytes,
-                }))
-            }
-            other => Err(Status::unimplemented(format!(
-                "backend type '{}' create_volume not yet implemented via gRPC",
-                other
-            ))),
-        }
+        // ALL volumes go through novastor_bdev → ChunkEngine → Backend.
+        // The backend type (raw/lvm/file) only matters at init_backend time.
+        // By create_volume, the ChunkEngine is already wired to the underlying
+        // BdevChunkStore. The novastor_bdev creates a virtual SPDK bdev.
+        let bdev = crate::bdev::novastor_bdev::create(&req.name, req.size_bytes)
+            .map_err(|e| Status::internal(format!("create novastor bdev: {e}")))?;
+        Ok(Response::new(CreateVolumeResponse {
+            name: bdev,
+            size_bytes: req.size_bytes,
+        }))
     }
 
     async fn delete_volume(
@@ -730,17 +904,14 @@ impl DataplaneService for DataplaneServiceImpl {
             ));
         }
         let req = request.into_inner();
-        match req.backend_type.as_str() {
-            "chunk" => {
-                crate::bdev::novastor_bdev::destroy(&req.name)
-                    .map_err(|e| Status::internal(format!("destroy novastor bdev: {e}")))?;
-                Ok(Response::new(DeleteVolumeResponse {}))
-            }
-            other => Err(Status::unimplemented(format!(
-                "backend type '{}' delete_volume not yet implemented via gRPC",
-                other
-            ))),
+        // ALL volumes are novastor_bdevs on top of ChunkEngine.
+        crate::bdev::novastor_bdev::destroy(&req.name)
+            .map_err(|e| Status::internal(format!("destroy novastor bdev: {e}")))?;
+        // Clean up the chunk map for this volume.
+        if let Some(maps) = crate::bdev::novastor_bdev::volume_chunk_maps_ref() {
+            maps.write().unwrap().remove(&req.name);
         }
+        Ok(Response::new(DeleteVolumeResponse {}))
     }
 
     // ========================================================================

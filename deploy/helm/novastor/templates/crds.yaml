@@ -28,9 +28,9 @@ spec:
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Mode
+        - name: Backend
           type: string
-          jsonPath: .spec.dataProtection.mode
+          jsonPath: .spec.backendType
         - name: Nodes
           type: integer
           jsonPath: .status.nodeCount
@@ -62,8 +62,6 @@ spec:
             spec:
               description: StoragePoolSpec defines the desired state of StoragePool.
               type: object
-              required:
-                - dataProtection
               properties:
                 nodeSelector:
                   description: NodeSelector selects which nodes belong to this pool.
@@ -114,50 +112,6 @@ spec:
                     minSize:
                       description: MinSize is the minimum device size to include.
                       type: string
-                dataProtection:
-                  description: DataProtection configures how data is protected in this pool.
-                  type: object
-                  required:
-                    - mode
-                  properties:
-                    mode:
-                      description: Mode defines the data protection strategy.
-                      type: string
-                      enum:
-                        - replication
-                        - erasureCoding
-                    replication:
-                      description: Replication holds replication-specific configuration.
-                      type: object
-                      required:
-                        - factor
-                      properties:
-                        factor:
-                          description: Factor is the number of replicas to maintain.
-                          type: integer
-                          default: 3
-                          minimum: 1
-                          maximum: 5
-                        writeQuorum:
-                          description: WriteQuorum is the minimum number of replicas that must acknowledge a write.
-                          type: integer
-                    erasureCoding:
-                      description: ErasureCoding holds erasure-coding-specific configuration.
-                      type: object
-                      required:
-                        - dataShards
-                        - parityShards
-                      properties:
-                        dataShards:
-                          description: DataShards is the number of data shards.
-                          type: integer
-                          default: 4
-                          minimum: 2
-                        parityShards:
-                          description: ParityShards is the number of parity shards.
-                          type: integer
-                          default: 2
-                          minimum: 1
             status:
               description: StoragePoolStatus defines the observed state of StoragePool.
               type: object
@@ -173,9 +127,6 @@ spec:
                   type: string
                 usedCapacity:
                   description: UsedCapacity is the amount of capacity currently in use.
-                  type: string
-                dataProtection:
-                  description: DataProtection summarises the active data protection configuration.
                   type: string
                 conditions:
                   description: Conditions reflect the current reconciliation state of the pool.
@@ -225,6 +176,175 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  name: backendassignments.novastor.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+spec:
+  group: novastor.io
+  names:
+    kind: BackendAssignment
+    listKind: BackendAssignmentList
+    plural: backendassignments
+    singular: backendassignment
+    shortNames:
+      - ba
+    categories:
+      - novastor
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Pool
+          type: string
+          jsonPath: .spec.poolRef
+        - name: Node
+          type: string
+          jsonPath: .spec.nodeName
+        - name: Backend
+          type: string
+          jsonPath: .spec.backendType
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Device
+          type: string
+          jsonPath: .status.device
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: BackendAssignment binds a storage backend to a specific node for a StoragePool.
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: BackendAssignmentSpec defines the desired backend for a node.
+              type: object
+              required:
+                - poolRef
+                - nodeName
+                - backendType
+              properties:
+                poolRef:
+                  description: PoolRef is the name of the StoragePool this assignment belongs to.
+                  type: string
+                nodeName:
+                  description: NodeName is the node this assignment targets.
+                  type: string
+                backendType:
+                  description: BackendType is the backend type (file, lvm, or raw).
+                  type: string
+                  enum:
+                    - file
+                    - lvm
+                    - raw
+                deviceFilter:
+                  description: DeviceFilter specifies which devices to use (for raw/lvm backends).
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                      enum:
+                        - nvme
+                        - ssd
+                        - hdd
+                    minSize:
+                      type: string
+                fileBackend:
+                  description: FileBackend configures the file backend (for file backend only).
+                  type: object
+                  required:
+                    - path
+                  properties:
+                    path:
+                      type: string
+                      default: /var/lib/novastor/file
+                    maxCapacityBytes:
+                      type: integer
+                      format: int64
+            status:
+              description: BackendAssignmentStatus defines the observed provisioning state.
+              type: object
+              properties:
+                phase:
+                  description: Phase is the provisioning state.
+                  type: string
+                  enum:
+                    - Pending
+                    - Provisioning
+                    - Ready
+                    - Failed
+                device:
+                  description: Device is the resolved device path (e.g., /dev/nvme0n1).
+                  type: string
+                pcieAddr:
+                  description: PCIeAddr is the PCIe BDF address for NVMe devices.
+                  type: string
+                bdevName:
+                  description: BdevName is the SPDK bdev name created on this device.
+                  type: string
+                capacity:
+                  description: Capacity is the device capacity in bytes.
+                  type: integer
+                  format: int64
+                message:
+                  description: Message provides details about the current phase.
+                  type: string
+                conditions:
+                  description: Conditions reflect the current reconciliation state.
+                  type: array
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        type: string
+                        maxLength: 316
+                        pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$'
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
   name: blockvolumes.novastor.io
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.5
@@ -256,6 +376,9 @@ spec:
         - name: Size
           type: string
           jsonPath: .spec.size
+        - name: Protection
+          type: string
+          jsonPath: .spec.dataProtection.mode
         - name: Access
           type: string
           jsonPath: .spec.accessMode
@@ -291,6 +414,7 @@ spec:
                 - pool
                 - size
                 - accessMode
+                - dataProtection
               properties:
                 pool:
                   description: Pool is the name of the StoragePool from which to provision the volume.
@@ -304,6 +428,43 @@ spec:
                   enum:
                     - ReadWriteOnce
                     - ReadOnlyMany
+                dataProtection:
+                  description: DataProtection configures how this volume's data is protected.
+                  type: object
+                  required:
+                    - mode
+                  properties:
+                    mode:
+                      type: string
+                      enum:
+                        - replication
+                        - erasureCoding
+                    replication:
+                      type: object
+                      required:
+                        - factor
+                      properties:
+                        factor:
+                          type: integer
+                          default: 3
+                          minimum: 1
+                          maximum: 5
+                        writeQuorum:
+                          type: integer
+                    erasureCoding:
+                      type: object
+                      required:
+                        - dataShards
+                        - parityShards
+                      properties:
+                        dataShards:
+                          type: integer
+                          default: 4
+                          minimum: 2
+                        parityShards:
+                          type: integer
+                          default: 2
+                          minimum: 1
             status:
               description: BlockVolumeStatus defines the observed state of BlockVolume.
               type: object
@@ -402,6 +563,9 @@ spec:
         - name: Capacity
           type: string
           jsonPath: .spec.capacity
+        - name: Protection
+          type: string
+          jsonPath: .spec.dataProtection.mode
         - name: Protocol
           type: string
           jsonPath: .spec.export.protocol
@@ -437,6 +601,7 @@ spec:
                 - pool
                 - capacity
                 - accessMode
+                - dataProtection
               properties:
                 pool:
                   description: Pool is the name of the StoragePool from which to provision the filesystem.
@@ -450,6 +615,43 @@ spec:
                   enum:
                     - ReadWriteMany
                     - ReadOnlyMany
+                dataProtection:
+                  description: DataProtection configures how this volume's data is protected.
+                  type: object
+                  required:
+                    - mode
+                  properties:
+                    mode:
+                      type: string
+                      enum:
+                        - replication
+                        - erasureCoding
+                    replication:
+                      type: object
+                      required:
+                        - factor
+                      properties:
+                        factor:
+                          type: integer
+                          default: 3
+                          minimum: 1
+                          maximum: 5
+                        writeQuorum:
+                          type: integer
+                    erasureCoding:
+                      type: object
+                      required:
+                        - dataShards
+                        - parityShards
+                      properties:
+                        dataShards:
+                          type: integer
+                          default: 4
+                          minimum: 2
+                        parityShards:
+                          type: integer
+                          default: 2
+                          minimum: 1
                 export:
                   description: Export defines how the filesystem is exposed to clients.
                   type: object
@@ -547,6 +749,9 @@ spec:
         - name: Pool
           type: string
           jsonPath: .spec.pool
+        - name: Protection
+          type: string
+          jsonPath: .spec.dataProtection.mode
         - name: Port
           type: integer
           jsonPath: .spec.endpoint.service.port
@@ -581,10 +786,48 @@ spec:
               required:
                 - pool
                 - endpoint
+                - dataProtection
               properties:
                 pool:
                   description: Pool is the name of the StoragePool backing this object store.
                   type: string
+                dataProtection:
+                  description: DataProtection configures how this volume's data is protected.
+                  type: object
+                  required:
+                    - mode
+                  properties:
+                    mode:
+                      type: string
+                      enum:
+                        - replication
+                        - erasureCoding
+                    replication:
+                      type: object
+                      required:
+                        - factor
+                      properties:
+                        factor:
+                          type: integer
+                          default: 3
+                          minimum: 1
+                          maximum: 5
+                        writeQuorum:
+                          type: integer
+                    erasureCoding:
+                      type: object
+                      required:
+                        - dataShards
+                        - parityShards
+                      properties:
+                        dataShards:
+                          type: integer
+                          default: 4
+                          minimum: 2
+                        parityShards:
+                          type: integer
+                          default: 2
+                          minimum: 1
                 endpoint:
                   description: Endpoint configures how the S3-compatible API is exposed.
                   type: object

@@ -3,7 +3,6 @@ package policy
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/azrtydxb/novastor/api/v1alpha1"
 )
@@ -34,18 +33,17 @@ type NodeMeta struct {
 
 // VolumeMeta represents metadata about a volume.
 type VolumeMeta struct {
-	VolumeID  string   `json:"volumeID"`
-	Pool      string   `json:"pool"`
-	SizeBytes uint64   `json:"sizeBytes"`
-	ChunkIDs  []string `json:"chunkIDs"`
+	VolumeID       string                       `json:"volumeID"`
+	Pool           string                       `json:"pool"`
+	SizeBytes      uint64                       `json:"sizeBytes"`
+	ChunkIDs       []string                     `json:"chunkIDs"`
+	DataProtection *v1alpha1.DataProtectionSpec `json:"dataProtection,omitempty"`
 }
 
 // ReplicationChecker verifies compliance for replication-mode chunks.
 type ReplicationChecker struct {
 	metaClient  MetadataClient
 	nodeChecker NodeAvailabilityChecker
-	mu          sync.RWMutex
-	pool        *v1alpha1.StoragePool
 }
 
 // NewReplicationChecker creates a new ReplicationChecker.
@@ -56,16 +54,13 @@ func NewReplicationChecker(metaClient MetadataClient, nodeChecker NodeAvailabili
 	}
 }
 
-// RequiredReplicas returns the replication factor from the pool spec.
-func (c *ReplicationChecker) RequiredReplicas() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if c.pool == nil || c.pool.Spec.DataProtection.Replication == nil {
+// RequiredReplicas returns the replication factor from the volume's data protection config.
+func (c *ReplicationChecker) RequiredReplicas(volume *VolumeMeta) int {
+	if volume == nil || volume.DataProtection == nil || volume.DataProtection.Replication == nil {
 		return 3 // Default fallback
 	}
 
-	factor := c.pool.Spec.DataProtection.Replication.Factor
+	factor := volume.DataProtection.Replication.Factor
 	if factor == 0 {
 		return 3 // Default fallback
 	}
@@ -74,19 +69,14 @@ func (c *ReplicationChecker) RequiredReplicas() int {
 }
 
 // CheckChunk verifies that a replicated chunk has the required number of healthy replicas.
-func (c *ReplicationChecker) CheckChunk(ctx context.Context, chunkID string, volume *VolumeMeta, pool *v1alpha1.StoragePool) (*ChunkComplianceResult, error) {
-	// Store pool reference for RequiredReplicas()
-	c.mu.Lock()
-	c.pool = pool
-	c.mu.Unlock()
-
-	if pool.Spec.DataProtection.Mode != "replication" {
-		return nil, fmt.Errorf("pool %s is not in replication mode", pool.Name)
+func (c *ReplicationChecker) CheckChunk(ctx context.Context, chunkID string, volume *VolumeMeta) (*ChunkComplianceResult, error) {
+	if volume.DataProtection == nil || volume.DataProtection.Mode != "replication" {
+		return nil, fmt.Errorf("volume %s is not in replication mode", volume.VolumeID)
 	}
 
-	replicationSpec := pool.Spec.DataProtection.Replication
+	replicationSpec := volume.DataProtection.Replication
 	if replicationSpec == nil {
-		return nil, fmt.Errorf("pool %s has nil replication spec", pool.Name)
+		return nil, fmt.Errorf("volume %s has nil replication spec", volume.VolumeID)
 	}
 
 	expectedCount := replicationSpec.Factor
@@ -103,7 +93,7 @@ func (c *ReplicationChecker) CheckChunk(ctx context.Context, chunkID string, vol
 	result := &ChunkComplianceResult{
 		ChunkID:        chunkID,
 		VolumeID:       volume.VolumeID,
-		Pool:           pool.Name,
+		Pool:           volume.Pool,
 		ProtectionMode: "replication",
 		ExpectedCount:  expectedCount,
 	}
@@ -133,8 +123,8 @@ func (c *ReplicationChecker) CheckChunk(ctx context.Context, chunkID string, vol
 
 // CheckChunkWithChecksum verifies chunk compliance including checksum validation.
 // It attempts to read the chunk from an available node and verify its checksum.
-func (c *ReplicationChecker) CheckChunkWithChecksum(ctx context.Context, chunkID string, volume *VolumeMeta, pool *v1alpha1.StoragePool, chunkReader ChunkReader) (*ChunkComplianceResult, error) {
-	result, err := c.CheckChunk(ctx, chunkID, volume, pool)
+func (c *ReplicationChecker) CheckChunkWithChecksum(ctx context.Context, chunkID string, volume *VolumeMeta, chunkReader ChunkReader) (*ChunkComplianceResult, error) {
+	result, err := c.CheckChunk(ctx, chunkID, volume)
 	if err != nil {
 		return nil, err
 	}

@@ -5,9 +5,9 @@ crds:
 
 global:
   image:
-    registry: ghcr.io/azrtydxb/novastor
-    tag: "0.1.0"
-    pullPolicy: IfNotPresent
+    registry: 192.168.100.11:30500/novastor
+    tag: "latest"
+    pullPolicy: Always
   imagePullSecrets: []
   tls:
     # enabled -- Enable mutual TLS for all inter-component gRPC communication.
@@ -18,9 +18,9 @@ global:
     # Uses the main controller image by default which includes the
     # certificate generation logic from internal/transport/certgen.go.
     bootstrapImage:
-      registry: ghcr.io/azrtydxb/novastor
+      registry: 192.168.100.11:30500/novastor
       repository: novastor-controller
-      tag: "0.1.0"
+      tag: "latest"
     # rotationInterval -- Interval for certificate rotation checks.
     # The bootstrap Job creates 1-year certificates; this controls
     # how often components check for updated certificates in the Secret.
@@ -118,7 +118,7 @@ agent:
   nodeSelector: {}
   tolerations: []
   heartbeatInterval: "500ms"    # Fast heartbeat for failover detection
-  spdkBaseBdev: "NVMe0n1"       # SPDK bdev for chunk backend (NVMe0n1 for real NVMe; override to Malloc0 + testMode for testing)
+  spdkBaseBdev: "NVMe0n1"       # SPDK base bdev for storage backend (NVMe0n1 for real NVMe; override to Malloc0 + testMode for testing)
   testMode: false               # Test mode only: set to true with spdkBaseBdev=Malloc0 for dev/CI environments
   failover:
     enabled: true
@@ -269,8 +269,7 @@ scheduler:
 storageClass:
   name: novastor-block
   isDefault: false
-  pool: nvme-replicated
-  dataProtection: replication
+  pool: nvme-raw
   reclaimPolicy: Delete
   volumeBindingMode: WaitForFirstConsumer
 

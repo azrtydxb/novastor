@@ -3,11 +3,7 @@ kind: StoragePool
 metadata:
   name: test-pool
 spec:
+  backendType: raw
   nodeSelector:
     matchLabels:
       novastor.io/storage-tier: nvme
-  dataProtection:
-    mode: replication
-    replication:
-      factor: 3
-      writeQuorum: 2

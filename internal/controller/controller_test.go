@@ -33,14 +33,9 @@ func TestStoragePoolReconciler_ValidPool(t *testing.T) {
 			Name: "test-pool",
 		},
 		Spec: novastorev1alpha1.StoragePoolSpec{
+			BackendType: "raw",
 			NodeSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"storage": "fast"},
-			},
-			DataProtection: novastorev1alpha1.DataProtectionSpec{
-				Mode: "replication",
-				Replication: &novastorev1alpha1.ReplicationSpec{
-					Factor: 3,
-				},
 			},
 		},
 	}
@@ -87,9 +82,6 @@ func TestStoragePoolReconciler_ValidPool(t *testing.T) {
 	if updated.Status.NodeCount != 1 {
 		t.Errorf("expected nodeCount 1, got %d", updated.Status.NodeCount)
 	}
-	if updated.Status.DataProtection != "replication" {
-		t.Errorf("expected dataProtection replication, got %q", updated.Status.DataProtection)
-	}
 	if updated.Status.TotalCapacity == "" || updated.Status.TotalCapacity == "0" {
 		t.Errorf("expected non-zero totalCapacity, got %q", updated.Status.TotalCapacity)
 	}
@@ -109,16 +101,17 @@ func TestStoragePoolReconciler_ValidPool(t *testing.T) {
 	}
 }
 
-func TestStoragePoolReconciler_InvalidSpec(t *testing.T) {
+func TestStoragePoolReconciler_NoMatchingNodes(t *testing.T) {
 	scheme := testScheme()
 
 	pool := &novastorev1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "bad-pool",
+			Name: "empty-pool",
 		},
 		Spec: novastorev1alpha1.StoragePoolSpec{
-			DataProtection: novastorev1alpha1.DataProtectionSpec{
-				Mode: "", // Invalid: empty mode.
+			BackendType: "raw",
+			NodeSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"storage": "nonexistent"},
 			},
 		},
 	}
@@ -131,20 +124,23 @@ func TestStoragePoolReconciler_InvalidSpec(t *testing.T) {
 
 	reconciler := &StoragePoolReconciler{Client: fakeClient}
 
-	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "bad-pool"},
+	result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "empty-pool"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if result.RequeueAfter == 0 {
+		t.Fatalf("expected requeue for no matching nodes")
+	}
 
 	var updated novastorev1alpha1.StoragePool
-	if err := fakeClient.Get(context.Background(), types.NamespacedName{Name: "bad-pool"}, &updated); err != nil {
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{Name: "empty-pool"}, &updated); err != nil {
 		t.Fatalf("failed to get updated pool: %v", err)
 	}
 
-	if updated.Status.Phase != "Failed" {
-		t.Errorf("expected phase Failed, got %q", updated.Status.Phase)
+	if updated.Status.Phase != "Pending" {
+		t.Errorf("expected phase Pending, got %q", updated.Status.Phase)
 	}
 }
 

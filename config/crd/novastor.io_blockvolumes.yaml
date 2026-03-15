@@ -21,6 +21,9 @@ spec:
     - jsonPath: .spec.size
       name: Size
       type: string
+    - jsonPath: .spec.dataProtection.mode
+      name: Protection
+      type: string
     - jsonPath: .spec.accessMode
       name: Access
       type: string
@@ -56,6 +59,43 @@ spec:
                 - ReadWriteOnce
                 - ReadOnlyMany
                 type: string
+              dataProtection:
+                description: DataProtection configures how this volume's data is protected.
+                properties:
+                  mode:
+                    enum:
+                    - replication
+                    - erasureCoding
+                    type: string
+                  replication:
+                    properties:
+                      factor:
+                        default: 3
+                        maximum: 5
+                        minimum: 1
+                        type: integer
+                      writeQuorum:
+                        type: integer
+                    required:
+                    - factor
+                    type: object
+                  erasureCoding:
+                    properties:
+                      dataShards:
+                        default: 4
+                        minimum: 2
+                        type: integer
+                      parityShards:
+                        default: 2
+                        minimum: 1
+                        type: integer
+                    required:
+                    - dataShards
+                    - parityShards
+                    type: object
+                required:
+                - mode
+                type: object
               pool:
                 type: string
               quota:
@@ -68,6 +108,7 @@ spec:
                 type: string
             required:
             - accessMode
+            - dataProtection
             - pool
             - size
             type: object

@@ -178,13 +178,13 @@ func (r *PolicyEngineRunnable) PoolComplianceStatus(ctx context.Context, poolNam
 }
 
 // VolumeComplianceStatus returns the current compliance status for a specific volume.
-func (r *PolicyEngineRunnable) VolumeComplianceStatus(ctx context.Context, volumeID string, pool *v1alpha1.StoragePool) (*VolumeComplianceReport, error) {
+func (r *PolicyEngineRunnable) VolumeComplianceStatus(ctx context.Context, volumeID string) (*VolumeComplianceReport, error) {
 	volume, err := r.engine.metaClient.GetVolumeMeta(ctx, volumeID)
 	if err != nil {
 		return nil, fmt.Errorf("getting volume metadata: %w", err)
 	}
 
-	return r.engine.CheckVolumeCompliance(ctx, volume, pool)
+	return r.engine.CheckVolumeCompliance(ctx, volume)
 }
 
 // RepairStatus returns the current status of the repair queue.

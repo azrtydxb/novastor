@@ -7,3 +7,8 @@ spec:
   pool: test-pool
   size: "10Gi"
   accessMode: ReadWriteOnce
+  dataProtection:
+    mode: replication
+    replication:
+      factor: 3
+      writeQuorum: 2

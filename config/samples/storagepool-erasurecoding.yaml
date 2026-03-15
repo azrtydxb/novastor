@@ -6,11 +6,7 @@ spec:
   nodeSelector:
     matchLabels:
       novastor.io/storage-tier: ssd
+  backendType: raw
   deviceFilter:
     type: ssd
     minSize: "200Gi"
-  dataProtection:
-    mode: erasureCoding
-    erasureCoding:
-      dataShards: 4
-      parityShards: 2
