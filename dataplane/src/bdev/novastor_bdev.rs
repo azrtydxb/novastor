@@ -102,6 +102,23 @@ fn chunk_lock(volume: &str, chunk_idx: usize) -> Arc<Mutex<()>> {
         .clone()
 }
 
+/// Remove all per-chunk lock entries for the given volume from CHUNK_LOCKS.
+/// Called during volume destruction to prevent unbounded memory growth.
+fn cleanup_volume_locks(volume_name: &str) {
+    if let Some(locks) = CHUNK_LOCKS.get() {
+        let mut map = locks.lock().unwrap();
+        let before = map.len();
+        map.retain(|(vol, _)| vol != volume_name);
+        let removed = before - map.len();
+        if removed > 0 {
+            info!(
+                "novastor_bdev: cleaned up {} chunk locks for volume '{}'",
+                removed, volume_name
+            );
+        }
+    }
+}
+
 /// Read-modify-write helper: ensures every write goes through full 4MB chunks.
 ///
 /// For sub-chunk writes, reads the existing chunk, overlays the new data at the
@@ -378,6 +395,20 @@ pub fn destroy(volume_name: &str) -> Result<()> {
     reactor_dispatch::send_to_reactor(move || unsafe {
         ffi::spdk_io_device_unregister(ctx_addr as *mut c_void, None);
     });
+
+    // Clean up per-chunk locks to prevent unbounded memory growth.
+    cleanup_volume_locks(volume_name);
+
+    // Clean up the volume's chunk map cache.
+    if let Some(maps) = VOLUME_CHUNK_MAPS.get() {
+        let mut map = maps.write().unwrap();
+        if map.remove(volume_name).is_some() {
+            info!(
+                "novastor_bdev: cleaned up chunk map for volume '{}'",
+                volume_name
+            );
+        }
+    }
 
     info!("novastor_bdev: destroyed bdev for volume '{}'", volume_name);
     Ok(())
