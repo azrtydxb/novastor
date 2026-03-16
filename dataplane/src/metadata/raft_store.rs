@@ -802,6 +802,7 @@ mod tests {
             chunk_index: 5,
             chunk_id: "cafebabe".to_string(),
             ec_params: None,
+            dirty_bitmap: 0,
         };
         let req = MetadataRequest::PutChunkMap {
             volume_id: vol_id.clone(),

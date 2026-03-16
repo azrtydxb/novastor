@@ -451,6 +451,7 @@ mod tests {
             chunk_index: index,
             chunk_id: format!("chunk-{index:04}"),
             ec_params: None,
+            dirty_bitmap: 0,
         }
     }
 
@@ -502,6 +503,7 @@ mod tests {
                 data_shards: 4,
                 parity_shards: 2,
             }),
+            dirty_bitmap: 0,
         };
         store.put_chunk_map("vol-1", &entry).unwrap();
         let got = store.get_chunk_map("vol-1", 0).unwrap().unwrap();

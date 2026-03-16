@@ -207,6 +207,7 @@ mod tests {
             chunk_index: 5,
             chunk_id: "deadbeef".to_string(),
             ec_params: None,
+            dirty_bitmap: 0,
         };
 
         // put

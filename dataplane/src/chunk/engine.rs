@@ -264,6 +264,7 @@ impl ChunkEngine {
                 chunk_index,
                 chunk_id,
                 ec_params,
+                dirty_bitmap: u64::MAX,
             });
         }
 

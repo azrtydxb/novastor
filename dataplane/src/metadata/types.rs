@@ -50,6 +50,9 @@ pub struct ChunkMapEntry {
     pub chunk_index: u64,
     pub chunk_id: String,
     pub ec_params: Option<ErasureParams>,
+    /// Bitmap of which 64KB sub-blocks have been written (64 bits = 64 sub-blocks).
+    #[serde(default)]
+    pub dirty_bitmap: u64,
 }
 
 /// Requests that can be applied to the metadata state machine.
@@ -133,6 +136,7 @@ mod tests {
             chunk_index: 7,
             chunk_id: "deadbeef".to_string(),
             ec_params: None,
+            dirty_bitmap: 0,
         };
 
         let json = serde_json::to_string(&entry).expect("serialize");
@@ -152,6 +156,7 @@ mod tests {
                 data_shards: 4,
                 parity_shards: 2,
             }),
+            dirty_bitmap: 0,
         };
 
         let json = serde_json::to_string(&entry).expect("serialize");
