@@ -17,6 +17,8 @@ pub type Placement = (String, String);
 /// failure-domain separation at the node level.
 pub fn select(chunk_id: &str, count: usize, topology: &ClusterMap) -> Vec<Placement> {
     // Collect online nodes that have positive total weight.
+    // Nodes with weight=0 (no backends or all backends weight=0) are excluded
+    // from CRUSH selection — they cannot store data.
     let mut candidates: Vec<&Node> = topology
         .nodes()
         .iter()

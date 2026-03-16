@@ -1,6 +1,24 @@
 // Package datamover provides data movement functionality for NovaStor.
 // This package handles reconstruction of erasure-coded chunks and
 // data rebalancing between storage nodes.
+//
+// ARCHITECTURE VIOLATION: EC reconstruction (ECReconstructor and agentReplicator) is
+// implemented in Go, but per the NovaStor layered architecture, ALL data-path I/O
+// (including erasure coding encode/decode/reconstruct) MUST happen in the Rust SPDK
+// dataplane. The Go agent is management/config only.
+//
+// This Go implementation should be replaced with gRPC calls to the Rust dataplane's
+// EC reconstruction service. The dataplane already owns the chunk engine and has access
+// to the Reed-Solomon codec via the klauspost/reedsolomon Rust equivalent. The correct
+// flow is:
+//  1. Go controller detects a missing/degraded shard via policy engine
+//  2. Go controller issues a ReconstructShard gRPC call to the Rust dataplane
+//  3. Rust dataplane reads available shards, reconstructs, and writes the result
+//  4. Rust dataplane reports completion back to Go via gRPC response
+//
+// Until the Rust dataplane EC reconstruction gRPC service is implemented, this Go code
+// exists as a placeholder to define the interface contract. It MUST NOT be used in
+// production — it violates invariant #3 (Go agent never touches data).
 package datamover
 
 import (

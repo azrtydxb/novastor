@@ -239,25 +239,14 @@ impl StorageBackend for LvmBackend {
             )));
         }
 
-        // TODO: call spdk_lvol_resize with cached lvol pointer.
-        let mut volumes = self.volumes.lock().unwrap();
-        let vol = volumes
-            .get_mut(name)
-            .ok_or_else(|| DataPlaneError::LvolError(format!("volume '{}' not found", name)))?;
-        vol.size_bytes = new_size_bytes;
-        vol.block_size = 512;
-
-        Ok(VolumeInfo {
-            name: vol.name.clone(),
-            backend: BackendType::Lvm,
-            size_bytes: new_size_bytes,
-            used_bytes: if vol.thin { 0 } else { new_size_bytes },
-            block_size: vol.block_size,
-            healthy: true,
-            is_snapshot: false,
-            parent_snapshot: vol.parent_snapshot.clone(),
-            thin_provisioned: vol.thin,
-        })
+        // TODO(gap-18): Actually call spdk_lvol_resize via reactor_dispatch.
+        // This requires caching the spdk_lvol pointer from create_volume and
+        // passing it to vbdev_lvol_resize with a completion callback.
+        // For now, return an error rather than silently faking a resize.
+        Err(DataPlaneError::LvolError(
+            "lvol resize not yet implemented: vbdev_lvol_resize FFI integration pending (gap-18)"
+                .into(),
+        ))
     }
 
     fn stat_volume(&self, name: &str) -> Result<VolumeInfo> {

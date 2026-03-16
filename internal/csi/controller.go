@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	nvmepb "github.com/azrtydxb/novastor/api/proto/nvme"
 	"github.com/azrtydxb/novastor/internal/logging"
 	"github.com/azrtydxb/novastor/internal/metadata"
 	"github.com/azrtydxb/novastor/internal/metrics"
@@ -89,7 +90,7 @@ type PlacementEngine interface {
 // translation only. The protection scheme is passed in CreateTarget.
 type AgentTargetClient interface {
 	// CreateTarget creates an NVMe-oF target on the agent and returns connection params.
-	CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32) (subsystemNQN, targetAddress, targetPort string, err error)
+	CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32, prot protectionConfig) (subsystemNQN, targetAddress, targetPort string, err error)
 	// DeleteTarget tears down the NVMe-oF target on the agent.
 	DeleteTarget(ctx context.Context, agentAddr string, volumeID string) error
 	// SetANAState changes the ANA state for a volume's NVMe-oF target on the agent.
@@ -241,6 +242,23 @@ func (cfg protectionConfig) toProtectionProfile() *metadata.ProtectionProfile {
 	}
 
 	return profile
+}
+
+// toVolumeProtection converts protectionConfig to the NVMe proto VolumeProtection message.
+func (cfg protectionConfig) toVolumeProtection() *nvmepb.VolumeProtection {
+	if cfg.replicas <= 1 && cfg.dataShards == 0 {
+		return nil
+	}
+	vp := &nvmepb.VolumeProtection{}
+	if cfg.dataShards > 0 && cfg.parityShards > 0 {
+		vp.Mode = "erasure_coding"
+		vp.DataShards = uint32(cfg.dataShards)
+		vp.ParityShards = uint32(cfg.parityShards)
+	} else {
+		vp.Mode = "replication"
+		vp.ReplicationFactor = uint32(cfg.replicas)
+	}
+	return vp
 }
 
 // requiredNodes returns the number of nodes needed for the protection scheme.
@@ -496,7 +514,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		// is implemented. For now, single-path to the owner is correct.
 		ownerNode := uniqueNodes[0]
 		nqn, addr, port, createErr := cs.agentTarget.CreateTarget(
-			ctx, ownerNode, volumeID, int64(requiredBytes), "optimized", anaGroupID,
+			ctx, ownerNode, volumeID, int64(requiredBytes), "optimized", anaGroupID, protCfg,
 		)
 		if createErr != nil {
 			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)

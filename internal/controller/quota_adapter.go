@@ -19,43 +19,24 @@ func NewGRPCQuotaAdapter(client *metadata.GRPCClient) *GRPCQuotaAdapter {
 }
 
 // SetQuota sets a quota for a scope via the gRPC metadata service.
+//
+// TODO(proto): The metadata service proto (api/proto/metadata/metadata.proto) does not
+// yet define RPCs for quota management (SetQuota, GetQuota, GetUsage, DeleteQuota).
+// The local QuotaStore implementation exists in internal/metadata/quota.go, but there
+// is no gRPC surface to expose it remotely. To wire this stub:
+//  1. Add QuotaSpec/QuotaUsage messages and SetQuota/GetUsage RPCs to metadata.proto
+//  2. Regenerate protobuf Go code (make generate-proto)
+//  3. Implement the RPCs in grpc_server.go (delegating to QuotaStore)
+//  4. Add client methods to grpc_client.go (e.g. SetQuota, GetUsage)
+//  5. Call the client methods here instead of returning errors
 func (a *GRPCQuotaAdapter) SetQuota(ctx context.Context, scope QuotaScopeSpec, storageHard, storageSoft int64, objectCountHard int64) error {
-	// Use the metadata service's generic Execute operation
-	args := map[string]any{
-		"scope": map[string]any{
-			"kind": scope.Kind,
-			"name": scope.Name,
-		},
-		"storage": map[string]any{
-			"hard": storageHard,
-			"soft": storageSoft,
-		},
-		"objectCount": map[string]any{
-			"hard": objectCountHard,
-		},
-	}
-
-	// Call via raw Execute - for now we'll store this in the RaftStore's QuotaStore format
-	// The metadata service needs to support "SetQuota" operation
-	// For now, this is a stub that documents the needed integration
-
-	// TODO: Implement gRPC call to metadata service
-	// The metadata service should expose SetQuota/GetUsage operations
-	// similar to how it exposes PutVolumeMeta/GetVolumeMeta
-
-	_ = args
-	_ = ctx
-	return fmt.Errorf("SetQuota via gRPC: not yet implemented - metadata service needs SetQuota operation")
+	return fmt.Errorf("SetQuota via gRPC: not yet implemented — metadata proto lacks quota RPCs")
 }
 
 // GetUsage retrieves the current usage for a scope via the gRPC metadata service.
+// See SetQuota TODO for the proto changes needed.
 func (a *GRPCQuotaAdapter) GetUsage(ctx context.Context, scope QuotaScopeSpec) (storageUsed, objectCountUsed int64, err error) {
-	// TODO: Implement gRPC call to metadata service
-	// The metadata service should expose GetUsage operation
-
-	_ = scope
-	_ = ctx
-	return 0, 0, fmt.Errorf("GetUsage via gRPC: not yet implemented - metadata service needs GetUsage operation")
+	return 0, 0, fmt.Errorf("GetUsage via gRPC: not yet implemented — metadata proto lacks quota RPCs")
 }
 
 // LocalMetadataAdapter implements MetadataClient using a local metadata.RaftStore.

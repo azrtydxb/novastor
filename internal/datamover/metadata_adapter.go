@@ -20,47 +20,51 @@ func NewGRPCMetadataStore(client *metadata.GRPCClient) *GRPCMetadataStore {
 }
 
 // ---- Heal task operations ----
+//
+// TODO(proto): The metadata service proto (api/proto/metadata/metadata.proto) does not
+// yet define RPCs for heal tasks (PutHealTask, GetHealTask, ListHealTasks, DeleteHealTask).
+// The RaftStore has local implementations in protection_meta.go, but there is no gRPC
+// surface to expose them remotely. To wire these stubs:
+//   1. Add HealTask message and CRUD RPCs to metadata.proto
+//   2. Regenerate protobuf Go code (make generate-proto)
+//   3. Implement the RPCs in grpc_server.go (delegating to RaftStore)
+//   4. Add client methods to grpc_client.go
+//   5. Call the client methods here instead of returning errors
 
 func (s *GRPCMetadataStore) PutHealTask(ctx context.Context, task *metadata.HealTask) error {
-	// TODO: implement via generic Execute
-	return fmt.Errorf("PutHealTask: not implemented via gRPC")
+	return fmt.Errorf("PutHealTask: not implemented via gRPC — metadata proto lacks heal task RPCs")
 }
 
 func (s *GRPCMetadataStore) GetHealTask(ctx context.Context, taskID string) (*metadata.HealTask, error) {
-	// TODO: implement via generic Execute
-	return nil, fmt.Errorf("GetHealTask: not implemented via gRPC")
+	return nil, fmt.Errorf("GetHealTask: not implemented via gRPC — metadata proto lacks heal task RPCs")
 }
 
 func (s *GRPCMetadataStore) ListPendingHealTasks(ctx context.Context) ([]*metadata.HealTask, error) {
-	// TODO: implement via generic Execute
-	return nil, fmt.Errorf("ListPendingHealTasks: not implemented via gRPC")
+	return nil, fmt.Errorf("ListPendingHealTasks: not implemented via gRPC — metadata proto lacks heal task RPCs")
 }
 
 func (s *GRPCMetadataStore) ListHealTasksByVolume(ctx context.Context, volumeID string) ([]*metadata.HealTask, error) {
-	// TODO: implement via generic Execute
-	return nil, fmt.Errorf("ListHealTasksByVolume: not implemented via gRPC")
+	return nil, fmt.Errorf("ListHealTasksByVolume: not implemented via gRPC — metadata proto lacks heal task RPCs")
 }
 
 func (s *GRPCMetadataStore) DeleteHealTask(ctx context.Context, taskID string) error {
-	// TODO: implement via generic Execute
-	return fmt.Errorf("DeleteHealTask: not implemented via gRPC")
+	return fmt.Errorf("DeleteHealTask: not implemented via gRPC — metadata proto lacks heal task RPCs")
 }
 
 // ---- Shard placement operations ----
+// These are fully wired to the metadata gRPC service which has
+// PutShardPlacement, GetShardPlacements, and DeleteShardPlacement RPCs.
 
 func (s *GRPCMetadataStore) PutShardPlacement(ctx context.Context, sp *metadata.ShardPlacement) error {
-	// TODO: implement via generic Execute
-	return fmt.Errorf("PutShardPlacement: not implemented via gRPC")
+	return s.client.PutShardPlacement(ctx, sp)
 }
 
 func (s *GRPCMetadataStore) GetShardPlacements(ctx context.Context, chunkID string) ([]*metadata.ShardPlacement, error) {
-	// TODO: implement via generic Execute
-	return nil, fmt.Errorf("GetShardPlacements: not implemented via gRPC")
+	return s.client.GetShardPlacements(ctx, chunkID)
 }
 
 func (s *GRPCMetadataStore) DeleteShardPlacement(ctx context.Context, chunkID string, shardIndex int) error {
-	// TODO: implement via generic Execute
-	return fmt.Errorf("DeleteShardPlacement: not implemented via gRPC")
+	return s.client.DeleteShardPlacement(ctx, chunkID, shardIndex)
 }
 
 // ---- Lock operations ----

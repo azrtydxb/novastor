@@ -114,20 +114,25 @@ impl GrpcServer {
                 (Some(cs), Some(bm), Some(nm)) => {
                     tonic::transport::Server::builder()
                         .add_service(ChunkServiceServer::new(ChunkServiceImpl::new(cs)))
-                        .add_service(DataplaneServiceServer::new(DataplaneServiceImpl::new(
-                            bm, nm,
-                        )))
+                        .add_service(
+                            DataplaneServiceServer::new(DataplaneServiceImpl::new(bm, nm))
+                                .max_decoding_message_size(8 * 1024 * 1024)
+                                .max_encoding_message_size(8 * 1024 * 1024),
+                        )
                         .serve_with_incoming(incoming)
                         .await
                         .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
                 }
-                // Chunk store unavailable — DataplaneService only
+                // Chunk store unavailable — DataplaneService only (production path).
+                // PutChunk/GetChunk inter-dataplane RPCs handle 4MB+ chunks,
+                // so we increase the max message size from the 4MB default.
                 (None, Some(bm), Some(nm)) => {
-                    log::warn!("chunk store unavailable — DataplaneService only");
                     tonic::transport::Server::builder()
-                        .add_service(DataplaneServiceServer::new(DataplaneServiceImpl::new(
-                            bm, nm,
-                        )))
+                        .add_service(
+                            DataplaneServiceServer::new(DataplaneServiceImpl::new(bm, nm))
+                                .max_decoding_message_size(8 * 1024 * 1024)
+                                .max_encoding_message_size(8 * 1024 * 1024),
+                        )
                         .serve_with_incoming(incoming)
                         .await
                         .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));

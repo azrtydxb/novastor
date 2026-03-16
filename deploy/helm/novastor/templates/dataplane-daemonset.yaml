@@ -63,6 +63,10 @@ spec:
               mountPath: /var/tmp
             - name: chunk-data
               mountPath: /var/lib/novastor/chunks
+            - name: metadata
+              mountPath: /var/lib/novastor/metadata
+            - name: policy-data
+              mountPath: /var/lib/novastor/policy
           resources:
             {{- toYaml .Values.dataplane.resources | nindent 12 }}
       volumes:
@@ -86,6 +90,14 @@ spec:
         - name: chunk-data
           hostPath:
             path: /var/lib/novastor/chunks
+            type: DirectoryOrCreate
+        - name: metadata
+          hostPath:
+            path: /var/lib/novastor/metadata
+            type: DirectoryOrCreate
+        - name: policy-data
+          hostPath:
+            path: /var/lib/novastor/policy
             type: DirectoryOrCreate
       {{- with .Values.dataplane.nodeSelector }}
       nodeSelector:

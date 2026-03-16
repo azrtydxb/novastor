@@ -162,6 +162,12 @@ impl Protection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NvmeBdevConfig {
+    pub name: String,
+    pub pcie_addr: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErasureBdevConfig {
     pub volume_id: String,
     pub data_shards: u32,

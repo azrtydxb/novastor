@@ -268,6 +268,11 @@ impl ErasureBdev {
             shard_index, shard.target.address
         );
         shard.state = ShardState::Degraded;
+        // TODO(gap-17): Notify the PolicyEngine that this shard is degraded so
+        // it can trigger a repair operation (re-encode from surviving shards and
+        // write to a new node). Currently mark_shard_degraded/missing only updates
+        // local state — no downstream effect. The PolicyEngine's reconcile loop
+        // should detect degraded EC shards and emit ReconstructShard actions.
         Ok(())
     }
 

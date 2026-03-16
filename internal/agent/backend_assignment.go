@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,6 +30,7 @@ import (
 type BackendAssignmentReconciler struct {
 	client.Client
 	NodeName string
+	NodeUUID string // Persistent storage node UUID for CRUSH placement
 	DPClient *dataplane.Client
 	Logger   *zap.Logger
 	BaseBdev string // SPDK bdev name to use (must match --spdk-base-bdev)
@@ -51,15 +53,22 @@ func (r *BackendAssignmentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.Get(ctx, req.NamespacedName, &ba); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	r.Logger.Info("reconcile BackendAssignment",
+		zap.String("name", ba.Name),
+		zap.String("node", ba.Spec.NodeName),
+		zap.String("phase", ba.Status.Phase),
+	)
 
 	// Only process assignments for this node.
 	if ba.Spec.NodeName != r.NodeName {
 		return ctrl.Result{}, nil
 	}
 
-	// Skip if already provisioned.
+	// If already provisioned, verify the dataplane state is consistent.
+	// After a dataplane restart, the SPDK bdevs and chunk store are lost
+	// even though the CRD status still says "Ready". Re-initialize them.
 	if ba.Status.Phase == "Ready" {
-		return ctrl.Result{}, nil
+		return r.ensureDataplaneState(ctx, &ba)
 	}
 
 	// Retry failed assignments periodically — the failure may have been
@@ -121,7 +130,7 @@ func (r *BackendAssignmentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Init chunk store on the resulting bdev.
-	if _, err := r.DPClient.InitChunkStore(bdevName); err != nil {
+	if _, err := r.DPClient.InitChunkStore(bdevName, r.NodeName); err != nil {
 		if !strings.Contains(err.Error(), "already") {
 			if isTransientGRPCError(err) {
 				r.Logger.Warn("transient error init chunk store, will retry",
@@ -159,6 +168,125 @@ func (r *BackendAssignmentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		zap.String("device", devicePath),
 		zap.Int64("capacity", capacity),
 	)
+
+	return ctrl.Result{}, nil
+}
+
+// ensureDataplaneState re-initializes the backend and chunk store on the
+// dataplane if they have been lost (e.g. after a dataplane pod restart).
+// Both InitBackend and InitChunkStore are idempotent — calling them when the
+// state already exists is a no-op.
+func (r *BackendAssignmentReconciler) ensureDataplaneState(ctx context.Context, ba *novastorev1alpha1.BackendAssignment) (ctrl.Result, error) {
+	bdevName := ba.Status.BdevName
+	if bdevName == "" {
+		bdevName = r.BaseBdev
+	}
+
+	r.Logger.Info("ensureDataplaneState: verifying backend and chunk store",
+		zap.String("name", ba.Name),
+		zap.String("backendType", ba.Spec.BackendType),
+		zap.String("bdevName", bdevName),
+		zap.String("device", ba.Status.Device),
+	)
+
+	// Re-initialize the backend. InitBackend is idempotent; if the bdev
+	// already exists, the dataplane returns success or "already exists".
+	switch ba.Spec.BackendType {
+	case "file":
+		path := "/var/lib/novastor/file"
+		if ba.Spec.FileBackend != nil && ba.Spec.FileBackend.Path != "" {
+			path = ba.Spec.FileBackend.Path
+		}
+		var capacityBytes int64 = 100 * 1024 * 1024 * 1024
+		if ba.Spec.FileBackend != nil && ba.Spec.FileBackend.MaxCapacityBytes != nil {
+			capacityBytes = *ba.Spec.FileBackend.MaxCapacityBytes
+		}
+		config := map[string]interface{}{
+			"path":           path,
+			"capacity_bytes": capacityBytes,
+			"name":           bdevName,
+		}
+		configJSON, _ := json.Marshal(config)
+		if err := r.DPClient.InitBackend("file", string(configJSON)); err != nil {
+			if !strings.Contains(err.Error(), "already") {
+				if isTransientGRPCError(err) {
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				}
+				r.Logger.Warn("ensureDataplaneState: file backend init failed", zap.Error(err))
+			}
+		}
+
+	case "raw":
+		devicePath := ba.Status.Device
+		if devicePath == "" {
+			return ctrl.Result{}, nil // no device recorded, nothing to re-init
+		}
+		config := map[string]interface{}{
+			"device_path": devicePath,
+			"name":        bdevName,
+		}
+		configJSON, _ := json.Marshal(config)
+		if err := r.DPClient.InitBackend("raw", string(configJSON)); err != nil {
+			if !strings.Contains(err.Error(), "already") && !strings.Contains(err.Error(), "returned null") {
+				if isTransientGRPCError(err) {
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				}
+				r.Logger.Warn("ensureDataplaneState: raw backend init failed", zap.Error(err))
+			}
+		}
+
+	case "lvm":
+		devicePath := ba.Status.Device
+		if devicePath == "" {
+			return ctrl.Result{}, nil
+		}
+		rawConfig := map[string]interface{}{
+			"device_path": devicePath,
+			"name":        bdevName,
+		}
+		rawJSON, _ := json.Marshal(rawConfig)
+		if err := r.DPClient.InitBackend("raw", string(rawJSON)); err != nil {
+			if !strings.Contains(err.Error(), "already") {
+				if isTransientGRPCError(err) {
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				}
+			}
+		}
+		lvsName := fmt.Sprintf("lvs_%s", ba.Spec.PoolRef)
+		lvmConfig := map[string]interface{}{
+			"bdev_name":    bdevName,
+			"lvs_name":     lvsName,
+			"cluster_size": 1048576,
+		}
+		lvmJSON, _ := json.Marshal(lvmConfig)
+		if err := r.DPClient.InitBackend("lvm", string(lvmJSON)); err != nil {
+			if !strings.Contains(err.Error(), "already") {
+				if isTransientGRPCError(err) {
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				}
+				r.Logger.Warn("ensureDataplaneState: lvm backend init failed", zap.Error(err))
+			}
+		}
+	}
+
+	// Re-initialize the chunk store.
+	if _, err := r.DPClient.InitChunkStore(bdevName, r.NodeName); err != nil {
+		if !strings.Contains(err.Error(), "already") {
+			if isTransientGRPCError(err) {
+				r.Logger.Warn("ensureDataplaneState: chunk store init transient error, will retry",
+					zap.String("bdev", bdevName), zap.Error(err))
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+			r.Logger.Warn("ensureDataplaneState: chunk store init failed",
+				zap.String("bdev", bdevName), zap.Error(err))
+		} else {
+			r.Logger.Info("ensureDataplaneState: chunk store already initialized",
+				zap.String("bdev", bdevName))
+		}
+	} else {
+		r.Logger.Info("ensureDataplaneState: chunk store initialized successfully",
+			zap.String("bdev", bdevName))
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -217,7 +345,14 @@ func (r *BackendAssignmentReconciler) provisionDeviceBackend(
 		case "hdd":
 			filterOpts.DeviceType = disk.TypeHDD
 		}
-		// TODO: parse minSize string to bytes
+		if ba.Spec.DeviceFilter.MinSize != "" {
+			minSize, parseErr := resource.ParseQuantity(ba.Spec.DeviceFilter.MinSize)
+			if parseErr == nil {
+				if minBytes, ok := minSize.AsInt64(); ok {
+					filterOpts.MinSizeBytes = uint64(minBytes)
+				}
+			}
+		}
 	}
 	filtered := disk.FilterDevices(devices, filterOpts)
 

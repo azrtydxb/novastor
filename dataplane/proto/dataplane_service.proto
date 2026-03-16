@@ -41,6 +41,10 @@ service DataplaneService {
   rpc ListChunks(ListChunksRequest) returns (ListChunksResponse);
   rpc GarbageCollect(GarbageCollectRequest) returns (GarbageCollectResponse);
 
+  // --- Inter-Dataplane Chunk Transfer (used for replication) ---
+  rpc PutChunk(PutChunkRequest) returns (PutChunkResponse);
+  rpc GetChunk(GetChunkRequest) returns (GetChunkResponse);
+
   // --- Backend Management ---
   rpc InitBackend(InitBackendRequest) returns (InitBackendResponse);
   rpc CreateVolume(CreateVolumeRequest) returns (CreateVolumeResponse);
@@ -200,7 +204,13 @@ message ReplicaStatusResponse {
 }
 
 // Chunk Store messages
-message InitChunkStoreRequest { string bdev_name = 1; }
+message InitChunkStoreRequest {
+  string bdev_name = 1;
+  // Real node ID from the Go agent (e.g. "worker-22"). If empty, falls back
+  // to "local-<bdev_name>" for backward compatibility. This must match the
+  // node_id used in UpdateTopology so CRUSH local-placement works correctly.
+  string node_id = 2;
+}
 message InitChunkStoreResponse {
   uint64 total_slots = 1;
   uint64 used_slots = 2;
@@ -256,6 +266,20 @@ message GarbageCollectRequest {
 message GarbageCollectResponse {
   uint32 deleted = 1;
   uint32 errors = 2;
+}
+
+// Inter-Dataplane Chunk Transfer messages
+message PutChunkRequest {
+  string chunk_id = 1;
+  bytes data = 2;
+}
+message PutChunkResponse {}
+
+message GetChunkRequest {
+  string chunk_id = 1;
+}
+message GetChunkResponse {
+  bytes data = 1;
 }
 
 // Backend Management messages

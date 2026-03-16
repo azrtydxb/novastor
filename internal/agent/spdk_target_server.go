@@ -36,6 +36,7 @@ type SPDKTargetServer struct {
 
 	hostIP     string
 	baseBdev   string
+	nodeUUID   string
 	testMode   bool
 	dpClient   *dataplane.Client
 	metaClient *metadata.GRPCClient
@@ -53,15 +54,17 @@ type SPDKTargetServer struct {
 // storage backend (e.g. "NVMe0n1" for real NVMe drives, "Malloc0" for testing).
 // testMode must be true to allow Malloc bdev auto-creation; in production this
 // should always be false and only real NVMe/AIO bdevs are accepted.
-func NewSPDKTargetServer(hostIP, baseBdev string, testMode bool, dpClient *dataplane.Client, metaClient *metadata.GRPCClient) *SPDKTargetServer {
+func NewSPDKTargetServer(hostIP, baseBdev, nodeUUID string, testMode bool, dpClient *dataplane.Client, metaClient *metadata.GRPCClient) *SPDKTargetServer {
 	logging.L.Info("spdk target: initialized SPDK target server",
 		zap.String("hostIP", hostIP),
 		zap.String("baseBdev", baseBdev),
+		zap.String("nodeUUID", nodeUUID),
 		zap.Bool("testMode", testMode),
 	)
 	return &SPDKTargetServer{
 		hostIP:     hostIP,
 		baseBdev:   baseBdev,
+		nodeUUID:   nodeUUID,
 		testMode:   testMode,
 		dpClient:   dpClient,
 		metaClient: metaClient,
@@ -114,7 +117,8 @@ func (s *SPDKTargetServer) ensureChunkStore() error {
 	}
 
 	// Initialise the chunk store on the Rust data-plane via gRPC.
-	if _, err := s.dpClient.InitChunkStore(s.baseBdev); err != nil {
+	// Use the nodeUUID which matches the topology node IDs pushed to the dataplane.
+	if _, err := s.dpClient.InitChunkStore(s.baseBdev, s.nodeUUID); err != nil {
 		// The chunk store may already be initialised if the agent restarted
 		// while the dataplane kept running.
 		if !strings.Contains(err.Error(), "already") {
@@ -157,7 +161,7 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	// The volume is a virtual bdev backed by content-addressed 4MB chunks —
 	// it does NOT map to a physical device. The backend type is irrelevant
 	// at volume creation time; only the chunk engine matters.
-	bdevName, _, err := s.dpClient.CreateVolume("chunk", volumeID, uint64(sizeBytes))
+	bdevName, _, err := s.dpClient.CreateVolume("", volumeID, uint64(sizeBytes))
 	if err != nil {
 		logging.L.Error("spdk target: failed to create volume",
 			zap.String("volumeID", volumeID),
@@ -173,6 +177,21 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 		zap.Int64("sizeBytes", sizeBytes),
 	)
 
+	// Set per-volume protection policy on the dataplane's policy engine.
+	if prot := req.GetProtection(); prot != nil && prot.GetReplicationFactor() > 0 {
+		if accepted, err := s.dpClient.SetVolumePolicy(volumeID, prot.GetReplicationFactor()); err != nil {
+			logging.L.Warn("spdk target: failed to set volume policy (non-fatal)",
+				zap.String("volumeID", volumeID),
+				zap.Error(err),
+			)
+		} else if accepted {
+			logging.L.Info("spdk target: volume policy set",
+				zap.String("volumeID", volumeID),
+				zap.Uint32("replicas", prot.GetReplicationFactor()),
+			)
+		}
+	}
+
 	// Expose the chunk bdev as an NVMe-oF/TCP target via gRPC.
 	// Use the specific host IP (not 0.0.0.0) because SPDK's listener ACL
 	// performs a literal address comparison: the subsystem listener address
@@ -182,7 +201,7 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	nqn, err := s.dpClient.CreateNvmfTarget(volumeID, bdevName, s.hostIP, spdkTargetPort, anaState, anaGroupID)
 	if err != nil {
 		// Cleanup volume on failure.
-		if delErr := s.dpClient.DeleteVolume("chunk", volumeID); delErr != nil {
+		if delErr := s.dpClient.DeleteVolume("", volumeID); delErr != nil {
 			logging.L.Warn("spdk target: failed to clean up volume",
 				zap.String("volumeID", volumeID),
 				zap.Error(delErr),
@@ -227,7 +246,7 @@ func (s *SPDKTargetServer) DeleteTarget(ctx context.Context, req *pb.DeleteTarge
 
 	// Remove the volume via Rust data-plane (best-effort).
 	// This destroys the novastor_<volumeID> virtual bdev and its chunk map.
-	if err := s.dpClient.DeleteVolume("chunk", volumeID); err != nil {
+	if err := s.dpClient.DeleteVolume("", volumeID); err != nil {
 		logging.L.Warn("spdk target: failed to delete volume",
 			zap.String("volumeID", volumeID),
 			zap.Error(err),

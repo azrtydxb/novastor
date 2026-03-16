@@ -148,8 +148,14 @@ impl PolicyEngine {
                             .await
                         {
                             Ok(()) => {
-                                let _ =
-                                    self.location_store.add_node_to_chunk(chunk_id, target_node);
+                                if let Err(e) =
+                                    self.location_store.add_node_to_chunk(chunk_id, target_node)
+                                {
+                                    warn!(
+                                        "failed to record chunk location for {}: {}",
+                                        chunk_id, e
+                                    );
+                                }
                                 info!(
                                     "replicated chunk {} from {} to {}",
                                     chunk_id, source_node, target_node
@@ -175,9 +181,15 @@ impl PolicyEngine {
                             .await
                         {
                             Ok(()) => {
-                                let _ = self
+                                if let Err(e) = self
                                     .location_store
-                                    .remove_node_from_chunk(chunk_id, node_id);
+                                    .remove_node_from_chunk(chunk_id, node_id)
+                                {
+                                    warn!(
+                                        "failed to remove chunk location for {}: {}",
+                                        chunk_id, e
+                                    );
+                                }
                                 info!("removed replica of chunk {} from {}", chunk_id, node_id);
                             }
                             Err(e) => {

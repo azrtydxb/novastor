@@ -52,7 +52,9 @@ fn main() {
     // Start tokio runtime on background threads.
     // SPDK requires the main thread for its reactor, so tokio runs alongside.
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+        // 8 worker threads for concurrent gRPC chunk replication fan-out.
+        // JoinSet tasks spawned from write_replicated run on these threads.
+        .worker_threads(8)
         .enable_all()
         .build()
         .expect("failed to create tokio runtime");

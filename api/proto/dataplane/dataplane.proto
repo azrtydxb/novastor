@@ -330,6 +330,7 @@ message ReplicaStatusResponse {
 
 message InitChunkStoreRequest {
   string bdev_name = 1;
+  string node_id = 2;
 }
 
 message InitChunkStoreResponse {

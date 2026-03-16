@@ -83,7 +83,7 @@ Both modes are available for **all three access layers** (block, file, object). 
 
 ## Custom Agents (MANDATORY)
 
-Two custom agents enforce architecture and code quality. **These are not optional.**
+Three custom agents enforce architecture, code quality, and completeness. **These are not optional.**
 
 ### `architecture-compliance` — Architecture Auditor
 - **MUST be run** after implementing any feature, fixing any bug, or making any code change that touches Go agent, Rust dataplane, Helm charts, proto definitions, or any layer boundary code
@@ -97,16 +97,27 @@ Two custom agents enforce architecture and code quality. **These are not optiona
 - Full code review covering architecture compliance + Go/Rust code quality + Helm/proto review
 - Invoke with: "Use the novastor-reviewer agent to review the changes"
 
+### `gap-challenger` — Completion Verifier
+- **MUST be run** before claiming ANY work is "done", "fixed", or "working"
+- **MUST be run** before marking ANY gap/TODO item as resolved
+- **MUST be run** after deploying changes to the cluster
+- Traces end-to-end chains to verify features actually work (not just compile)
+- Finds stubs, dead code, swallowed errors, fake data, and unverified claims
+- Demands runtime evidence — "code exists" is NOT "working"
+- Invoke with: "Use the gap-challenger agent to verify the changes"
+
 ### When to Use Which
 | Situation | Agent |
 |-----------|-------|
 | Quick check during implementation | `architecture-compliance` |
 | Before committing a feature | `architecture-compliance` |
-| Before creating a PR | Both: `architecture-compliance` first, then `novastor-reviewer` |
-| After a large refactor | Both |
-| Fixing a bug in one file | `architecture-compliance` (minimum) |
+| After deploying and claiming "done" | `gap-challenger` |
+| Before marking a gap as resolved | `gap-challenger` |
+| Before creating a PR | All three: `architecture-compliance` → `gap-challenger` → `novastor-reviewer` |
+| After a large refactor | All three |
+| Fixing a bug in one file | `architecture-compliance` + `gap-challenger` |
 
-**DO NOT skip these agents.** Architecture drift is the #1 risk in this project. Every shortcut taken in the past led to layers being collapsed, wrong communication protocols, and months of rework.
+**DO NOT skip these agents.** Architecture drift is the #1 risk in this project. False claims of completion are the #2 risk. Every shortcut taken in the past led to layers being collapsed, wrong communication protocols, months of rework, and features marked "done" that never actually worked end-to-end.
 
 ## Code Standards
 
@@ -323,6 +334,61 @@ Docs use MkDocs Material theme with Mermaid diagram support.
 ### No External Runtime Dependencies
 
 NovaStor has **zero external runtime dependencies** — no etcd, no ZooKeeper, no Ceph. Everything is self-contained.
+
+## Skills & Plugins (USE THESE)
+
+When performing tasks, **always invoke the relevant skill** before starting work. These are installed and available:
+
+### Workflow Skills (superpowers)
+| Task | Skill | When |
+|------|-------|------|
+| New feature or design | `superpowers:brainstorming` | Before ANY creative/design work |
+| Multi-step implementation | `superpowers:writing-plans` | Before touching code on non-trivial tasks |
+| Executing a plan | `superpowers:executing-plans` | When you have a written plan to follow |
+| Bug investigation | `superpowers:systematic-debugging` | Before proposing ANY fix |
+| Writing tests first | `superpowers:test-driven-development` | Before writing implementation code |
+| Claiming work is done | `superpowers:verification-before-completion` | ALWAYS before saying "done" |
+| Code review feedback | `superpowers:requesting-code-review` | After completing features |
+| Receiving review feedback | `superpowers:receiving-code-review` | Before implementing review suggestions |
+| Branch isolation | `superpowers:using-git-worktrees` | Before any code changes (MANDATORY for this project) |
+| Independent parallel tasks | `superpowers:dispatching-parallel-agents` | When 2+ tasks have no dependencies |
+| PR/merge decisions | `superpowers:finishing-a-development-branch` | When implementation + tests pass |
+
+### Domain-Specific Skills
+| Task | Skill | When |
+|------|-------|------|
+| Go concurrency code | `systems-programming:go-concurrency-patterns` | Writing goroutines, channels, mutexes |
+| Rust async/dataplane code | `systems-programming:rust-async-patterns` | Rust dataplane work (tokio, async, SPDK) |
+| Rust memory safety | `systems-programming:memory-safety-patterns` | RAII, ownership, unsafe blocks |
+| Helm chart changes | `kubernetes-operations:helm-chart-scaffolding` | Modifying deploy/helm/ |
+| K8s manifests | `kubernetes-operations:k8s-manifest-generator` | Creating/updating K8s YAML |
+| K8s RBAC/security | `kubernetes-operations:k8s-security-policies` | NetworkPolicy, PodSecurity, RBAC |
+| Prometheus metrics | `observability-monitoring:prometheus-configuration` | Adding/modifying metrics |
+| Grafana dashboards | `observability-monitoring:grafana-dashboards` | Dashboard JSON/provisioning |
+| OpenTelemetry tracing | `observability-monitoring:distributed-tracing` | Tracing instrumentation |
+| SLO definitions | `observability-monitoring:slo-implementation` | Defining SLIs/SLOs/error budgets |
+| GitHub Actions CI | `cicd-automation:github-actions-templates` | Workflow YAML changes |
+| Security scanning | `security-scanning:security-sast` | Static analysis, vulnerability checks |
+| Security hardening | `security-scanning:security-hardening` | Defense-in-depth implementation |
+| Architecture decisions | `documentation-generation:architecture-decision-records` | Recording design decisions |
+| Full codebase review | `comprehensive-review:full-review` | Project-wide audit |
+| TDD red-green-refactor | `tdd-workflows:tdd-cycle` | Full TDD workflow |
+
+### Multi-Agent Skills
+| Task | Skill | When |
+|------|-------|------|
+| Parallel feature dev | `agent-teams:team-feature` | Multiple independent files/packages |
+| Parallel debugging | `agent-teams:team-debug` | Competing hypotheses investigation |
+| Multi-reviewer review | `agent-teams:team-review` | Comprehensive multi-dimension review |
+| Spawn preset team | `agent-teams:team-spawn` | Quick team setup (review, debug, feature) |
+
+### NovaStor-Specific Agent Chain (MANDATORY — see Custom Agents section above)
+These custom agents are **in addition to** the skills above. Use both:
+1. Skills for HOW to approach the work (TDD, debugging, planning)
+2. Custom agents for VALIDATING the work (architecture compliance, gap checking, code review)
+
+### Library Documentation
+- Use `context7` (resolve-library-id → query-docs) to look up current docs for any dependency (client-go, controller-runtime, hashicorp/raft, badger, SPDK, etc.) before writing code that uses them
 
 ## Testing Requirements
 

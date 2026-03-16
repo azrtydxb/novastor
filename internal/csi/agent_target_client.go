@@ -43,12 +43,12 @@ func (n *NodeTargetClient) clientFor(agentAddr string) (*agent.NVMeTargetClient,
 }
 
 // CreateTarget implements AgentTargetClient.
-func (n *NodeTargetClient) CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32) (string, string, string, error) {
+func (n *NodeTargetClient) CreateTarget(ctx context.Context, agentAddr string, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32, prot protectionConfig) (string, string, string, error) {
 	c, err := n.clientFor(agentAddr)
 	if err != nil {
 		return "", "", "", err
 	}
-	result, err := c.CreateTarget(ctx, volumeID, sizeBytes, anaState, anaGroupID)
+	result, err := c.CreateTarget(ctx, volumeID, sizeBytes, anaState, anaGroupID, prot.toVolumeProtection())
 	if err != nil {
 		return "", "", "", err
 	}

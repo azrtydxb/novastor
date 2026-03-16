@@ -51,6 +51,7 @@ type recoveryRunnable struct {
 	recovery         *operator.RecoveryManager
 	replicator       *operator.GRPCChunkReplicator
 	healthChecker    *operator.GRPCHealthChecker
+	replicaMonitor   *operator.ReplicaStatusMonitor
 	heartbeatTimeout time.Duration
 }
 
@@ -77,6 +78,10 @@ func (r *recoveryRunnable) Start(ctx context.Context) error {
 		}
 	}
 }
+
+// replicaCheckCounter tracks cycles to run replica status checks periodically
+// (every 6th cycle = ~60s at 10s intervals) rather than on every tick.
+var replicaCheckCounter int
 
 // runCycle performs one iteration of the recovery loop: refresh heartbeats,
 // check node status, recover any down nodes, and process the recovery queue.
@@ -109,6 +114,13 @@ func (r *recoveryRunnable) runCycle(ctx context.Context, logger *zap.Logger) {
 	// Process the recovery queue (replicate under-replicated chunks).
 	if err := r.recovery.ProcessRecoveryQueue(ctx); err != nil {
 		logger.Error("error processing recovery queue", zap.Error(err))
+	}
+
+	// Periodically check replica status for all volumes (~every 60s).
+	// This exercises dataplane.Client.ReplicaStatus() and logs health info.
+	replicaCheckCounter++
+	if r.replicaMonitor != nil && replicaCheckCounter%6 == 0 {
+		r.replicaMonitor.CheckAll(ctx)
 	}
 }
 
@@ -335,11 +347,14 @@ func main() {
 		recoveryMgr.SetMaxConcurrent(recoveryConcurrency)
 		recoveryMgr.SetDownTimeout(heartbeatTimeout)
 
+		replicaMonitor := operator.NewReplicaStatusMonitor(metaClient)
+
 		runnable := &recoveryRunnable{
 			metaClient:       metaClient,
 			recovery:         recoveryMgr,
 			replicator:       chunkReplicator,
 			healthChecker:    healthChecker,
+			replicaMonitor:   replicaMonitor,
 			heartbeatTimeout: heartbeatTimeout,
 		}
 
@@ -371,7 +386,14 @@ func main() {
 				poolLookup,
 				nodeChecker,
 				chunkReplicator,
-				nil,           // shardReplicator - TODO: implement erasure coding shard replication
+				// TODO(architecture): ShardReplicator is nil because EC shard replication
+				// must be implemented as a gRPC call to the Rust dataplane, not in Go.
+				// The Rust dataplane owns all data-path I/O including Reed-Solomon
+				// encode/decode/reconstruct. When the dataplane exposes an
+				// ECReconstructShard RPC, create a gRPC-backed ShardReplicator here
+				// that delegates to it. See internal/datamover/ec_reconstructor.go for
+				// the full architecture violation explanation.
+				nil,           // shardReplicator — requires Rust dataplane EC reconstruction gRPC
 				eventRecorder, // eventRecorder - now enabled
 				policyScanInterval,
 				policyRepairEnabled,

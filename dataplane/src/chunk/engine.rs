@@ -24,7 +24,8 @@ pub struct ChunkEngine {
     local_store: Arc<dyn ChunkStore>,
     topology: RwLock<ClusterMap>,
     /// Data protection scheme for this engine instance.
-    protection: Protection,
+    /// Behind RwLock so SetVolumePolicy can update it at runtime.
+    protection: RwLock<Protection>,
     /// Cached gRPC connections to remote nodes, keyed by address.
     connections: Mutex<HashMap<String, ChunkClient>>,
     /// Optional policy engine for tracking chunk locations and references.
@@ -38,7 +39,7 @@ impl ChunkEngine {
             node_id,
             local_store,
             topology: RwLock::new(topology),
-            protection: Protection::Replication { factor: 1 },
+            protection: RwLock::new(Protection::Replication { factor: 1 }),
             connections: Mutex::new(HashMap::new()),
             policy: None,
         }
@@ -55,7 +56,7 @@ impl ChunkEngine {
             node_id,
             local_store,
             topology: RwLock::new(topology),
-            protection: Protection::Replication { factor: 1 },
+            protection: RwLock::new(Protection::Replication { factor: 1 }),
             connections: Mutex::new(HashMap::new()),
             policy: Some(policy),
         }
@@ -72,7 +73,7 @@ impl ChunkEngine {
             node_id,
             local_store,
             topology: RwLock::new(topology),
-            protection,
+            protection: RwLock::new(protection),
             connections: Mutex::new(HashMap::new()),
             policy: None,
         }
@@ -90,21 +91,21 @@ impl ChunkEngine {
             node_id,
             local_store,
             topology: RwLock::new(topology),
-            protection,
+            protection: RwLock::new(protection),
             connections: Mutex::new(HashMap::new()),
             policy: Some(policy),
         }
     }
 
-    /// Set the protection scheme (useful when the scheme is determined at volume
-    /// creation time rather than engine construction).
-    pub fn set_protection(&mut self, protection: Protection) {
-        self.protection = protection;
+    /// Set the protection scheme at runtime (called by SetVolumePolicy RPC).
+    pub fn set_protection(&self, protection: Protection) {
+        let mut p = self.protection.write().unwrap();
+        *p = protection;
     }
 
-    /// Return the current protection scheme.
-    pub fn protection(&self) -> &Protection {
-        &self.protection
+    /// Return a clone of the current protection scheme.
+    pub fn protection(&self) -> Protection {
+        self.protection.read().unwrap().clone()
     }
 
     /// Replace the cluster topology with an updated snapshot.
@@ -232,7 +233,8 @@ impl ChunkEngine {
             let chunk_index = start_chunk_index + i as u64;
             let chunk_id = Self::compute_chunk_id(raw_chunk);
 
-            let ec_params = match &self.protection {
+            let prot = self.protection.read().unwrap().clone();
+            let ec_params = match &prot {
                 Protection::Replication { factor } => {
                     let prepared = Self::prepare_chunk(raw_chunk);
                     self.write_replicated(&chunk_id, &prepared, *factor, volume_id)
@@ -276,8 +278,40 @@ impl ChunkEngine {
         factor: u32,
         volume_id: &str,
     ) -> Result<()> {
-        let topo = self.topology.read().unwrap();
-        let placements = crush::select(chunk_id, factor as usize, &topo);
+        // Compute placements in a block so the RwLockReadGuard is dropped
+        // before any .await (keeps the future Send).
+        let placements = {
+            let topo = self.topology.read().unwrap();
+            if factor == 1 {
+                let local = topo.nodes().iter().find(|n| n.id == self.node_id);
+                log::debug!(
+                    "CRUSH local check: self.node_id='{}', local_found={}",
+                    self.node_id,
+                    local.is_some()
+                );
+                match local {
+                    Some(node) if !node.backends.is_empty() => {
+                        vec![(node.id.clone(), node.backends[0].id.clone())]
+                    }
+                    _ => crush::select(chunk_id, 1, &topo),
+                }
+            } else {
+                let mut selected = crush::select(chunk_id, factor as usize, &topo);
+                if !selected.iter().any(|(nid, _)| nid == &self.node_id) {
+                    if let Some(local) = topo.nodes().iter().find(|n| n.id == self.node_id) {
+                        if !local.backends.is_empty() && !selected.is_empty() {
+                            let last = selected.len() - 1;
+                            selected[last] = (local.id.clone(), local.backends[0].id.clone());
+                        }
+                    }
+                }
+                if let Some(pos) = selected.iter().position(|(nid, _)| nid == &self.node_id) {
+                    selected.swap(0, pos);
+                }
+                selected
+            }
+        }; // topo guard dropped
+
         log::debug!(
             "write_replicated chunk={} prepared_len={} factor={} placements={}",
             &chunk_id[..16],
@@ -296,24 +330,81 @@ impl ChunkEngine {
         let mut successes = 0usize;
         let mut last_err = None;
 
+        // Write to ALL replicas concurrently using tokio::task::JoinSet.
+        // Local writes go through put_chunk_to_node (which detects local and
+        // writes directly). Remote writes go through gRPC PutChunk.
+        // All run in parallel so a single write with factor=3 takes ~1 RTT,
+        // not 3 sequential RTTs. This prevents io_pool thread saturation.
+        let mut join_set = tokio::task::JoinSet::new();
         for (target_node, _backend) in &placements {
-            let result = self
-                .put_chunk_to_node(chunk_id, prepared, target_node)
-                .await;
+            let chunk_id_owned = chunk_id.to_string();
+            let prepared_owned = prepared.to_vec();
+            let target_owned = target_node.clone();
+            let node_id = self.node_id.clone();
+            let local_store = self.local_store.clone();
+            let topo = self.topology.read().unwrap().clone();
+
+            join_set.spawn(async move {
+                if target_owned == node_id {
+                    // Local write — fast, no network.
+                    local_store.put(&chunk_id_owned, &prepared_owned).await?;
+                    log::debug!(
+                        "put_chunk_to_node chunk={} len={} target={} local=true",
+                        &chunk_id_owned[..16],
+                        prepared_owned.len(),
+                        target_owned
+                    );
+                    log::debug!("put_chunk_to_node local done: true");
+                } else {
+                    // Remote write via gRPC PutChunk.
+                    let node = topo.nodes().iter().find(|n| n.id == target_owned);
+                    let addr = match node {
+                        Some(n) => format!("http://{}:{}", n.address, n.port),
+                        None => {
+                            return Err(DataPlaneError::ChunkEngineError(format!(
+                                "node {} not found in topology",
+                                target_owned
+                            )));
+                        }
+                    };
+                    log::debug!(
+                        "put_chunk_to_node chunk={} len={} target={} local=false",
+                        &chunk_id_owned[..16],
+                        prepared_owned.len(),
+                        target_owned
+                    );
+                    let mut client = ChunkClient::connect(&addr).await?;
+                    client.put(&chunk_id_owned, &prepared_owned).await?;
+                    log::debug!("put_chunk_to_node remote done: target={}", target_owned);
+                }
+                Ok::<String, DataPlaneError>(target_owned)
+            });
+        }
+
+        // Collect results from all concurrent writes.
+        while let Some(result) = join_set.join_next().await {
             match result {
-                Ok(()) => {
+                Ok(Ok(target_node)) => {
                     successes += 1;
                     if let Some(policy) = &self.policy {
-                        let _ = policy.record_chunk_location(chunk_id, target_node);
-                        let _ = policy.record_chunk_ref(chunk_id, volume_id);
+                        if let Err(e) = policy.record_chunk_location(chunk_id, &target_node) {
+                            warn!("failed to record chunk location for {}: {}", chunk_id, e);
+                        }
+                        if let Err(e) = policy.record_chunk_ref(chunk_id, volume_id) {
+                            warn!("failed to record chunk ref for {}: {}", chunk_id, e);
+                        }
                     }
                 }
-                Err(e) => {
-                    warn!(
-                        "chunk {} write to node {} failed: {}",
-                        chunk_id, target_node, e
-                    );
+                Ok(Err(e)) => {
+                    warn!("chunk {} replica write failed: {}", chunk_id, e);
                     last_err = Some(e);
+                }
+                Err(e) => {
+                    warn!("chunk {} replica write task panicked: {}", chunk_id, e);
+                    last_err = Some(DataPlaneError::ChunkEngineError(format!(
+                        "replica write task panicked: {}",
+                        e
+                    )));
                 }
             }
         }
@@ -343,8 +434,10 @@ impl ChunkEngine {
         volume_id: &str,
     ) -> Result<()> {
         let total_shards = (data_shards + parity_shards) as usize;
-        let topo = self.topology.read().unwrap();
-        let placements = crush::select(chunk_id, total_shards, &topo);
+        let placements = {
+            let topo = self.topology.read().unwrap();
+            crush::select(chunk_id, total_shards, &topo)
+        }; // topo guard dropped before any .await
 
         if placements.len() < data_shards as usize {
             return Err(DataPlaneError::ChunkEngineError(format!(
@@ -392,8 +485,12 @@ impl ChunkEngine {
                 Ok(()) => {
                     successes += 1;
                     if let Some(policy) = &self.policy {
-                        let _ = policy.record_chunk_location(&shard_id, target_node);
-                        let _ = policy.record_chunk_ref(&shard_id, volume_id);
+                        if let Err(e) = policy.record_chunk_location(&shard_id, target_node) {
+                            warn!("failed to record chunk location for {}: {}", shard_id, e);
+                        }
+                        if let Err(e) = policy.record_chunk_ref(&shard_id, volume_id) {
+                            warn!("failed to record chunk ref for {}: {}", shard_id, e);
+                        }
                     }
                 }
                 Err(e) => {
@@ -436,18 +533,19 @@ impl ChunkEngine {
             log::debug!("put_chunk_to_node local done: {:?}", r.is_ok());
             r
         } else {
-            let topo = self.topology.read().unwrap();
-            let node = topo
-                .nodes()
-                .iter()
-                .find(|n| n.id == target_node)
-                .ok_or_else(|| {
-                    DataPlaneError::ChunkEngineError(format!(
-                        "node not found in topology: {target_node}"
-                    ))
-                })?;
-            let addr = format!("http://{}:{}", node.address, node.port);
-            drop(topo);
+            let addr = {
+                let topo = self.topology.read().unwrap();
+                let node = topo
+                    .nodes()
+                    .iter()
+                    .find(|n| n.id == target_node)
+                    .ok_or_else(|| {
+                        DataPlaneError::ChunkEngineError(format!(
+                            "node not found in topology: {target_node}"
+                        ))
+                    })?;
+                format!("http://{}:{}", node.address, node.port)
+            }; // topo guard dropped
             let client = self.get_client(&addr).await?;
             client.put(chunk_id, prepared).await
         }
@@ -458,18 +556,19 @@ impl ChunkEngine {
         if target_node == self.node_id {
             self.local_store.get(chunk_id).await
         } else {
-            let topo = self.topology.read().unwrap();
-            let node = topo
-                .nodes()
-                .iter()
-                .find(|n| n.id == target_node)
-                .ok_or_else(|| {
-                    DataPlaneError::ChunkEngineError(format!(
-                        "node not found in topology: {target_node}"
-                    ))
-                })?;
-            let addr = format!("http://{}:{}", node.address, node.port);
-            drop(topo);
+            let addr = {
+                let topo = self.topology.read().unwrap();
+                let node = topo
+                    .nodes()
+                    .iter()
+                    .find(|n| n.id == target_node)
+                    .ok_or_else(|| {
+                        DataPlaneError::ChunkEngineError(format!(
+                            "node not found in topology: {target_node}"
+                        ))
+                    })?;
+                format!("http://{}:{}", node.address, node.port)
+            }; // topo guard dropped
             let client = self.get_client(&addr).await?;
             client.get(chunk_id).await
         }
@@ -507,14 +606,28 @@ impl ChunkEngine {
 
     /// Read a replicated chunk, trying each CRUSH replica in order.
     async fn read_replicated(&self, chunk_id: &str) -> Result<Vec<u8>> {
-        let factor = match &self.protection {
+        let prot = self.protection.read().unwrap().clone();
+        let factor = match &prot {
             Protection::Replication { factor } => *factor as usize,
             // If called for a replicated chunk but engine is in EC mode,
             // use a single placement (legacy compatibility).
             Protection::ErasureCoding { .. } => 1,
         };
-        let topo = self.topology.read().unwrap();
-        let placements = crush::select(chunk_id, factor, &topo);
+        // Clone topology to avoid holding RwLockReadGuard across .await.
+        let placements = {
+            let topo = self.topology.read().unwrap();
+            if factor == 1 {
+                let local = topo.nodes().iter().find(|n| n.id == self.node_id);
+                match local {
+                    Some(node) if !node.backends.is_empty() => {
+                        vec![(node.id.clone(), node.backends[0].id.clone())]
+                    }
+                    _ => crush::select(chunk_id, 1, &topo),
+                }
+            } else {
+                crush::select(chunk_id, factor, &topo)
+            }
+        }; // topo guard dropped
         if placements.is_empty() {
             return Err(DataPlaneError::ChunkEngineError(
                 "CRUSH returned no placement".into(),
@@ -560,8 +673,10 @@ impl ChunkEngine {
         parity_shards: u32,
     ) -> Result<Vec<u8>> {
         let total_shards = (data_shards + parity_shards) as usize;
-        let topo = self.topology.read().unwrap();
-        let placements = crush::select(chunk_id, total_shards, &topo);
+        let placements = {
+            let topo = self.topology.read().unwrap();
+            crush::select(chunk_id, total_shards, &topo)
+        }; // topo guard dropped before any .await
 
         let mut available: Vec<(usize, Vec<u8>)> = Vec::new();
 
@@ -831,11 +946,11 @@ mod tests {
         let store = Arc::new(FileChunkStore::new(dir.path().to_path_buf()).await.unwrap());
         let topology = local_topology("node-1");
 
-        let mut engine = ChunkEngine::new("node-1".to_string(), store, topology);
+        let engine = ChunkEngine::new("node-1".to_string(), store, topology);
 
         // Default is Replication { factor: 1 }
         match engine.protection() {
-            Protection::Replication { factor } => assert_eq!(*factor, 1),
+            Protection::Replication { factor } => assert_eq!(factor, 1),
             _ => panic!("expected Replication"),
         }
 
@@ -848,8 +963,8 @@ mod tests {
                 data_shards,
                 parity_shards,
             } => {
-                assert_eq!(*data_shards, 4);
-                assert_eq!(*parity_shards, 2);
+                assert_eq!(data_shards, 4);
+                assert_eq!(parity_shards, 2);
             }
             _ => panic!("expected ErasureCoding"),
         }

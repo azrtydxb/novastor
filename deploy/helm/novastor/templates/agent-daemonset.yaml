@@ -101,6 +101,8 @@ spec:
               mountPath: /sys
             - name: spdk-socket
               mountPath: /var/tmp
+            - name: novastor-state
+              mountPath: /var/lib/novastor
             {{- if include "novastor.tls.enabled" . }}
             - name: tls-certs
               mountPath: {{ include "novastor.tls.mountPath" . }}
@@ -128,6 +130,10 @@ spec:
         - name: spdk-socket
           hostPath:
             path: /var/tmp
+            type: DirectoryOrCreate
+        - name: novastor-state
+          hostPath:
+            path: /var/lib/novastor
             type: DirectoryOrCreate
         {{- if include "novastor.tls.enabled" . }}
         - name: tls-certs

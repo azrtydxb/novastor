@@ -32,7 +32,7 @@ func NewSPDKTargetClient(opts ...grpc.DialOption) *SPDKTargetClient {
 }
 
 // CreateTarget dials the agent at agentAddr and calls CreateTarget.
-func (c *SPDKTargetClient) CreateTarget(ctx context.Context, agentAddr, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32) (subsystemNQN, targetAddress, targetPort string, err error) {
+func (c *SPDKTargetClient) CreateTarget(ctx context.Context, agentAddr, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32, protection *pb.VolumeProtection) (subsystemNQN, targetAddress, targetPort string, err error) {
 	conn, err := grpc.NewClient(agentAddr, c.dialOpts...)
 	if err != nil {
 		return "", "", "", fmt.Errorf("dialing agent at %s: %w", agentAddr, err)
@@ -45,6 +45,7 @@ func (c *SPDKTargetClient) CreateTarget(ctx context.Context, agentAddr, volumeID
 		SizeBytes:  sizeBytes,
 		AnaState:   anaState,
 		AnaGroupId: anaGroupID,
+		Protection: protection,
 	})
 	if err != nil {
 		return "", "", "", fmt.Errorf("CreateTarget RPC for volume %s on %s: %w", volumeID, agentAddr, err)

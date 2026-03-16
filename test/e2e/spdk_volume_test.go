@@ -66,8 +66,7 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 
 	// Step 2: Initialise the chunk store on the malloc bdev.
 	t.Log("initialising chunk store")
-	capacityBytes := uint64(256) * 1024 * 1024
-	if _, err := client.InitChunkStore("e2e-base", capacityBytes); err != nil {
+	if _, err := client.InitChunkStore("e2e-base", "e2e-test-node-uuid"); err != nil {
 		if !strings.Contains(err.Error(), "already") {
 			t.Fatalf("InitChunkStore failed: %v", err)
 		}

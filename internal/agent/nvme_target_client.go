@@ -46,12 +46,13 @@ func (c *NVMeTargetClient) Close() error {
 }
 
 // CreateTarget calls the agent's CreateTarget RPC.
-func (c *NVMeTargetClient) CreateTarget(ctx context.Context, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32) (*NVMeTargetResult, error) {
+func (c *NVMeTargetClient) CreateTarget(ctx context.Context, volumeID string, sizeBytes int64, anaState string, anaGroupID uint32, protection *pb.VolumeProtection) (*NVMeTargetResult, error) {
 	resp, err := c.client.CreateTarget(ctx, &pb.CreateTargetRequest{
 		VolumeId:   volumeID,
 		SizeBytes:  sizeBytes,
 		AnaState:   anaState,
 		AnaGroupId: anaGroupID,
+		Protection: protection,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("CreateTarget RPC for volume %s: %w", volumeID, err)

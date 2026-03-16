@@ -16,6 +16,7 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::transport::dataplane_proto::dataplane_service_server::DataplaneService;
 use crate::transport::dataplane_proto::*;
 
+use crate::backend::chunk_store::ChunkStore as AsyncChunkStore;
 use crate::backend::traits::StorageBackend;
 use crate::bdev::chunk_io::{ChunkStore, CHUNK_SIZE};
 use crate::config::{BlobstoreConfig, LocalBdevConfig, LvolConfig, NvmfInitiatorConfig};
@@ -53,6 +54,36 @@ static GRPC_CHUNK_STORES: OnceLock<Mutex<std::collections::HashMap<String, Arc<C
 
 fn grpc_chunk_stores() -> &'static Mutex<std::collections::HashMap<String, Arc<ChunkStore>>> {
     GRPC_CHUNK_STORES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Global registry of async chunk stores for inter-dataplane chunk transfer,
+/// keyed by bdev name. These implement the async `ChunkStore` trait (put/get)
+/// and are used by the PutChunk/GetChunk RPCs during replication.
+static GRPC_ASYNC_CHUNK_STORES: OnceLock<
+    Mutex<std::collections::HashMap<String, Arc<dyn AsyncChunkStore>>>,
+> = OnceLock::new();
+
+fn grpc_async_chunk_stores(
+) -> &'static Mutex<std::collections::HashMap<String, Arc<dyn AsyncChunkStore>>> {
+    GRPC_ASYNC_CHUNK_STORES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Register an async chunk store for inter-dataplane PutChunk/GetChunk RPCs.
+/// Called by `init_chunk_store` in production and by tests.
+pub fn register_async_chunk_store(bdev_name: &str, store: Arc<dyn AsyncChunkStore>) {
+    grpc_async_chunk_stores()
+        .lock()
+        .unwrap()
+        .insert(bdev_name.to_string(), store);
+}
+
+/// Return the first available async chunk store. Inter-dataplane PutChunk/GetChunk
+/// RPCs use this when no bdev name is specified (single-store deployments).
+fn get_any_async_chunk_store() -> Result<Arc<dyn AsyncChunkStore>, Status> {
+    let stores = grpc_async_chunk_stores().lock().unwrap();
+    stores.values().next().cloned().ok_or_else(|| {
+        Status::failed_precondition("no async chunk store initialised — call InitChunkStore first")
+    })
 }
 
 /// Global registry of storage backends, keyed by a label (e.g., pool name or backend type).
@@ -560,8 +591,18 @@ impl DataplaneService for DataplaneServiceImpl {
             let chunk_store =
                 std::sync::Arc::new(BdevChunkStore::new(&req.bdev_name, capacity_bytes));
 
-            // Build a single-node topology so CRUSH always places locally.
-            let node_id = format!("local-{}", req.bdev_name);
+            // Register the async chunk store globally so inter-dataplane
+            // PutChunk/GetChunk RPCs can store/retrieve replicated chunks.
+            register_async_chunk_store(&req.bdev_name, chunk_store.clone());
+
+            // Use the real node ID from the Go agent so it matches the node_id
+            // in UpdateTopology, ensuring CRUSH local-placement works correctly.
+            // Fall back to a synthetic ID for backward compatibility.
+            let node_id = if req.node_id.is_empty() {
+                format!("local-{}", req.bdev_name)
+            } else {
+                req.node_id.clone()
+            };
             let mut topology = ClusterMap::new(0);
             topology.add_node(Node {
                 id: node_id.clone(),
@@ -778,10 +819,20 @@ impl DataplaneService for DataplaneServiceImpl {
             ));
         }
         let req = request.into_inner();
-        let store = get_chunk_store(&req.bdev_name)?;
-        store
-            .delete_chunk(&req.chunk_id)
-            .map_err(|e| Status::internal(format!("delete_chunk: {e}")))?;
+        if req.bdev_name.is_empty() {
+            // Inter-dataplane path: no bdev_name specified, use async chunk store.
+            let store = get_any_async_chunk_store()?;
+            store
+                .delete(&req.chunk_id)
+                .await
+                .map_err(|e| Status::internal(format!("delete_chunk: {e}")))?;
+        } else {
+            // Go agent path: bdev_name specified, use sync chunk store.
+            let store = get_chunk_store(&req.bdev_name)?;
+            store
+                .delete_chunk(&req.chunk_id)
+                .map_err(|e| Status::internal(format!("delete_chunk: {e}")))?;
+        }
         Ok(Response::new(DeleteChunkResponse {}))
     }
 
@@ -834,6 +885,67 @@ impl DataplaneService for DataplaneServiceImpl {
         }
 
         Ok(Response::new(GarbageCollectResponse { deleted, errors }))
+    }
+
+    // ========================================================================
+    // Inter-Dataplane Chunk Transfer (used for replication)
+    // ========================================================================
+
+    async fn put_chunk(
+        &self,
+        request: Request<PutChunkRequest>,
+    ) -> Result<Response<PutChunkResponse>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no writes accepted",
+            ));
+        }
+
+        let req = request.into_inner();
+        if req.chunk_id.is_empty() {
+            return Err(Status::invalid_argument("chunk_id is required"));
+        }
+        if req.data.is_empty() {
+            return Err(Status::invalid_argument("data is required"));
+        }
+
+        let store = get_any_async_chunk_store()?;
+        store
+            .put(&req.chunk_id, &req.data)
+            .await
+            .map_err(|e| Status::internal(format!("put_chunk: {e}")))?;
+
+        log::debug!(
+            "put_chunk: stored chunk {} ({} bytes)",
+            &req.chunk_id[..std::cmp::min(16, req.chunk_id.len())],
+            req.data.len(),
+        );
+
+        Ok(Response::new(PutChunkResponse {}))
+    }
+
+    async fn get_chunk(
+        &self,
+        request: Request<GetChunkRequest>,
+    ) -> Result<Response<GetChunkResponse>, Status> {
+        let req = request.into_inner();
+        if req.chunk_id.is_empty() {
+            return Err(Status::invalid_argument("chunk_id is required"));
+        }
+
+        let store = get_any_async_chunk_store()?;
+        let data = store
+            .get(&req.chunk_id)
+            .await
+            .map_err(|e| Status::not_found(format!("get_chunk: {e}")))?;
+
+        log::debug!(
+            "get_chunk: retrieved chunk {} ({} bytes)",
+            &req.chunk_id[..std::cmp::min(16, req.chunk_id.len())],
+            data.len(),
+        );
+
+        Ok(Response::new(GetChunkResponse { data }))
     }
 
     // ========================================================================
@@ -1080,13 +1192,22 @@ impl DataplaneService for DataplaneServiceImpl {
             ));
         }
 
-        let engine = get_any_policy_engine()?;
+        let policy_engine = get_any_policy_engine()?;
         let policy =
             crate::policy::types::VolumePolicy::new(req.volume_id.clone(), req.desired_replicas);
-        engine.set_policy(policy).await;
+        policy_engine.set_policy(policy).await;
+
+        // Also update the ChunkEngine's protection so write_replicated
+        // uses the new factor immediately (not just the PolicyEngine's
+        // background reconcile loop).
+        if let Ok(chunk_engine) = crate::bdev::novastor_bdev::get_chunk_engine() {
+            chunk_engine.set_protection(crate::metadata::types::Protection::Replication {
+                factor: req.desired_replicas,
+            });
+        }
 
         log::info!(
-            "set_volume_policy: volume={} desired_replicas={}",
+            "set_volume_policy: volume={} desired_replicas={} (ChunkEngine protection updated)",
             req.volume_id,
             req.desired_replicas,
         );
@@ -1131,9 +1252,21 @@ impl DataplaneService for DataplaneServiceImpl {
                     },
                 })
                 .collect();
+            // Strip port from address if the Go agent included it (e.g. "192.168.100.13:9100").
+            // The dataplane needs just the IP for inter-node gRPC connections.
+            let address = if proto_node.address.contains(':') {
+                proto_node
+                    .address
+                    .split(':')
+                    .next()
+                    .unwrap_or(&proto_node.address)
+                    .to_string()
+            } else {
+                proto_node.address.clone()
+            };
             topology.add_node(Node {
                 id: proto_node.node_id.clone(),
-                address: proto_node.address.clone(),
+                address,
                 port: proto_node.port as u16,
                 backends,
                 status,
@@ -1167,9 +1300,20 @@ impl DataplaneService for DataplaneServiceImpl {
                             },
                         })
                         .collect();
+                    // Strip port from address (same as above).
+                    let address = if proto_node.address.contains(':') {
+                        proto_node
+                            .address
+                            .split(':')
+                            .next()
+                            .unwrap_or(&proto_node.address)
+                            .to_string()
+                    } else {
+                        proto_node.address.clone()
+                    };
                     topo2.add_node(Node {
                         id: proto_node.node_id.clone(),
-                        address: proto_node.address.clone(),
+                        address,
                         port: proto_node.port as u16,
                         backends,
                         status,

@@ -1964,6 +1964,7 @@ func (x *ReplicaStatusResponse) GetStatus() string {
 type InitChunkStoreRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	BdevName      string                 `protobuf:"bytes,1,opt,name=bdev_name,json=bdevName,proto3" json:"bdev_name,omitempty"`
+	NodeId        string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2001,6 +2002,13 @@ func (*InitChunkStoreRequest) Descriptor() ([]byte, []int) {
 func (x *InitChunkStoreRequest) GetBdevName() string {
 	if x != nil {
 		return x.BdevName
+	}
+	return ""
+}
+
+func (x *InitChunkStoreRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
 	}
 	return ""
 }
@@ -3740,9 +3748,10 @@ const file_api_proto_dataplane_dataplane_proto_rawDesc = "" +
 	"\tbdev_name\x18\x02 \x01(\tR\bbdevName\x12\x1f\n" +
 	"\vnum_targets\x18\x03 \x01(\rR\n" +
 	"numTargets\x12\x16\n" +
-	"\x06status\x18\x04 \x01(\tR\x06status\"4\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\"M\n" +
 	"\x15InitChunkStoreRequest\x12\x1b\n" +
-	"\tbdev_name\x18\x01 \x01(\tR\bbdevName\"w\n" +
+	"\tbdev_name\x18\x01 \x01(\tR\bbdevName\x12\x17\n" +
+	"\anode_id\x18\x02 \x01(\tR\x06nodeId\"w\n" +
 	"\x16InitChunkStoreResponse\x12\x1f\n" +
 	"\vtotal_slots\x18\x01 \x01(\x04R\n" +
 	"totalSlots\x12\x1d\n" +

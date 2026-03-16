@@ -279,11 +279,13 @@ func (c *Client) ReplicaStatus(volumeID string) (*pb.ReplicaStatusResponse, erro
 // Chunk Store
 // --------------------------------------------------------------------------
 
-// InitChunkStore initialises a chunk store on a bdev.
-func (c *Client) InitChunkStore(bdevName string) (*pb.InitChunkStoreResponse, error) {
+// InitChunkStore initialises a chunk store on a bdev. The nodeID is the
+// persistent UUID of this storage node, used by the chunk engine for CRUSH
+// placement decisions.
+func (c *Client) InitChunkStore(bdevName, nodeID string) (*pb.InitChunkStoreResponse, error) {
 	ctx, cancel := c.ctx()
 	defer cancel()
-	return c.svc.InitChunkStore(ctx, &pb.InitChunkStoreRequest{BdevName: bdevName})
+	return c.svc.InitChunkStore(ctx, &pb.InitChunkStoreRequest{BdevName: bdevName, NodeId: nodeID})
 }
 
 // ChunkStoreStats returns capacity/usage statistics.
