@@ -1348,8 +1348,8 @@ impl DataplaneService for DataplaneServiceImpl {
                         volume_id: vol_id.clone(),
                         chunk_index: idx as u64,
                         chunk_id: entry.chunk_id.clone(),
-                        offset: entry.offset,
-                        length: entry.length,
+                        offset: entry.chunk_index * 4194304,
+                        length: 4194304,
                     });
                 }
             }

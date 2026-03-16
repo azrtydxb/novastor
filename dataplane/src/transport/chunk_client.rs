@@ -328,6 +328,18 @@ mod tests {
         ) -> Result<Response<SetVolumePolicyResponse>, Status> {
             Err(Status::unimplemented("test stub"))
         }
+        async fn reconstruct_shard(
+            &self,
+            _: Request<ReconstructShardRequest>,
+        ) -> Result<Response<ReconstructShardResponse>, Status> {
+            Err(Status::unimplemented("test stub"))
+        }
+        async fn get_chunk_maps(
+            &self,
+            _: Request<GetChunkMapsRequest>,
+        ) -> Result<Response<GetChunkMapsResponse>, Status> {
+            Err(Status::unimplemented("test stub"))
+        }
         async fn update_topology(
             &self,
             _: Request<UpdateTopologyRequest>,
