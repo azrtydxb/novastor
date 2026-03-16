@@ -15,6 +15,9 @@ pub mod metadata;
 pub mod policy;
 #[cfg(feature = "spdk-sys")]
 pub mod spdk;
+#[cfg(not(feature = "spdk-sys"))]
+#[path = "bdev/sub_block.rs"]
+pub mod sub_block;
 pub mod transport;
 
 /// Global tokio runtime handle — set by the binary entry point before SPDK init.
