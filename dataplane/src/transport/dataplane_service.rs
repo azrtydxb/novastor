@@ -653,6 +653,7 @@ impl DataplaneService for DataplaneServiceImpl {
 
             let handle = tokio::runtime::Handle::current();
             crate::bdev::novastor_bdev::set_chunk_engine(engine, handle);
+            crate::bdev::novastor_bdev::set_backend_bdev_name(&req.bdev_name);
 
             // Spawn a background reconciliation loop that runs every 30 seconds.
             let reconcile_engine = policy_engine;

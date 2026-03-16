@@ -1,17 +1,18 @@
 //! NovaStor custom SPDK bdev module.
 //!
-//! This module bridges SPDK's block device layer to the ChunkEngine.
 //! Each volume is registered as an SPDK bdev named `novastor_<volume_id>`.
 //! When SPDK's NVMe-oF subsystem submits I/O to this bdev, the module
-//! offloads the work to a thread pool which calls ChunkEngine::read/write
-//! (async, bridged via tokio Handle::block_on), then completes the I/O
-//! back on the reactor.
+//! performs direct 64KB sub-block reads and writes against the backend SPDK
+//! bdev, bypassing the ChunkEngine on the hot I/O path.
 //!
-//! The bdev is purely virtual — it has no underlying physical device of its
-//! own. The ChunkEngine stores chunks on backend SPDK bdevs via the
-//! BdevChunkStore, with CRUSH placement, replication, and EC support.
+//! Volume data is laid out contiguously on the backend bdev. The sub-block
+//! write path does partial read-modify-write at 64KB granularity (instead
+//! of 4MB), and tracks which sub-blocks have been written via a per-chunk
+//! dirty bitmap in the chunk map entry. SHA-256 hashing and content-
+//! addressing happen only during periodic background sync (not on the hot
+//! path).
 
-use crate::backend::chunk_store::CHUNK_SIZE;
+use crate::bdev::sub_block::{self, bitmap_set, CHUNK_SIZE, SUB_BLOCK_SIZE};
 use crate::chunk::engine::ChunkEngine;
 use crate::error::{DataPlaneError, Result};
 use crate::metadata::store::MetadataStore;
@@ -82,6 +83,26 @@ fn get_metadata_store() -> Option<&'static Arc<MetadataStore>> {
 /// Public accessor for the metadata store (used by delete_volume cleanup).
 pub fn metadata_store_ref() -> Option<&'static Arc<MetadataStore>> {
     METADATA_STORE.get()
+}
+
+/// The backend SPDK bdev name for direct sub-block I/O.
+/// Set during init_chunk_store — this is the underlying storage bdev that
+/// volumes are laid out contiguously on.
+static BACKEND_BDEV_NAME: OnceLock<String> = OnceLock::new();
+
+/// Set the backend bdev name used for direct sub-block I/O.
+/// Must be called once during init_chunk_store.
+pub fn set_backend_bdev_name(name: &str) {
+    if BACKEND_BDEV_NAME.set(name.to_string()).is_err() {
+        info!("novastor_bdev: backend bdev name already set, ignoring");
+    }
+}
+
+fn get_backend_bdev_name() -> Result<&'static str> {
+    BACKEND_BDEV_NAME
+        .get()
+        .map(|s| s.as_str())
+        .ok_or_else(|| DataPlaneError::BdevError("backend bdev name not set".into()))
 }
 
 /// Load all persisted chunk maps from the MetadataStore into VOLUME_CHUNK_MAPS.
@@ -178,168 +199,212 @@ fn get_tokio_handle() -> Result<&'static tokio::runtime::Handle> {
         .ok_or_else(|| DataPlaneError::BdevError("tokio handle not set".into()))
 }
 
-/// Thread pool for offloading ChunkBackend I/O from the reactor thread.
-static IO_POOL: OnceLock<threadpool::ThreadPool> = OnceLock::new();
+/// Per-sub-block lock to serialize concurrent partial writes on the same sub-block.
+/// Key: (volume_name, chunk_index, sub_block_index). The Mutex<()> provides mutual exclusion.
+static SUB_BLOCK_LOCKS: OnceLock<
+    Mutex<HashMap<(String, usize, usize), Arc<tokio::sync::Mutex<()>>>>,
+> = OnceLock::new();
 
-fn io_pool() -> &'static threadpool::ThreadPool {
-    // 32 threads to handle concurrent bdev I/O without pool saturation.
-    // Each write with factor>1 blocks one pool thread while waiting for
-    // concurrent local + remote chunk writes via JoinSet.
-    IO_POOL.get_or_init(|| threadpool::ThreadPool::new(32))
-}
-
-/// Per-chunk lock to serialize concurrent RMW operations on the same chunk.
-/// Key: (volume_name, chunk_index). The Mutex<()> provides mutual exclusion.
-static CHUNK_LOCKS: OnceLock<Mutex<HashMap<(String, usize), Arc<tokio::sync::Mutex<()>>>>> =
-    OnceLock::new();
-
-fn chunk_lock(volume: &str, chunk_idx: usize) -> Arc<tokio::sync::Mutex<()>> {
-    let locks = CHUNK_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+fn sub_block_lock(volume: &str, chunk_idx: usize, sb_idx: usize) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = SUB_BLOCK_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut map = locks.lock().unwrap();
-    map.entry((volume.to_string(), chunk_idx))
+    map.entry((volume.to_string(), chunk_idx, sb_idx))
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
 }
 
-/// Remove all per-chunk lock entries for the given volume from CHUNK_LOCKS.
+/// Remove all per-sub-block lock entries for the given volume from SUB_BLOCK_LOCKS.
 /// Called during volume destruction to prevent unbounded memory growth.
 fn cleanup_volume_locks(volume_name: &str) {
-    if let Some(locks) = CHUNK_LOCKS.get() {
+    if let Some(locks) = SUB_BLOCK_LOCKS.get() {
         let mut map = locks.lock().unwrap();
         let before = map.len();
         map.retain(|key, _| key.0 != volume_name);
         let removed = before - map.len();
         if removed > 0 {
             info!(
-                "novastor_bdev: cleaned up {} chunk locks for volume '{}'",
+                "novastor_bdev: cleaned up {} sub-block locks for volume '{}'",
                 removed, volume_name
             );
         }
     }
 }
 
-/// Read-modify-write helper: ensures every write goes through full 4MB chunks.
+/// Sub-block write: writes data in 64KB sub-block granularity directly to the
+/// backend bdev, bypassing the ChunkEngine for hot-path I/O.
 ///
-/// For sub-chunk writes, reads the existing chunk, overlays the new data at the
-/// correct intra-chunk offset, and writes back the full 4MB chunk. This is
-/// essential because the ChunkEngine stores immutable content-addressed chunks
-/// and the read path expects full CHUNK_SIZE payloads.
-async fn rmw_write(
-    volume_name: &str,
-    offset: u64,
-    data: &[u8],
-    engine: &ChunkEngine,
-) -> Result<Vec<ChunkMapEntry>> {
-    let start_chunk = (offset / CHUNK_SIZE as u64) as usize;
-    let end_chunk =
-        ((offset + data.len() as u64 + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64) as usize;
-
-    let mut all_entries: Vec<ChunkMapEntry> = Vec::new();
+/// For each sub-block the write touches:
+/// - If the write covers the entire 64KB sub-block: write directly (no read).
+/// - Otherwise: read the existing 64KB, overlay new bytes, write 64KB back.
+/// - Update the dirty bitmap and persist the chunk map entry.
+///
+/// No SHA-256 hashing — content-addressing happens during background sync.
+/// Volume data is laid out contiguously on the backend bdev: offset maps directly.
+async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<()> {
+    let backend_bdev = get_backend_bdev_name()?;
+    let total_len = data.len() as u64;
+    let end_offset = offset + total_len;
     let mut data_cursor = 0usize;
 
-    for chunk_idx in start_chunk..end_chunk {
-        // Serialize concurrent RMW on the same chunk to prevent lost updates.
-        let lock = chunk_lock(volume_name, chunk_idx);
-        let _guard = lock.lock().await;
+    // Walk through each sub-block the write touches.
+    let mut pos = offset;
+    while pos < end_offset {
+        let chunk_idx = sub_block::chunk_index(pos) as usize;
+        let sb_idx = sub_block::sub_block_index(pos);
+        let offset_in_sb = sub_block::offset_in_sub_block(pos);
 
-        let chunk_start = chunk_idx as u64 * CHUNK_SIZE as u64;
-        let chunk_end = chunk_start + CHUNK_SIZE as u64;
+        // How many bytes to write in this sub-block.
+        let remaining_in_sb = SUB_BLOCK_SIZE - offset_in_sb;
+        let remaining_data = (end_offset - pos) as usize;
+        let write_len = remaining_in_sb.min(remaining_data);
 
-        // Determine the byte range within this chunk that the write covers.
-        let write_start_in_chunk = if offset > chunk_start {
-            (offset - chunk_start) as usize
-        } else {
-            0
-        };
-        let write_end_abs = offset + data.len() as u64;
-        let write_end_in_chunk = if write_end_abs < chunk_end {
-            (write_end_abs - chunk_start) as usize
-        } else {
-            CHUNK_SIZE
-        };
-        let write_len = write_end_in_chunk - write_start_in_chunk;
+        let covers_full_sb = offset_in_sb == 0 && write_len == SUB_BLOCK_SIZE;
 
-        // If the write covers the entire chunk, skip the read step.
-        let full_chunk = if write_start_in_chunk == 0 && write_len >= CHUNK_SIZE {
-            data[data_cursor..data_cursor + CHUNK_SIZE].to_vec()
+        // Backend bdev offset for this sub-block.
+        let chunk_base = chunk_idx as u64 * CHUNK_SIZE as u64;
+        let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx);
+
+        if covers_full_sb {
+            // Full sub-block write — no read needed.
+            let sb_data = &data[data_cursor..data_cursor + SUB_BLOCK_SIZE];
+            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, sb_data).await?;
         } else {
-            // Read existing chunk data (or zeros if unwritten).
-            // TODO(gap-19): CRC verification on RMW read is missing — if the existing chunk is
-            // corrupted, this RMW will propagate the corruption into the new chunk.
-            let mut buf = vec![0u8; CHUNK_SIZE];
-            // Extract existing chunk entry while holding the lock, then drop
-            // the lock BEFORE any .await to keep the future Send.
-            let existing_entry = {
-                let maps = volume_chunk_maps().read().unwrap();
-                maps.get(volume_name).and_then(|chunk_map| {
+            // Partial sub-block write — lock, read-modify-write at 64KB granularity.
+            let lock = sub_block_lock(volume_name, chunk_idx, sb_idx);
+            let _guard = lock.lock().await;
+
+            let mut buf = match reactor_dispatch::bdev_read_async(
+                backend_bdev,
+                bdev_offset,
+                SUB_BLOCK_SIZE as u64,
+            )
+            .await
+            {
+                Ok(existing) => existing,
+                Err(_) => {
+                    // Sub-block never written — start with zeros.
+                    vec![0u8; SUB_BLOCK_SIZE]
+                }
+            };
+
+            // Ensure buffer is exactly SUB_BLOCK_SIZE.
+            buf.resize(SUB_BLOCK_SIZE, 0);
+
+            // Overlay the new data.
+            buf[offset_in_sb..offset_in_sb + write_len]
+                .copy_from_slice(&data[data_cursor..data_cursor + write_len]);
+
+            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, &buf).await?;
+        }
+
+        // Update the chunk map entry's dirty bitmap.
+        let chunk_id = format!("{}:{}", volume_name, chunk_idx);
+        let entry = {
+            let mut maps = volume_chunk_maps().write().unwrap();
+            let chunk_map = maps.get_mut(volume_name).ok_or_else(|| {
+                DataPlaneError::BdevError(format!("no chunk map for volume '{}'", volume_name))
+            })?;
+
+            // Grow the chunk map if needed.
+            if chunk_idx >= chunk_map.len() {
+                chunk_map.resize(chunk_idx + 1, None);
+            }
+
+            let entry = chunk_map[chunk_idx].get_or_insert_with(|| ChunkMapEntry {
+                chunk_index: chunk_idx as u64,
+                chunk_id: chunk_id.clone(),
+                ec_params: None,
+                dirty_bitmap: 0,
+            });
+            bitmap_set(&mut entry.dirty_bitmap, sb_idx);
+            entry.clone()
+        }; // maps guard dropped here, before any .await
+
+        // Write-through: persist the chunk map entry to the metadata store.
+        if let Some(store) = get_metadata_store() {
+            if let Err(e) = store.put_chunk_map(volume_name, &entry) {
+                log::error!(
+                    "sub_block_write: persistence failed for {}:{}: {}",
+                    volume_name,
+                    chunk_idx,
+                    e
+                );
+                return Err(DataPlaneError::MetadataError(format!(
+                    "chunk map persistence failed: {}",
+                    e
+                )));
+            }
+        }
+
+        data_cursor += write_len;
+        pos += write_len as u64;
+    }
+
+    Ok(())
+}
+
+/// Sub-block read: reads data in 64KB sub-block granularity directly from the
+/// backend bdev, bypassing the ChunkEngine for hot-path I/O.
+///
+/// For each sub-block the read spans, reads 64KB from the backend bdev at the
+/// direct volume offset and extracts the requested bytes. Unwritten sub-blocks
+/// (dirty bitmap bit not set) return zeros.
+async fn sub_block_read(volume_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+    let backend_bdev = get_backend_bdev_name()?;
+    let end_offset = offset + length;
+    let mut result = Vec::with_capacity(length as usize);
+
+    let mut pos = offset;
+    while pos < end_offset {
+        let chunk_idx = sub_block::chunk_index(pos) as usize;
+        let sb_idx = sub_block::sub_block_index(pos);
+        let offset_in_sb = sub_block::offset_in_sub_block(pos);
+
+        // How many bytes to read from this sub-block.
+        let remaining_in_sb = SUB_BLOCK_SIZE - offset_in_sb;
+        let remaining_req = (end_offset - pos) as usize;
+        let read_len = remaining_in_sb.min(remaining_req);
+
+        // Check if this sub-block has been written via the dirty bitmap.
+        let is_dirty = {
+            let maps = volume_chunk_maps().read().unwrap();
+            maps.get(volume_name)
+                .and_then(|chunk_map| {
                     if chunk_idx < chunk_map.len() {
-                        chunk_map[chunk_idx].clone()
+                        chunk_map[chunk_idx].as_ref()
                     } else {
                         None
                     }
                 })
-            }; // maps guard dropped here, before any .await
+                .map(|entry| sub_block::bitmap_is_set(entry.dirty_bitmap, sb_idx))
+                .unwrap_or(false)
+        }; // maps guard dropped
 
-            if let Some(entry) = existing_entry {
-                let entries = vec![entry];
-                match engine.read(volume_name, chunk_start, &entries).await {
-                    Ok(existing) => {
-                        let copy_len = existing.len().min(CHUNK_SIZE);
-                        buf[..copy_len].copy_from_slice(&existing[..copy_len]);
-                    }
-                    Err(_) => {
-                        log::warn!("rmw_write: read of existing chunk failed, using zeroed buffer (risk of data corruption)");
-                    }
-                }
-            }
-            // Overlay the new data.
-            buf[write_start_in_chunk..write_end_in_chunk]
-                .copy_from_slice(&data[data_cursor..data_cursor + write_len]);
-            buf
-        };
+        if !is_dirty {
+            // Sub-block never written — return zeros.
+            result.extend(std::iter::repeat(0u8).take(read_len));
+        } else {
+            // Read the 64KB sub-block from the backend bdev.
+            let chunk_base = chunk_idx as u64 * CHUNK_SIZE as u64;
+            let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx);
+            let sb_data =
+                reactor_dispatch::bdev_read_async(backend_bdev, bdev_offset, SUB_BLOCK_SIZE as u64)
+                    .await?;
 
-        data_cursor += write_len;
-
-        // Write the full 4MB chunk through ChunkEngine.
-        let entries = engine.write(volume_name, chunk_start, &full_chunk).await?;
-
-        // Update chunk map. Use a block to ensure the write guard is dropped
-        // before the next loop iteration's .await (keeps future Send).
-        {
-            let mut maps = volume_chunk_maps().write().unwrap();
-            if let Some(chunk_map) = maps.get_mut(volume_name) {
-                for entry in &entries {
-                    let idx = entry.chunk_index as usize;
-                    if idx < chunk_map.len() {
-                        chunk_map[idx] = Some(entry.clone());
-                    }
-                }
-            }
-        } // maps guard dropped here
-
-        // Write-through: persist each chunk map entry to the metadata store.
-        // Persistence failure is fatal — if we can't persist the chunk map,
-        // the volume will lose track of this chunk on restart.
-        if let Some(store) = get_metadata_store() {
-            for entry in &entries {
-                if let Err(e) = store.put_chunk_map(volume_name, entry) {
-                    log::error!(
-                        "write-through persistence failed for {}: {}",
-                        volume_name,
-                        e
-                    );
-                    return Err(DataPlaneError::MetadataError(format!(
-                        "chunk map persistence failed: {}",
-                        e
-                    )));
-                }
+            // Extract the requested range from the sub-block.
+            let available = sb_data.len().saturating_sub(offset_in_sb);
+            let to_copy = read_len.min(available);
+            result.extend_from_slice(&sb_data[offset_in_sb..offset_in_sb + to_copy]);
+            // Pad with zeros if the sub-block data was shorter than expected.
+            if to_copy < read_len {
+                result.extend(std::iter::repeat(0u8).take(read_len - to_copy));
             }
         }
 
-        all_entries.extend(entries);
+        pos += read_len as u64;
     }
 
-    Ok(all_entries)
+    Ok(result)
 }
 
 /// Per-bdev tracking entry.
@@ -378,8 +443,7 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
     let bdev_name = format!("novastor_{}", volume_name);
 
     // Initialise an empty chunk map for this volume.
-    let num_chunks = (size_bytes + crate::backend::chunk_store::CHUNK_SIZE as u64 - 1)
-        / crate::backend::chunk_store::CHUNK_SIZE as u64;
+    let num_chunks = (size_bytes + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64;
     {
         let mut maps = volume_chunk_maps().write().unwrap();
         maps.entry(volume_name.to_string())
@@ -550,7 +614,7 @@ pub fn destroy(volume_name: &str) -> Result<()> {
         ffi::spdk_io_device_unregister(ctx_addr as *mut c_void, None);
     });
 
-    // Clean up per-chunk locks to prevent unbounded memory growth.
+    // Clean up per-sub-block locks to prevent unbounded memory growth.
     cleanup_volume_locks(volume_name);
 
     // Clean up the volume's chunk map cache.
@@ -705,72 +769,13 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 iov_descs.push((iov.iov_base as usize, iov.iov_len));
             }
 
-            io_pool().execute(move || {
-                log::debug!(
-                    "novastor_bdev: READ io_pool offset={} len={}",
-                    offset,
-                    length
-                );
-                let result = (|| -> Result<Vec<u8>> {
-                    let engine = get_chunk_engine()?;
-                    let handle = get_tokio_handle()?;
+            // Use tokio async for direct sub-block reads from the backend bdev.
+            let handle = get_tokio_handle().expect("tokio handle");
+            handle.spawn(async move {
+                log::debug!("novastor_bdev: READ async offset={} len={}", offset, length);
 
-                    // Look up the chunk map entries for this offset range.
-                    let start_chunk = (offset / CHUNK_SIZE as u64) as usize;
-                    let end_chunk =
-                        ((offset + length + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64) as usize;
+                let result = sub_block_read(&volume_name, offset, length).await;
 
-                    let maps = volume_chunk_maps().read().unwrap();
-                    let chunk_map = maps.get(&volume_name).ok_or_else(|| {
-                        DataPlaneError::BdevError(format!(
-                            "no chunk map for volume '{}'",
-                            volume_name
-                        ))
-                    })?;
-
-                    // Collect entries for the requested range.
-                    let mut entries: Vec<ChunkMapEntry> = Vec::new();
-                    let mut has_unwritten = false;
-                    for idx in start_chunk..end_chunk.min(chunk_map.len()) {
-                        match &chunk_map[idx] {
-                            Some(entry) => entries.push(entry.clone()),
-                            None => {
-                                has_unwritten = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    // If any chunks in the range have never been written, return zeros.
-                    if has_unwritten || entries.is_empty() {
-                        return Ok(vec![0u8; length as usize]);
-                    }
-
-                    // Read through ChunkEngine (async → sync bridge).
-                    let data = handle.block_on(engine.read(&volume_name, offset, &entries))?;
-
-                    // Trim to the exact sub-chunk offset and length requested.
-                    // If the stored chunk is smaller than expected (legacy sub-chunk
-                    // write), pad with zeros to avoid panicking.
-                    let chunk_aligned_start = start_chunk as u64 * CHUNK_SIZE as u64;
-                    let sub_offset = (offset - chunk_aligned_start) as usize;
-                    if sub_offset >= data.len() {
-                        // Offset beyond stored data — return zeros.
-                        return Ok(vec![0u8; length as usize]);
-                    }
-                    let available = data.len() - sub_offset;
-                    let to_return = std::cmp::min(available, length as usize);
-                    let mut result = data[sub_offset..sub_offset + to_return].to_vec();
-                    // Pad with zeros if we couldn't satisfy the full request.
-                    if result.len() < length as usize {
-                        result.resize(length as usize, 0);
-                    }
-                    Ok(result)
-                })();
-
-                // Copy data into the iov buffers and complete I/O on the
-                // reactor thread to guarantee the bdev_io and its iov buffers
-                // are still valid (they remain valid until spdk_bdev_io_complete).
                 match result {
                     Ok(data) => {
                         reactor_dispatch::send_to_reactor(move || unsafe {
@@ -841,15 +846,11 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 }
             }
 
-            // Spawn write on tokio runtime (non-blocking) instead of
-            // io_pool + block_on which stalls pool threads during
-            // remote gRPC replication. The tokio task runs async I/O
-            // concurrently and signals completion back to the reactor.
+            // Spawn write on tokio runtime (non-blocking). Sub-block write
+            // goes directly to the backend bdev in 64KB granularity.
             let handle = get_tokio_handle().expect("tokio handle");
             handle.spawn(async move {
                 let result = async {
-                    let engine = get_chunk_engine()?;
-
                     log::debug!(
                         "novastor_bdev: WRITE async start vol={} offset={} len={}",
                         volume_name,
@@ -857,13 +858,9 @@ unsafe extern "C" fn bdev_submit_request_cb(
                         data.len()
                     );
 
-                    let entries = rmw_write(&volume_name, offset, &data, engine).await?;
+                    sub_block_write(&volume_name, offset, &data).await?;
 
-                    log::debug!(
-                        "novastor_bdev: WRITE async done vol={} entries={}",
-                        volume_name,
-                        entries.len()
-                    );
+                    log::debug!("novastor_bdev: WRITE async done vol={}", volume_name,);
 
                     Ok::<(), DataPlaneError>(())
                 }
@@ -900,8 +897,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
             let handle = get_tokio_handle().expect("tokio handle");
             handle.spawn(async move {
                 let result = async {
-                    let engine = get_chunk_engine()?;
-                    rmw_write(&volume_name, offset, &data, engine).await?;
+                    sub_block_write(&volume_name, offset, &data).await?;
                     Ok::<(), DataPlaneError>(())
                 }
                 .await;
