@@ -507,59 +507,87 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			}
 		}
 
-		// Create NVMe-oF target on the OWNER node only. Each node has an
-		// independent chunk engine, so NVMe multipath across nodes would
-		// send writes to one node and reads to another — which returns zeros.
-		// ANA-based multipath will be enabled once cross-node chunk replication
-		// is implemented. For now, single-path to the owner is correct.
+		// Create NVMe-oF targets on ALL replica nodes for ANA multipath.
+		// Owner node: ANA state "optimized" (preferred path for I/O).
+		// Replica nodes: ANA state "non_optimized" (standby paths for failover).
+		// The kernel NVMe multipath driver selects the optimized path.
 		ownerNode := uniqueNodes[0]
-		nqn, addr, port, createErr := cs.agentTarget.CreateTarget(
-			ctx, ownerNode, volumeID, int64(requiredBytes), "optimized", anaGroupID, protCfg,
-		)
-		if createErr != nil {
-			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
-			return nil, status.Errorf(codes.Internal, "creating NVMe-oF target for volume %s on %s: %v", volumeID, ownerNode, createErr)
-		}
-
-		logging.L.Info("NVMe-oF target created on owner",
-			zap.String("volumeID", volumeID),
-			zap.String("ownerNode", ownerNode),
-			zap.String("ownerNQN", nqn),
-		)
-
-		// Build target addresses JSON for volume context.
 		type targetInfo struct {
 			Addr    string `json:"addr"`
 			Port    string `json:"port"`
 			NQN     string `json:"nqn"`
 			IsOwner bool   `json:"is_owner"`
 		}
-		targets := []targetInfo{{
-			Addr:    addr,
-			Port:    port,
-			NQN:     nqn,
-			IsOwner: true,
-		}}
+		var targets []targetInfo
+		var ownerAddr, ownerPort, ownerNQN string
+
+		for i, node := range uniqueNodes {
+			anaState := "non_optimized"
+			if i == 0 {
+				anaState = "optimized"
+			}
+			nqn, addr, port, createErr := cs.agentTarget.CreateTarget(
+				ctx, node, volumeID, int64(requiredBytes), anaState, anaGroupID, protCfg,
+			)
+			if createErr != nil {
+				// Clean up already-created targets on failure.
+				logging.L.Warn("failed to create target on replica node (continuing)",
+					zap.String("volumeID", volumeID),
+					zap.String("node", node),
+					zap.Error(createErr),
+				)
+				continue
+			}
+			targets = append(targets, targetInfo{
+				Addr:    addr,
+				Port:    port,
+				NQN:     nqn,
+				IsOwner: i == 0,
+			})
+			if i == 0 {
+				ownerAddr = addr
+				ownerPort = port
+				ownerNQN = nqn
+			}
+			logging.L.Info("NVMe-oF target created",
+				zap.String("volumeID", volumeID),
+				zap.String("node", node),
+				zap.String("anaState", anaState),
+				zap.Bool("isOwner", i == 0),
+			)
+		}
+
+		if len(targets) == 0 {
+			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
+			return nil, status.Errorf(codes.Internal, "failed to create any NVMe-oF targets for volume %s", volumeID)
+		}
+
 		targetsJSON, err := json.Marshal(targets)
 		if err != nil {
-			for i := range uniqueNodes {
-				_ = cs.agentTarget.DeleteTarget(ctx, uniqueNodes[i], volumeID)
+			for _, node := range uniqueNodes {
+				_ = cs.agentTarget.DeleteTarget(ctx, node, volumeID)
 			}
 			_ = cs.meta.DeleteVolumeMeta(ctx, volumeID)
 			return nil, status.Errorf(codes.Internal, "marshaling target addresses for volume %s: %v", volumeID, err)
 		}
 
+		logging.L.Info("NVMe-oF multipath targets created",
+			zap.String("volumeID", volumeID),
+			zap.Int("totalTargets", len(targets)),
+			zap.Int("totalNodes", len(uniqueNodes)),
+		)
+
 		volContext["targetAddresses"] = string(targetsJSON)
-		volContext["writeOwner"] = addr
-		volContext["subsystemNQN"] = nqn
-		volContext["targetAddress"] = addr // Backward compat
-		volContext["targetPort"] = port    // Backward compat
+		volContext["writeOwner"] = ownerAddr
+		volContext["subsystemNQN"] = ownerNQN
+		volContext["targetAddress"] = ownerAddr // Backward compat
+		volContext["targetPort"] = ownerPort    // Backward compat
 
 		// Update volume metadata with primary target fields.
 		vm.TargetNodeID = ownerNode
-		vm.TargetAddress = addr
-		vm.TargetPort = port
-		vm.SubsystemNQN = nqn
+		vm.TargetAddress = ownerAddr
+		vm.TargetPort = ownerPort
+		vm.SubsystemNQN = ownerNQN
 		if err := cs.meta.PutVolumeMeta(ctx, vm); err != nil {
 			_ = cs.agentTarget.DeleteTarget(ctx, ownerNode, volumeID)
 			return nil, status.Errorf(codes.Internal, "updating volume metadata with target info: %v", err)
