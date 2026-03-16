@@ -1,91 +1,82 @@
 #!/usr/bin/env bash
 #
-# NovaStor Storage Benchmark
-# ==========================
-# Reproducible I/O and speed test across all protection modes.
-# Creates volumes, runs sequential/random read/write benchmarks,
-# and produces a summary table.
+# NovaStor Storage Benchmark (Serial)
+# ====================================
+# Strictly serial: one volume at a time, writes first, then reads.
+# No concurrent I/O between volumes to avoid cross-contamination.
 #
 # Usage:
 #   ./test/benchmark/storage-bench.sh [--size 64] [--skip-create] [--cleanup]
 #
-# Options:
-#   --size N       Write size in MB (default: 64)
-#   --skip-create  Reuse existing volumes (skip PVC/pod creation)
-#   --cleanup      Delete all benchmark volumes and pods after run
-#
-# Prerequisites:
-#   - KUBECONFIG set or kubectl configured
-#   - StorageClasses: novastor-rep1, novastor-rep3, novastor-rep5,
-#     novastor-ec3, novastor-ec5, novastor-ec7
-#   - Cluster healthy with all dataplanes and agents running
-#
-# Output:
-#   Results saved to test/benchmark/results-YYYY-MM-DD-HHMMSS.txt
+# Output: test/benchmark/results-YYYY-MM-DD-HHMMSS.txt
 
 set -euo pipefail
 
-# --- Configuration ---
 WRITE_SIZE_MB="${BENCH_SIZE_MB:-64}"
 TIMEOUT_SEC=600
-NAMESPACE="default"
-RESULTS_DIR="$(dirname "$0")"
+RESULTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 TIMESTAMP="$(date +%Y-%m-%d-%H%M%S)"
 RESULTS_FILE="${RESULTS_DIR}/results-${TIMESTAMP}.txt"
 SKIP_CREATE=false
 DO_CLEANUP=false
 
-# Parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --size) WRITE_SIZE_MB="$2"; shift 2 ;;
     --skip-create) SKIP_CREATE=true; shift ;;
     --cleanup) DO_CLEANUP=true; shift ;;
-    *) echo "Unknown option: $1"; exit 1 ;;
+    *) echo "Unknown: $1"; exit 1 ;;
   esac
 done
 
-# --- Storage classes to test ---
 declare -a CLASSES=(
   "novastor-rep1:Replication 1x"
   "novastor-rep3:Replication 3x"
   "novastor-rep5:Replication 5x"
-  "novastor-ec3:EC 2+1 (3 nodes)"
-  "novastor-ec5:EC 3+2 (5 nodes)"
-  "novastor-ec7:EC 4+3 (7 nodes)"
+  "novastor-ec3:EC 2+1"
+  "novastor-ec5:EC 3+2"
+  "novastor-ec7:EC 4+3"
 )
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$RESULTS_FILE"; }
 
-# --- Header ---
-{
-  echo "============================================================"
-  echo "NovaStor Storage Benchmark"
-  echo "============================================================"
-  echo "Date:       $(date)"
-  echo "Write size: ${WRITE_SIZE_MB} MB"
-  echo "Cluster:    $(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ') nodes"
-  echo "------------------------------------------------------------"
-} | tee "$RESULTS_FILE"
+header() {
+  cat <<EOF | tee "$RESULTS_FILE"
+============================================================
+NovaStor Storage Benchmark (Serial)
+============================================================
+Date:       $(date)
+Write size: ${WRITE_SIZE_MB} MB
+Nodes:      $(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
+------------------------------------------------------------
+EOF
+}
 
-# --- Create volumes if needed ---
-if [ "$SKIP_CREATE" = false ]; then
-  log "Creating benchmark volumes..."
-  for entry in "${CLASSES[@]}"; do
-    SC="${entry%%:*}"
-    NAME="bench-${SC#novastor-}"
-    POD="bench-pod-${SC#novastor-}"
+wait_pod() {
+  local POD="$1"
+  for i in $(seq 1 "$((TIMEOUT_SEC / 5))"); do
+    STATUS=$(kubectl get pod "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+    if [ "$STATUS" = "Running" ]; then
+      # Wait for fio
+      if kubectl exec "$POD" -- which fio >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+    sleep 5
+  done
+  return 1
+}
 
-    # Delete if exists
-    kubectl delete pod "$POD" --force --grace-period=0 2>/dev/null || true
-    kubectl delete pvc "$NAME" 2>/dev/null || true
-    sleep 2
-
-    kubectl apply -f - <<YAML
+create_volume() {
+  local SC="$1" PVC="$2" POD="$3"
+  kubectl delete pod "$POD" --force --grace-period=0 2>/dev/null || true
+  kubectl delete pvc "$PVC" 2>/dev/null || true
+  sleep 3
+  kubectl apply -f - <<YAML
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: $NAME
+  name: $PVC
 spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: $SC
@@ -97,8 +88,6 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: $POD
-  labels:
-    app: novastor-bench
 spec:
   containers:
   - name: bench
@@ -110,36 +99,20 @@ spec:
   volumes:
   - name: vol
     persistentVolumeClaim:
-      claimName: $NAME
+      claimName: $PVC
 YAML
-    log "  Created $NAME + $POD"
-    sleep 5
-  done
+}
 
-  # Wait for all pods
-  log "Waiting for benchmark pods to be ready..."
-  for entry in "${CLASSES[@]}"; do
-    SC="${entry%%:*}"
-    POD="bench-pod-${SC#novastor-}"
-    for i in $(seq 1 "$((TIMEOUT_SEC / 10))"); do
-      STATUS=$(kubectl get pod "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-      if [ "$STATUS" = "Running" ]; then
-        # Wait for fio to install
-        kubectl exec "$POD" -- which fio >/dev/null 2>&1 && break
-        sleep 5
-        continue
-      fi
-      sleep 10
-    done
-    FINAL=$(kubectl get pod "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-    PATHS=$(kubectl get pv "$(kubectl get pvc "bench-${SC#novastor-}" -o jsonpath='{.spec.volumeName}' 2>/dev/null)" -o jsonpath='{.spec.csi.volumeAttributes.targetAddresses}' 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d))" 2>/dev/null || echo "?")
-    log "  $POD: $FINAL (${PATHS} paths)"
-  done
-fi
+get_paths() {
+  local PVC="$1"
+  local PV
+  PV=$(kubectl get pvc "$PVC" -o jsonpath='{.spec.volumeName}' 2>/dev/null)
+  kubectl get pv "$PV" -o jsonpath='{.spec.csi.volumeAttributes.targetAddresses}' 2>/dev/null \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d))" 2>/dev/null || echo "?"
+}
 
-# --- Run benchmarks ---
 run_fio() {
-  local POD="$1" NAME="$2" RW="$3" BS="$4" SIZE="$5" EXTRA="${6:-}"
+  local POD="$1" NAME="$2" RW="$3" BS="$4" SIZE="$5"
   kubectl exec "$POD" -- fio \
     --name="$NAME" \
     --filename=/data/fio-test \
@@ -153,138 +126,175 @@ run_fio() {
     --runtime=30 \
     --time_based \
     --group_reporting \
-    --output-format=json \
-    $EXTRA 2>/dev/null
+    --output-format=json 2>/dev/null
 }
 
-extract_bw() {
-  # Extract bandwidth in MB/s from fio JSON
+parse_fio() {
   python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 j = d['jobs'][0]
-read_bw = j['read']['bw'] / 1024  # KB/s -> MB/s
-write_bw = j['write']['bw'] / 1024
-iops_r = j['read']['iops']
-iops_w = j['write']['iops']
-lat_r = j['read']['lat_ns']['mean'] / 1e6 if j['read']['lat_ns']['mean'] > 0 else 0
-lat_w = j['write']['lat_ns']['mean'] / 1e6 if j['write']['lat_ns']['mean'] > 0 else 0
-if read_bw > 0:
-    print(f'{read_bw:.1f} MB/s | {iops_r:.0f} IOPS | {lat_r:.2f} ms')
+r_bw = j['read']['bw'] / 1024
+w_bw = j['write']['bw'] / 1024
+r_iops = j['read']['iops']
+w_iops = j['write']['iops']
+r_lat = j['read']['lat_ns']['mean'] / 1e6 if j['read']['lat_ns']['mean'] > 0 else 0
+w_lat = j['write']['lat_ns']['mean'] / 1e6 if j['write']['lat_ns']['mean'] > 0 else 0
+if w_bw > 0:
+    print(f'{w_bw:.1f} MB/s | {w_iops:.0f} IOPS | {w_lat:.2f} ms lat')
+elif r_bw > 0:
+    print(f'{r_bw:.1f} MB/s | {r_iops:.0f} IOPS | {r_lat:.2f} ms lat')
 else:
-    print(f'{write_bw:.1f} MB/s | {iops_w:.0f} IOPS | {lat_w:.2f} ms')
+    print('0 MB/s | 0 IOPS')
 " 2>/dev/null || echo "parse error"
 }
 
-{
-  echo ""
-  echo "============================================================"
-  echo "BENCHMARK RESULTS"
-  echo "============================================================"
-  printf "%-20s | %-8s | %-30s | %-30s | %-30s | %-30s\n" \
-    "Volume" "Paths" "Seq Write (${WRITE_SIZE_MB}M)" "Seq Read (${WRITE_SIZE_MB}M)" "Rand Write 4K" "Rand Read 4K"
-  printf "%-20s-+-%-8s-+-%-30s-+-%-30s-+-%-30s-+-%-30s\n" \
-    "--------------------" "--------" "------------------------------" "------------------------------" "------------------------------" "------------------------------"
-} | tee -a "$RESULTS_FILE"
+# ===================== MAIN =====================
+
+header
+
+# Phase 1: Create all volumes sequentially (if needed)
+if [ "$SKIP_CREATE" = false ]; then
+  log "Phase 1: Creating benchmark volumes (one at a time)..."
+  for entry in "${CLASSES[@]}"; do
+    SC="${entry%%:*}"
+    PVC="bench-${SC#novastor-}"
+    POD="bench-pod-${SC#novastor-}"
+    log "  Creating $PVC ($SC)..."
+    create_volume "$SC" "$PVC" "$POD"
+    if wait_pod "$POD"; then
+      PATHS=$(get_paths "$PVC")
+      log "  $POD: Running ($PATHS paths)"
+    else
+      log "  $POD: FAILED to start within ${TIMEOUT_SEC}s"
+    fi
+  done
+  log ""
+fi
+
+# Phase 2: Sequential write benchmarks (one volume at a time)
+log "Phase 2: Sequential WRITE benchmarks..."
+log "  (Each volume tested alone — no concurrent I/O)"
+log ""
+
+declare -A SEQ_W RND_W SEQ_R RND_R VPATHS
 
 for entry in "${CLASSES[@]}"; do
   SC="${entry%%:*}"
   DESC="${entry#*:}"
+  PVC="bench-${SC#novastor-}"
   POD="bench-pod-${SC#novastor-}"
-  PVC_NAME="bench-${SC#novastor-}"
 
-  # Check pod is running
-  STATUS=$(kubectl get pod "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+  STATUS=$(kubectl get pod "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
   if [ "$STATUS" != "Running" ]; then
-    printf "%-20s | %-8s | %-30s | %-30s | %-30s | %-30s\n" \
-      "$DESC" "?" "SKIPPED (pod not running)" "" "" "" | tee -a "$RESULTS_FILE"
+    log "  $DESC: SKIPPED (pod not running)"
+    SEQ_W[$SC]="SKIP"; RND_W[$SC]="SKIP"; SEQ_R[$SC]="SKIP"; RND_R[$SC]="SKIP"; VPATHS[$SC]="?"
     continue
   fi
 
-  PATHS=$(kubectl get pv "$(kubectl get pvc "$PVC_NAME" -o jsonpath='{.spec.volumeName}' 2>/dev/null)" -o jsonpath='{.spec.csi.volumeAttributes.targetAddresses}' 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d))" 2>/dev/null || echo "?")
+  VPATHS[$SC]=$(get_paths "$PVC")
 
-  # Clean test file
+  # Clean
   kubectl exec "$POD" -- rm -f /data/fio-test 2>/dev/null || true
 
-  # Sequential write
-  SEQ_W=$(run_fio "$POD" seq-write write 1M "${WRITE_SIZE_MB}M" | extract_bw)
-
-  # Sequential read
-  SEQ_R=$(run_fio "$POD" seq-read read 1M "${WRITE_SIZE_MB}M" | extract_bw)
+  # Sequential write 1M blocks
+  log "  $DESC: sequential write ${WRITE_SIZE_MB}M (bs=1M, depth=4, 30s)..."
+  SEQ_W[$SC]=$(run_fio "$POD" seq-write write 1M "${WRITE_SIZE_MB}M" | parse_fio)
+  log "    -> ${SEQ_W[$SC]}"
 
   # Random write 4K
-  RND_W=$(run_fio "$POD" rand-write randwrite 4k "${WRITE_SIZE_MB}M" | extract_bw)
+  log "  $DESC: random write 4K (depth=4, 30s)..."
+  RND_W[$SC]=$(run_fio "$POD" rand-write randwrite 4k "${WRITE_SIZE_MB}M" | parse_fio)
+  log "    -> ${RND_W[$SC]}"
 
-  # Random read 4K
-  RND_R=$(run_fio "$POD" rand-read randread 4k "${WRITE_SIZE_MB}M" | extract_bw)
-
-  printf "%-20s | %-8s | %-30s | %-30s | %-30s | %-30s\n" \
-    "$DESC" "$PATHS" "$SEQ_W" "$SEQ_R" "$RND_W" "$RND_R" | tee -a "$RESULTS_FILE"
+  log ""
 done
 
-# --- Data integrity test ---
-{
-  echo ""
-  echo "============================================================"
-  echo "DATA INTEGRITY TEST"
-  echo "============================================================"
-} | tee -a "$RESULTS_FILE"
+# Phase 3: Sequential read benchmarks (one volume at a time)
+log "Phase 3: Sequential READ benchmarks..."
+log "  (Reading data written in Phase 2)"
+log ""
 
-INTEGRITY_PASS=0
-INTEGRITY_FAIL=0
+for entry in "${CLASSES[@]}"; do
+  SC="${entry%%:*}"
+  DESC="${entry#*:}"
+  PVC="bench-${SC#novastor-}"
+  POD="bench-pod-${SC#novastor-}"
+
+  STATUS=$(kubectl get pod "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+  if [ "$STATUS" != "Running" ]; then
+    SEQ_R[$SC]="SKIP"; RND_R[$SC]="SKIP"
+    continue
+  fi
+
+  # Sequential read 1M blocks
+  log "  $DESC: sequential read ${WRITE_SIZE_MB}M (bs=1M, depth=4, 30s)..."
+  SEQ_R[$SC]=$(run_fio "$POD" seq-read read 1M "${WRITE_SIZE_MB}M" | parse_fio)
+  log "    -> ${SEQ_R[$SC]}"
+
+  # Random read 4K
+  log "  $DESC: random read 4K (depth=4, 30s)..."
+  RND_R[$SC]=$(run_fio "$POD" rand-read randread 4k "${WRITE_SIZE_MB}M" | parse_fio)
+  log "    -> ${RND_R[$SC]}"
+
+  log ""
+done
+
+# Phase 4: Data integrity
+log "Phase 4: Data integrity verification..."
+PASS=0; FAIL=0
 for entry in "${CLASSES[@]}"; do
   SC="${entry%%:*}"
   DESC="${entry#*:}"
   POD="bench-pod-${SC#novastor-}"
 
-  STATUS=$(kubectl get pod "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-  if [ "$STATUS" != "Running" ]; then
-    continue
-  fi
+  STATUS=$(kubectl get pod "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+  [ "$STATUS" != "Running" ] && continue
 
-  # Write known pattern, read back, compare
   RESULT=$(kubectl exec "$POD" -- sh -c '
-    dd if=/dev/urandom of=/data/integrity-test bs=1M count=8 2>/dev/null
-    WRITE_MD5=$(md5sum /data/integrity-test | awk "{print \$1}")
-    sync
+    dd if=/dev/urandom of=/data/integrity bs=1M count=8 2>/dev/null && sync
+    W=$(md5sum /data/integrity | awk "{print \$1}")
     echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
-    READ_MD5=$(md5sum /data/integrity-test | awk "{print \$1}")
-    if [ "$WRITE_MD5" = "$READ_MD5" ]; then
-      echo "PASS $WRITE_MD5"
-    else
-      echo "FAIL write=$WRITE_MD5 read=$READ_MD5"
-    fi
-    rm -f /data/integrity-test
+    R=$(md5sum /data/integrity | awk "{print \$1}")
+    [ "$W" = "$R" ] && echo "PASS $W" || echo "FAIL w=$W r=$R"
+    rm -f /data/integrity
   ' 2>/dev/null || echo "ERROR")
 
   if echo "$RESULT" | grep -q "^PASS"; then
-    MD5=$(echo "$RESULT" | awk '{print $2}')
-    log "  $DESC: PASS (md5=$MD5)"
-    INTEGRITY_PASS=$((INTEGRITY_PASS + 1))
+    log "  $DESC: PASS"; PASS=$((PASS+1))
   else
-    log "  $DESC: FAIL ($RESULT)"
-    INTEGRITY_FAIL=$((INTEGRITY_FAIL + 1))
+    log "  $DESC: FAIL ($RESULT)"; FAIL=$((FAIL+1))
   fi
 done
 
+# Summary table
 {
   echo ""
-  echo "Integrity: ${INTEGRITY_PASS} passed, ${INTEGRITY_FAIL} failed"
-  echo ""
   echo "============================================================"
-  echo "Results saved to: $RESULTS_FILE"
+  echo "SUMMARY"
+  echo "============================================================"
+  printf "%-16s | %5s | %-28s | %-28s | %-28s | %-28s\n" \
+    "Protection" "Paths" "Seq Write" "Seq Read" "Rand Write 4K" "Rand Read 4K"
+  printf "%-16s-+-%5s-+-%-28s-+-%-28s-+-%-28s-+-%-28s\n" \
+    "----------------" "-----" "----------------------------" "----------------------------" "----------------------------" "----------------------------"
+  for entry in "${CLASSES[@]}"; do
+    SC="${entry%%:*}"
+    DESC="${entry#*:}"
+    printf "%-16s | %5s | %-28s | %-28s | %-28s | %-28s\n" \
+      "$DESC" "${VPATHS[$SC]:-?}" "${SEQ_W[$SC]:-?}" "${SEQ_R[$SC]:-?}" "${RND_W[$SC]:-?}" "${RND_R[$SC]:-?}"
+  done
+  echo ""
+  echo "Integrity: ${PASS} passed, ${FAIL} failed"
+  echo "Results:   ${RESULTS_FILE}"
   echo "============================================================"
 } | tee -a "$RESULTS_FILE"
 
-# --- Cleanup ---
+# Cleanup
 if [ "$DO_CLEANUP" = true ]; then
-  log "Cleaning up benchmark volumes..."
+  log "Cleaning up..."
   for entry in "${CLASSES[@]}"; do
     SC="${entry%%:*}"
-    POD="bench-pod-${SC#novastor-}"
-    PVC="bench-${SC#novastor-}"
-    kubectl delete pod "$POD" --force --grace-period=0 2>/dev/null || true
-    kubectl delete pvc "$PVC" 2>/dev/null || true
+    kubectl delete pod "bench-pod-${SC#novastor-}" --force --grace-period=0 2>/dev/null || true
+    kubectl delete pvc "bench-${SC#novastor-}" 2>/dev/null || true
   done
-  log "Cleanup complete."
 fi
