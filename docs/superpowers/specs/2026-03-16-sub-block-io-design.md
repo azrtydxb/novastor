@@ -176,6 +176,18 @@ Based on baseline benchmark (10GB rep1 volume, ARM64 K3s cluster):
 | Rand Write (4K) | 46 IOPS | 1000-5000 IOPS |
 | Rand Read (4K) | 66 IOPS | 500-2000 IOPS |
 
+## SHA-256 Acceleration
+
+### Implemented
+
+1. **ARM64 hardware SHA extensions** — `sha2` crate compiled with `features = ["asm"]` which uses ARMv8 `sha256su0`/`sha256su1`/`sha256h`/`sha256h2` instructions. 3-10x faster than software SHA-256. Cluster CPUs (Cortex-A55) have `sha2` in cpuinfo.
+
+2. **Parallel chunk hashing during sync** — dirty chunks are hashed on separate tokio tasks via JoinSet. With 4 CPU cores, 4 chunks hash simultaneously. Sync throughput scales linearly with cores.
+
+### Long-Term TODO
+
+3. **Merkle tree / sub-block pre-hashing** — hash each 64KB sub-block on write (fast with hardware SHA). During sync, combine sub-block hashes into the chunk hash via a Merkle tree instead of re-reading 4MB from backend. Eliminates sync read I/O entirely. Adds per-write CPU cost (SHA-256 of 64KB ≈ 5μs with hardware acceleration). Implement after measuring whether sync read I/O is a bottleneck.
+
 ## Design Decisions Summary
 
 | Decision | Choice | Rationale |
