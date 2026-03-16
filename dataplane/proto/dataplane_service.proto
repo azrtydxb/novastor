@@ -45,6 +45,9 @@ service DataplaneService {
   rpc PutChunk(PutChunkRequest) returns (PutChunkResponse);
   rpc GetChunk(GetChunkRequest) returns (GetChunkResponse);
 
+  // Inter-dataplane sub-block replication (delta sync)
+  rpc PutSubBlock(PutSubBlockRequest) returns (PutSubBlockResponse);
+
   // --- Backend Management ---
   rpc InitBackend(InitBackendRequest) returns (InitBackendResponse);
   rpc CreateVolume(CreateVolumeRequest) returns (CreateVolumeResponse);
@@ -404,3 +407,12 @@ message GetChunkMapsResponse {
   repeated ChunkMapEntryProto entries = 1;
   uint32 volume_count = 2;
 }
+
+// Sub-block delta replication
+message PutSubBlockRequest {
+  string volume_id = 1;
+  uint64 chunk_index = 2;
+  uint32 sub_block_index = 3;
+  bytes data = 4;
+}
+message PutSubBlockResponse {}

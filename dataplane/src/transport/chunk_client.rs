@@ -358,6 +358,12 @@ mod tests {
         ) -> Result<Response<HeartbeatResponse>, Status> {
             Err(Status::unimplemented("test stub"))
         }
+        async fn put_sub_block(
+            &self,
+            _: Request<PutSubBlockRequest>,
+        ) -> Result<Response<PutSubBlockResponse>, Status> {
+            Err(Status::unimplemented("test stub"))
+        }
     }
 
     async fn start_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {

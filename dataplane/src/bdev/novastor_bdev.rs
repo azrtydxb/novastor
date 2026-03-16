@@ -76,7 +76,7 @@ pub fn set_metadata_store(store: Arc<MetadataStore>) {
     }
 }
 
-fn get_metadata_store() -> Option<&'static Arc<MetadataStore>> {
+pub fn get_metadata_store() -> Option<&'static Arc<MetadataStore>> {
     METADATA_STORE.get()
 }
 
@@ -98,7 +98,7 @@ pub fn set_backend_bdev_name(name: &str) {
     }
 }
 
-fn get_backend_bdev_name() -> Result<&'static str> {
+pub fn get_backend_bdev_name() -> Result<&'static str> {
     BACKEND_BDEV_NAME
         .get()
         .map(|s| s.as_str())

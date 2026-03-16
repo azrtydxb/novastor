@@ -689,6 +689,13 @@ impl DataplaneService for DataplaneServiceImpl {
                 req.bdev_name,
             );
 
+            // Spawn background sync task for periodic chunk hashing + replication.
+            crate::chunk::sync::spawn_sync_task(req.bdev_name.clone());
+            log::info!(
+                "init_chunk_store: background sync task started for bdev '{}'",
+                req.bdev_name
+            );
+
             // Open the persistent metadata store and restore any previously
             // persisted chunk maps so volumes survive dataplane restarts.
             let metadata_dir = format!("/var/lib/novastor/metadata");
@@ -947,6 +954,41 @@ impl DataplaneService for DataplaneServiceImpl {
         );
 
         Ok(Response::new(GetChunkResponse { data }))
+    }
+
+    async fn put_sub_block(
+        &self,
+        request: Request<PutSubBlockRequest>,
+    ) -> Result<Response<PutSubBlockResponse>, Status> {
+        if is_fenced() {
+            return Err(Status::unavailable(
+                "dataplane is fenced — no writes accepted",
+            ));
+        }
+
+        let req = request.into_inner();
+        let bdev_name = crate::bdev::novastor_bdev::get_backend_bdev_name()
+            .map_err(|e| Status::failed_precondition(format!("backend not ready: {e}")))?;
+
+        let chunk_base = req.chunk_index * crate::bdev::sub_block::CHUNK_SIZE as u64;
+        let sb_offset = crate::bdev::sub_block::backend_sub_block_offset(
+            chunk_base,
+            req.sub_block_index as usize,
+        );
+
+        crate::spdk::reactor_dispatch::bdev_write_async(bdev_name, sb_offset, &req.data)
+            .await
+            .map_err(|e| Status::internal(format!("sub-block write failed: {e}")))?;
+
+        log::debug!(
+            "put_sub_block: vol={} chunk={} sb={} ({}B)",
+            req.volume_id,
+            req.chunk_index,
+            req.sub_block_index,
+            req.data.len()
+        );
+
+        Ok(Response::new(PutSubBlockResponse {}))
     }
 
     // ========================================================================
