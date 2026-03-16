@@ -62,10 +62,10 @@ impl ChunkStore {
     }
 
     /// Compute the SHA-256 chunk ID for the given data.
+    /// Uses ring for hardware-accelerated SHA-256 (auto-detects ARM SHA extensions).
     pub fn compute_chunk_id(data: &[u8]) -> ChunkID {
-        use sha2::{Digest, Sha256};
-        let hash = Sha256::digest(data);
-        hex::encode(hash)
+        let hash = ring::digest::digest(&ring::digest::SHA256, data);
+        hex::encode(hash.as_ref())
     }
 
     /// Compute CRC-32C checksum for the given data.

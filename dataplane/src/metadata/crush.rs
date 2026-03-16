@@ -3,7 +3,7 @@
 //! Implements the straw2 bucket type from the CRUSH paper, providing
 //! deterministic, pseudo-random placement with failure-domain separation.
 
-use sha2::{Digest, Sha256};
+use ring::digest;
 
 use crate::metadata::topology::{ClusterMap, Node, NodeStatus};
 
@@ -88,14 +88,10 @@ fn select_backend(chunk_id: &str, node: &Node, replica: usize) -> String {
 /// Deterministic hash: SHA-256 of `"chunk_id:candidate_id:replica"`, first 4
 /// bytes interpreted as a big-endian u32.
 fn crush_hash(chunk_id: &str, candidate_id: &str, replica: usize) -> u32 {
-    let mut hasher = Sha256::new();
-    hasher.update(chunk_id.as_bytes());
-    hasher.update(b":");
-    hasher.update(candidate_id.as_bytes());
-    hasher.update(b":");
-    hasher.update(replica.to_string().as_bytes());
-    let result = hasher.finalize();
-    u32::from_be_bytes([result[0], result[1], result[2], result[3]])
+    let input = format!("{}:{}:{}", chunk_id, candidate_id, replica);
+    let result = digest::digest(&digest::SHA256, input.as_bytes());
+    let bytes = result.as_ref();
+    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
 // ---------------------------------------------------------------------------

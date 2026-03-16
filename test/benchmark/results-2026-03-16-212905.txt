@@ -1,0 +1,27 @@
+============================================================
+NovaStor Storage Benchmark
+============================================================
+Date:       Mon Mar 16 21:29:05 +04 2026
+Write size: 32 MB
+Cluster:    8 nodes
+------------------------------------------------------------
+[21:29:05] Creating benchmark volumes...
+[21:29:08]   Created bench-rep1 + bench-pod-rep1
+[21:29:15]   Created bench-rep3 + bench-pod-rep3
+[21:29:22]   Created bench-rep5 + bench-pod-rep5
+[21:29:29]   Created bench-ec3 + bench-pod-ec3
+[21:29:37]   Created bench-ec5 + bench-pod-ec5
+[21:29:44]   Created bench-ec7 + bench-pod-ec7
+[21:29:49] Waiting for benchmark pods to be ready...
+[21:39:55]   bench-pod-rep1: Pending (? paths)
+[21:49:59]   bench-pod-rep3: Pending (1 paths)
+[21:52:21]   bench-pod-rep5: Running (3 paths)
+[22:02:25]   bench-pod-ec3: Pending (1 paths)
+[22:12:30]   bench-pod-ec5: Pending (4 paths)
+[22:22:35]   bench-pod-ec7: Pending (6 paths)
+
+============================================================
+BENCHMARK RESULTS
+============================================================
+Volume               | Paths    | Seq Write (32M)                | Seq Read (32M)                 | Rand Write 4K                  | Rand Read 4K                  
+---------------------+----------+--------------------------------+--------------------------------+--------------------------------+-------------------------------

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use log::warn;
-use sha2::{Digest, Sha256};
+use ring::digest;
 use tokio::sync::Mutex;
 
 use crate::backend::chunk_store::{ChunkHeader, ChunkStore, CHUNK_SIZE};
@@ -150,10 +150,10 @@ impl ChunkEngine {
     }
 
     /// Content-addressed chunk ID (SHA-256 hex of raw data).
+    /// Uses ring for hardware-accelerated SHA-256 (auto-detects ARM SHA extensions).
     pub fn compute_chunk_id(data: &[u8]) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        hex::encode(hasher.finalize())
+        let result = digest::digest(&digest::SHA256, data);
+        hex::encode(result.as_ref())
     }
 
     /// Prepend ChunkHeader to raw data.

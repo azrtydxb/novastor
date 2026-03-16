@@ -180,7 +180,7 @@ Based on baseline benchmark (10GB rep1 volume, ARM64 K3s cluster):
 
 ### Implemented
 
-1. **ARM64 hardware SHA extensions** — `sha2` crate compiled with `features = ["asm"]` which uses ARMv8 `sha256su0`/`sha256su1`/`sha256h`/`sha256h2` instructions. 3-10x faster than software SHA-256. Cluster CPUs (Cortex-A55) have `sha2` in cpuinfo.
+1. **`ring` crate with auto-detected ARM SHA extensions** — replaced `sha2` crate with `ring` which uses aggressively optimized assembly and auto-detects ARMv8 SHA-256 hardware instructions at runtime. No feature flags needed. Generally faster than `sha2` even with `asm` feature. Cluster CPUs (Cortex-A55) have `sha2` in cpuinfo.
 
 2. **Parallel chunk hashing during sync** — dirty chunks are hashed on separate tokio tasks via JoinSet. With 4 CPU cores, 4 chunks hash simultaneously. Sync throughput scales linearly with cores.
 
