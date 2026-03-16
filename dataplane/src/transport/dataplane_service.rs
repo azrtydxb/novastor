@@ -1186,31 +1186,49 @@ impl DataplaneService for DataplaneServiceImpl {
         if req.volume_id.is_empty() {
             return Err(Status::invalid_argument("volume_id is required"));
         }
-        if req.desired_replicas == 0 {
+        if req.desired_replicas == 0 && req.data_shards == 0 {
             return Err(Status::invalid_argument(
-                "desired_replicas must be at least 1",
+                "either desired_replicas or data_shards must be > 0",
             ));
         }
 
         let policy_engine = get_any_policy_engine()?;
-        let policy =
-            crate::policy::types::VolumePolicy::new(req.volume_id.clone(), req.desired_replicas);
+        let policy = if req.data_shards > 0 && req.parity_shards > 0 {
+            crate::policy::types::VolumePolicy::new_ec(
+                req.volume_id.clone(),
+                req.data_shards,
+                req.parity_shards,
+            )
+        } else {
+            crate::policy::types::VolumePolicy::new(req.volume_id.clone(), req.desired_replicas)
+        };
         policy_engine.set_policy(policy).await;
 
-        // Also update the ChunkEngine's protection so write_replicated
-        // uses the new factor immediately (not just the PolicyEngine's
-        // background reconcile loop).
+        // Also update the ChunkEngine's protection so writes use the new
+        // scheme immediately (not just the PolicyEngine's background reconcile).
         if let Ok(chunk_engine) = crate::bdev::novastor_bdev::get_chunk_engine() {
-            chunk_engine.set_protection(crate::metadata::types::Protection::Replication {
-                factor: req.desired_replicas,
-            });
+            if req.data_shards > 0 && req.parity_shards > 0 {
+                chunk_engine.set_protection(crate::metadata::types::Protection::ErasureCoding {
+                    data_shards: req.data_shards,
+                    parity_shards: req.parity_shards,
+                });
+                log::info!(
+                    "set_volume_policy: volume={} EC {}/{} (ChunkEngine protection updated)",
+                    req.volume_id,
+                    req.data_shards,
+                    req.parity_shards,
+                );
+            } else {
+                chunk_engine.set_protection(crate::metadata::types::Protection::Replication {
+                    factor: req.desired_replicas,
+                });
+                log::info!(
+                    "set_volume_policy: volume={} replicas={} (ChunkEngine protection updated)",
+                    req.volume_id,
+                    req.desired_replicas,
+                );
+            }
         }
-
-        log::info!(
-            "set_volume_policy: volume={} desired_replicas={} (ChunkEngine protection updated)",
-            req.volume_id,
-            req.desired_replicas,
-        );
 
         Ok(Response::new(SetVolumePolicyResponse { accepted: true }))
     }

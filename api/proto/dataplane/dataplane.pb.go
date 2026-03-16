@@ -3263,8 +3263,11 @@ type SetVolumePolicyRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	VolumeId        string                 `protobuf:"bytes,1,opt,name=volume_id,json=volumeId,proto3" json:"volume_id,omitempty"`
 	DesiredReplicas uint32                 `protobuf:"varint,2,opt,name=desired_replicas,json=desiredReplicas,proto3" json:"desired_replicas,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// For erasure coding: set data_shards and parity_shards (desired_replicas=0).
+	DataShards    uint32 `protobuf:"varint,3,opt,name=data_shards,json=dataShards,proto3" json:"data_shards,omitempty"`
+	ParityShards  uint32 `protobuf:"varint,4,opt,name=parity_shards,json=parityShards,proto3" json:"parity_shards,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SetVolumePolicyRequest) Reset() {
@@ -3307,6 +3310,20 @@ func (x *SetVolumePolicyRequest) GetVolumeId() string {
 func (x *SetVolumePolicyRequest) GetDesiredReplicas() uint32 {
 	if x != nil {
 		return x.DesiredReplicas
+	}
+	return 0
+}
+
+func (x *SetVolumePolicyRequest) GetDataShards() uint32 {
+	if x != nil {
+		return x.DataShards
+	}
+	return 0
+}
+
+func (x *SetVolumePolicyRequest) GetParityShards() uint32 {
+	if x != nil {
+		return x.ParityShards
 	}
 	return 0
 }
@@ -4002,10 +4019,13 @@ const file_api_proto_dataplane_dataplane_proto_rawDesc = "" +
 	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\"C\n" +
 	"\x11HeartbeatResponse\x12\x16\n" +
 	"\x06fenced\x18\x01 \x01(\bR\x06fenced\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status\"`\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\"\xa6\x01\n" +
 	"\x16SetVolumePolicyRequest\x12\x1b\n" +
 	"\tvolume_id\x18\x01 \x01(\tR\bvolumeId\x12)\n" +
-	"\x10desired_replicas\x18\x02 \x01(\rR\x0fdesiredReplicas\"5\n" +
+	"\x10desired_replicas\x18\x02 \x01(\rR\x0fdesiredReplicas\x12\x1f\n" +
+	"\vdata_shards\x18\x03 \x01(\rR\n" +
+	"dataShards\x12#\n" +
+	"\rparity_shards\x18\x04 \x01(\rR\fparityShards\"5\n" +
 	"\x17SetVolumePolicyResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\"\xa5\x01\n" +
 	"\fTopologyNode\x12\x17\n" +

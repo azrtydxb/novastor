@@ -467,6 +467,9 @@ message HeartbeatResponse {
 message SetVolumePolicyRequest {
   string volume_id = 1;
   uint32 desired_replicas = 2;
+  // For erasure coding: set data_shards and parity_shards (desired_replicas=0).
+  uint32 data_shards = 3;
+  uint32 parity_shards = 4;
 }
 
 message SetVolumePolicyResponse {

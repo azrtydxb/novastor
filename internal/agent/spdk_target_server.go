@@ -178,17 +178,30 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	)
 
 	// Set per-volume protection policy on the dataplane's policy engine.
-	if prot := req.GetProtection(); prot != nil && prot.GetReplicationFactor() > 0 {
-		if accepted, err := s.dpClient.SetVolumePolicy(volumeID, prot.GetReplicationFactor()); err != nil {
-			logging.L.Warn("spdk target: failed to set volume policy (non-fatal)",
-				zap.String("volumeID", volumeID),
-				zap.Error(err),
-			)
-		} else if accepted {
-			logging.L.Info("spdk target: volume policy set",
-				zap.String("volumeID", volumeID),
-				zap.Uint32("replicas", prot.GetReplicationFactor()),
-			)
+	if prot := req.GetProtection(); prot != nil {
+		var replicas, dataShards, parityShards uint32
+		if prot.GetDataShards() > 0 && prot.GetParityShards() > 0 {
+			// Erasure coding mode
+			dataShards = prot.GetDataShards()
+			parityShards = prot.GetParityShards()
+		} else if prot.GetReplicationFactor() > 0 {
+			// Replication mode
+			replicas = prot.GetReplicationFactor()
+		}
+		if replicas > 0 || dataShards > 0 {
+			if accepted, err := s.dpClient.SetVolumePolicy(volumeID, replicas, dataShards, parityShards); err != nil {
+				logging.L.Warn("spdk target: failed to set volume policy (non-fatal)",
+					zap.String("volumeID", volumeID),
+					zap.Error(err),
+				)
+			} else if accepted {
+				logging.L.Info("spdk target: volume policy set",
+					zap.String("volumeID", volumeID),
+					zap.Uint32("replicas", replicas),
+					zap.Uint32("dataShards", dataShards),
+					zap.Uint32("parityShards", parityShards),
+				)
+			}
 		}
 	}
 
