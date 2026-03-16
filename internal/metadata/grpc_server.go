@@ -578,6 +578,89 @@ func (s *GRPCServer) DeleteShardPlacement(ctx context.Context, req *pb.DeleteSha
 	return &emptypb.Empty{}, nil
 }
 
+// ---- Heal task operations ----
+
+func (s *GRPCServer) PutHealTask(ctx context.Context, req *pb.PutHealTaskRequest) (*emptypb.Empty, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("PutHealTask").Inc()
+	if req.Task == nil {
+		return nil, status.Error(codes.InvalidArgument, "task is required")
+	}
+	task := HealTaskFromProto(req.Task)
+	if err := s.store.PutHealTask(ctx, task); err != nil {
+		return nil, storeErr(err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+func (s *GRPCServer) GetHealTask(ctx context.Context, req *pb.GetHealTaskRequest) (*pb.GetHealTaskResponse, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("GetHealTask").Inc()
+	task, err := s.store.GetHealTask(ctx, req.Id)
+	if err != nil {
+		return nil, storeErr(err)
+	}
+	return &pb.GetHealTaskResponse{Task: HealTaskToProto(task)}, nil
+}
+
+func (s *GRPCServer) ListPendingHealTasks(ctx context.Context, _ *emptypb.Empty) (*pb.ListPendingHealTasksResponse, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("ListPendingHealTasks").Inc()
+	tasks, err := s.store.ListPendingHealTasks(ctx)
+	if err != nil {
+		return nil, storeErr(err)
+	}
+	resp := &pb.ListPendingHealTasksResponse{Tasks: make([]*pb.HealTaskMsg, len(tasks))}
+	for i, t := range tasks {
+		resp.Tasks[i] = HealTaskToProto(t)
+	}
+	return resp, nil
+}
+
+func (s *GRPCServer) ListHealTasksByVolume(ctx context.Context, req *pb.ListHealTasksByVolumeRequest) (*pb.ListHealTasksByVolumeResponse, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("ListHealTasksByVolume").Inc()
+	tasks, err := s.store.ListHealTasksByVolume(ctx, req.VolumeId)
+	if err != nil {
+		return nil, storeErr(err)
+	}
+	resp := &pb.ListHealTasksByVolumeResponse{Tasks: make([]*pb.HealTaskMsg, len(tasks))}
+	for i, t := range tasks {
+		resp.Tasks[i] = HealTaskToProto(t)
+	}
+	return resp, nil
+}
+
+func (s *GRPCServer) DeleteHealTask(ctx context.Context, req *pb.DeleteHealTaskRequest) (*emptypb.Empty, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("DeleteHealTask").Inc()
+	if err := s.store.DeleteHealTask(ctx, req.Id); err != nil {
+		return nil, storeErr(err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// ---- Quota operations ----
+
+func (s *GRPCServer) SetQuota(ctx context.Context, req *pb.SetQuotaRequest) (*emptypb.Empty, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("SetQuota").Inc()
+	if req.Spec == nil {
+		return nil, status.Error(codes.InvalidArgument, "spec is required")
+	}
+	scope, spec := QuotaSpecFromProto(req.Spec)
+	qs := NewQuotaStore(s.store)
+	if err := qs.SetQuota(ctx, scope, spec); err != nil {
+		return nil, storeErr(err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+func (s *GRPCServer) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.GetUsageResponse, error) {
+	metrics.MetadataOpsTotal.WithLabelValues("GetUsage").Inc()
+	scope := QuotaScope{Kind: req.Kind, Name: req.Name}
+	qs := NewQuotaStore(s.store)
+	usage, err := qs.GetUsage(ctx, scope)
+	if err != nil {
+		return nil, storeErr(err)
+	}
+	return &pb.GetUsageResponse{Usage: QuotaUsageToProto(scope, usage)}, nil
+}
+
 // ---- Cluster management operations ----
 
 func (s *GRPCServer) JoinCluster(_ context.Context, req *pb.JoinClusterRequest) (*pb.JoinClusterResponse, error) {

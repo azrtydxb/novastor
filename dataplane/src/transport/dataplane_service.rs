@@ -1327,6 +1327,40 @@ impl DataplaneService for DataplaneServiceImpl {
     }
 
     // ========================================================================
+    // Metadata Sync
+    // ========================================================================
+
+    async fn get_chunk_maps(
+        &self,
+        request: Request<GetChunkMapsRequest>,
+    ) -> Result<Response<GetChunkMapsResponse>, Status> {
+        let _req = request.into_inner();
+        let maps = crate::bdev::novastor_bdev::volume_chunk_maps()
+            .read()
+            .unwrap();
+        let mut entries = Vec::new();
+        let mut volume_count = 0u32;
+        for (vol_id, chunk_map) in maps.iter() {
+            volume_count += 1;
+            for (idx, entry_opt) in chunk_map.iter().enumerate() {
+                if let Some(entry) = entry_opt {
+                    entries.push(ChunkMapEntryProto {
+                        volume_id: vol_id.clone(),
+                        chunk_index: idx as u64,
+                        chunk_id: entry.chunk_id.clone(),
+                        offset: entry.offset,
+                        length: entry.length,
+                    });
+                }
+            }
+        }
+        Ok(Response::new(GetChunkMapsResponse {
+            entries,
+            volume_count,
+        }))
+    }
+
+    // ========================================================================
     // Health & Fencing
     // ========================================================================
 
@@ -1351,5 +1385,187 @@ impl DataplaneService for DataplaneServiceImpl {
             fenced: is_fenced(),
             status: "ok".to_string(),
         }))
+    }
+
+    // ========================================================================
+    // EC Shard Reconstruction
+    // ========================================================================
+
+    async fn reconstruct_shard(
+        &self,
+        request: Request<ReconstructShardRequest>,
+    ) -> Result<Response<ReconstructShardResponse>, Status> {
+        let req = request.into_inner();
+        if req.chunk_id.is_empty() {
+            return Err(Status::invalid_argument("chunk_id is required"));
+        }
+        if req.data_shards == 0 {
+            return Err(Status::invalid_argument("data_shards must be > 0"));
+        }
+        if req.parity_shards == 0 {
+            return Err(Status::invalid_argument("parity_shards must be > 0"));
+        }
+        let total = req.data_shards + req.parity_shards;
+        if req.shard_index >= total {
+            return Err(Status::invalid_argument(format!(
+                "shard_index {} out of range (total shards {})",
+                req.shard_index, total
+            )));
+        }
+
+        let policy_engine = get_any_policy_engine()?;
+
+        let shard_index = req.shard_index as usize;
+        let total_shards = total as usize;
+        let mut shard_addrs: Vec<(usize, String, String)> = Vec::new();
+
+        for idx in 0..total_shards {
+            if idx == shard_index {
+                continue;
+            }
+            let shard_id = format!("{}:shard:{}", req.chunk_id, idx);
+            // Use the policy engine's location store (accessed via public methods).
+            // We check if the async chunk store has this shard by querying
+            // the store. For remote shards we'd need the location store.
+            // For now, rely on the location store exposed through the engine.
+            //
+            // Since PolicyEngine doesn't expose location_store directly, we
+            // check via the chunk store for local availability, and rely on
+            // the caller (Go agent) providing target_node info.
+            let store = get_any_async_chunk_store()?;
+            match store.exists(&shard_id).await {
+                Ok(true) => {
+                    let node_id = policy_engine.node_id().to_string();
+                    shard_addrs.push((idx, node_id, String::new()));
+                }
+                _ => {
+                    // Shard not local — skip. The background reconcile loop
+                    // handles multi-node reconstruction via the location store.
+                }
+            }
+        }
+
+        if shard_addrs.len() < req.data_shards as usize {
+            return Err(Status::failed_precondition(format!(
+                "insufficient local surviving shards: have {}, need {} data shards",
+                shard_addrs.len(),
+                req.data_shards
+            )));
+        }
+
+        // Perform reconstruction using ChunkOperations-style logic inline.
+        use crate::backend::chunk_store::ChunkHeader;
+
+        let mut available: Vec<(usize, Vec<u8>)> = Vec::new();
+        let store = get_any_async_chunk_store()?;
+        for (idx, _node_id, _addr) in &shard_addrs {
+            let shard_id = format!("{}:shard:{}", req.chunk_id, idx);
+            match store.get(&shard_id).await {
+                Ok(shard_with_header) => {
+                    if shard_with_header.len() < ChunkHeader::SIZE {
+                        continue;
+                    }
+                    let header_bytes: [u8; ChunkHeader::SIZE] = shard_with_header
+                        [..ChunkHeader::SIZE]
+                        .try_into()
+                        .map_err(|_| Status::internal("shard header read failed"))?;
+                    let header = ChunkHeader::from_bytes(&header_bytes)
+                        .map_err(|e| Status::internal(format!("shard header parse: {e}")))?;
+                    let data_len = header.data_len as usize;
+                    if shard_with_header.len() < ChunkHeader::SIZE + data_len {
+                        continue;
+                    }
+                    let raw =
+                        shard_with_header[ChunkHeader::SIZE..ChunkHeader::SIZE + data_len].to_vec();
+                    available.push((*idx, raw));
+                }
+                Err(e) => {
+                    log::warn!("reconstruct_shard: failed to read shard {}: {}", idx, e);
+                }
+            }
+        }
+
+        if available.len() < req.data_shards as usize {
+            return Err(Status::internal(format!(
+                "could not read enough shards: got {}, need {}",
+                available.len(),
+                req.data_shards
+            )));
+        }
+
+        let reconstructed = if shard_index < req.data_shards as usize {
+            let mut originals: Vec<(usize, &[u8])> = Vec::new();
+            let mut recovery: Vec<(usize, &[u8])> = Vec::new();
+            for (idx, data) in &available {
+                if *idx < req.data_shards as usize {
+                    originals.push((*idx, data.as_slice()));
+                } else {
+                    recovery.push((*idx - req.data_shards as usize, data.as_slice()));
+                }
+            }
+            let recovered = reed_solomon_simd::decode(
+                req.data_shards as usize,
+                req.parity_shards as usize,
+                originals,
+                recovery,
+            )
+            .map_err(|e| Status::internal(format!("RS decode failed: {e}")))?;
+            recovered
+                .get(&shard_index)
+                .cloned()
+                .ok_or_else(|| Status::internal("RS decode did not produce target shard"))?
+        } else {
+            let mut data_pieces: Vec<Vec<u8>> = vec![Vec::new(); req.data_shards as usize];
+            for (idx, data) in &available {
+                if *idx < req.data_shards as usize {
+                    data_pieces[*idx] = data.clone();
+                }
+            }
+            if data_pieces.iter().any(|d| d.is_empty()) {
+                return Err(Status::internal(
+                    "cannot reconstruct parity: missing data shards",
+                ));
+            }
+            let data_refs: Vec<&[u8]> = data_pieces.iter().map(|d| d.as_slice()).collect();
+            let parity = reed_solomon_simd::encode(
+                req.data_shards as usize,
+                req.parity_shards as usize,
+                data_refs.into_iter(),
+            )
+            .map_err(|e| Status::internal(format!("RS encode failed: {e}")))?;
+            let parity_idx = shard_index - req.data_shards as usize;
+            parity
+                .into_iter()
+                .nth(parity_idx)
+                .ok_or_else(|| Status::internal("RS encode did not produce target parity shard"))?
+        };
+
+        // Write the reconstructed shard.
+        let header = ChunkHeader {
+            magic: *b"NVAC",
+            version: 1,
+            flags: 0,
+            checksum: crc32c::crc32c(&reconstructed),
+            data_len: reconstructed.len() as u32,
+            _reserved: [0; 2],
+        };
+        let mut prepared = Vec::with_capacity(ChunkHeader::SIZE + reconstructed.len());
+        prepared.extend_from_slice(&header.to_bytes());
+        prepared.extend_from_slice(&reconstructed);
+
+        let shard_id = format!("{}:shard:{}", req.chunk_id, shard_index);
+        store
+            .put(&shard_id, &prepared)
+            .await
+            .map_err(|e| Status::internal(format!("failed to write reconstructed shard: {e}")))?;
+
+        log::info!(
+            "reconstruct_shard: rebuilt shard {} index {} ({} bytes)",
+            req.chunk_id,
+            shard_index,
+            reconstructed.len()
+        );
+
+        Ok(Response::new(ReconstructShardResponse { success: true }))
     }
 }

@@ -20,35 +20,25 @@ func NewGRPCMetadataStore(client *metadata.GRPCClient) *GRPCMetadataStore {
 }
 
 // ---- Heal task operations ----
-//
-// TODO(proto): The metadata service proto (api/proto/metadata/metadata.proto) does not
-// yet define RPCs for heal tasks (PutHealTask, GetHealTask, ListHealTasks, DeleteHealTask).
-// The RaftStore has local implementations in protection_meta.go, but there is no gRPC
-// surface to expose them remotely. To wire these stubs:
-//   1. Add HealTask message and CRUD RPCs to metadata.proto
-//   2. Regenerate protobuf Go code (make generate-proto)
-//   3. Implement the RPCs in grpc_server.go (delegating to RaftStore)
-//   4. Add client methods to grpc_client.go
-//   5. Call the client methods here instead of returning errors
 
 func (s *GRPCMetadataStore) PutHealTask(ctx context.Context, task *metadata.HealTask) error {
-	return fmt.Errorf("PutHealTask: not implemented via gRPC — metadata proto lacks heal task RPCs")
+	return s.client.PutHealTask(ctx, task)
 }
 
 func (s *GRPCMetadataStore) GetHealTask(ctx context.Context, taskID string) (*metadata.HealTask, error) {
-	return nil, fmt.Errorf("GetHealTask: not implemented via gRPC — metadata proto lacks heal task RPCs")
+	return s.client.GetHealTask(ctx, taskID)
 }
 
 func (s *GRPCMetadataStore) ListPendingHealTasks(ctx context.Context) ([]*metadata.HealTask, error) {
-	return nil, fmt.Errorf("ListPendingHealTasks: not implemented via gRPC — metadata proto lacks heal task RPCs")
+	return s.client.ListPendingHealTasks(ctx)
 }
 
 func (s *GRPCMetadataStore) ListHealTasksByVolume(ctx context.Context, volumeID string) ([]*metadata.HealTask, error) {
-	return nil, fmt.Errorf("ListHealTasksByVolume: not implemented via gRPC — metadata proto lacks heal task RPCs")
+	return s.client.ListHealTasksByVolume(ctx, volumeID)
 }
 
 func (s *GRPCMetadataStore) DeleteHealTask(ctx context.Context, taskID string) error {
-	return fmt.Errorf("DeleteHealTask: not implemented via gRPC — metadata proto lacks heal task RPCs")
+	return s.client.DeleteHealTask(ctx, taskID)
 }
 
 // ---- Shard placement operations ----

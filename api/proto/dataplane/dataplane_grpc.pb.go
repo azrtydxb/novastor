@@ -53,6 +53,7 @@ const (
 	DataplaneService_UpdateTopology_FullMethodName      = "/dataplane.DataplaneService/UpdateTopology"
 	DataplaneService_GetVersion_FullMethodName          = "/dataplane.DataplaneService/GetVersion"
 	DataplaneService_Heartbeat_FullMethodName           = "/dataplane.DataplaneService/Heartbeat"
+	DataplaneService_GetChunkMaps_FullMethodName        = "/dataplane.DataplaneService/GetChunkMaps"
 )
 
 // DataplaneServiceClient is the client API for DataplaneService service.
@@ -132,6 +133,8 @@ type DataplaneServiceClient interface {
 	// Heartbeat is sent periodically by the Go agent. If the dataplane stops
 	// receiving heartbeats, it fences itself (stops accepting writes).
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
+	// --- Metadata Sync ---
+	GetChunkMaps(ctx context.Context, in *GetChunkMapsRequest, opts ...grpc.CallOption) (*GetChunkMapsResponse, error)
 }
 
 type dataplaneServiceClient struct {
@@ -494,6 +497,16 @@ func (c *dataplaneServiceClient) Heartbeat(ctx context.Context, in *HeartbeatReq
 	return out, nil
 }
 
+func (c *dataplaneServiceClient) GetChunkMaps(ctx context.Context, in *GetChunkMapsRequest, opts ...grpc.CallOption) (*GetChunkMapsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetChunkMapsResponse)
+	err := c.cc.Invoke(ctx, DataplaneService_GetChunkMaps_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataplaneServiceServer is the server API for DataplaneService service.
 // All implementations must embed UnimplementedDataplaneServiceServer
 // for forward compatibility.
@@ -571,6 +584,8 @@ type DataplaneServiceServer interface {
 	// Heartbeat is sent periodically by the Go agent. If the dataplane stops
 	// receiving heartbeats, it fences itself (stops accepting writes).
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
+	// --- Metadata Sync ---
+	GetChunkMaps(context.Context, *GetChunkMapsRequest) (*GetChunkMapsResponse, error)
 	mustEmbedUnimplementedDataplaneServiceServer()
 }
 
@@ -682,6 +697,9 @@ func (UnimplementedDataplaneServiceServer) GetVersion(context.Context, *GetVersi
 }
 func (UnimplementedDataplaneServiceServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
+}
+func (UnimplementedDataplaneServiceServer) GetChunkMaps(context.Context, *GetChunkMapsRequest) (*GetChunkMapsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetChunkMaps not implemented")
 }
 func (UnimplementedDataplaneServiceServer) mustEmbedUnimplementedDataplaneServiceServer() {}
 func (UnimplementedDataplaneServiceServer) testEmbeddedByValue()                          {}
@@ -1298,6 +1316,24 @@ func _DataplaneService_Heartbeat_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataplaneService_GetChunkMaps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetChunkMapsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneServiceServer).GetChunkMaps(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneService_GetChunkMaps_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneServiceServer).GetChunkMaps(ctx, req.(*GetChunkMapsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataplaneService_ServiceDesc is the grpc.ServiceDesc for DataplaneService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1432,6 +1468,10 @@ var DataplaneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Heartbeat",
 			Handler:    _DataplaneService_Heartbeat_Handler,
+		},
+		{
+			MethodName: "GetChunkMaps",
+			Handler:    _DataplaneService_GetChunkMaps_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

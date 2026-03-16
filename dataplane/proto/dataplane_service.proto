@@ -52,9 +52,13 @@ service DataplaneService {
 
   // --- Policy Engine ---
   rpc SetVolumePolicy(SetVolumePolicyRequest) returns (SetVolumePolicyResponse);
+  rpc ReconstructShard(ReconstructShardRequest) returns (ReconstructShardResponse);
 
   // --- Topology ---
   rpc UpdateTopology(UpdateTopologyRequest) returns (UpdateTopologyResponse);
+
+  // --- Metadata Sync ---
+  rpc GetChunkMaps(GetChunkMapsRequest) returns (GetChunkMapsResponse);
 
   // --- Health & Fencing ---
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
@@ -345,6 +349,19 @@ message SetVolumePolicyResponse {
   bool accepted = 1;
 }
 
+// EC Shard Reconstruction messages
+message ReconstructShardRequest {
+  string chunk_id = 1;        // Original chunk ID
+  uint32 shard_index = 2;     // Which shard to reconstruct
+  uint32 data_shards = 3;     // EC parameters
+  uint32 parity_shards = 4;
+  string target_node = 5;     // Where to place the reconstructed shard
+}
+
+message ReconstructShardResponse {
+  bool success = 1;
+}
+
 // Topology messages
 message TopologyNode {
   string node_id = 1;
@@ -367,4 +384,20 @@ message UpdateTopologyRequest {
 }
 message UpdateTopologyResponse {
   bool accepted = 1;
+}
+
+// Metadata Sync messages
+message ChunkMapEntryProto {
+  string volume_id = 1;
+  uint64 chunk_index = 2;
+  string chunk_id = 3;
+  uint64 offset = 4;
+  uint32 length = 5;
+}
+message GetChunkMapsRequest {
+  string bdev_name = 1;
+}
+message GetChunkMapsResponse {
+  repeated ChunkMapEntryProto entries = 1;
+  uint32 volume_count = 2;
 }

@@ -53,7 +53,7 @@ static TOKIO_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static VOLUME_CHUNK_MAPS: OnceLock<RwLock<HashMap<String, Vec<Option<ChunkMapEntry>>>>> =
     OnceLock::new();
 
-fn volume_chunk_maps() -> &'static RwLock<HashMap<String, Vec<Option<ChunkMapEntry>>>> {
+pub fn volume_chunk_maps() -> &'static RwLock<HashMap<String, Vec<Option<ChunkMapEntry>>>> {
     VOLUME_CHUNK_MAPS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 

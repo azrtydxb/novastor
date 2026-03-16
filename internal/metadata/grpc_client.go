@@ -753,3 +753,88 @@ func (c *GRPCClient) RequestOwnership(ctx context.Context, volumeID, requesterAd
 	})
 	return granted, generation, err
 }
+
+// ---- Heal task operations ----
+
+// PutHealTask stores a heal task via the remote metadata service.
+func (c *GRPCClient) PutHealTask(ctx context.Context, task *HealTask) error {
+	return c.retryOnUnavailable(func() error {
+		_, err := c.client.PutHealTask(ctx, &pb.PutHealTaskRequest{
+			Task: HealTaskToProto(task),
+		})
+		return err
+	})
+}
+
+// GetHealTask retrieves a heal task by ID.
+func (c *GRPCClient) GetHealTask(ctx context.Context, taskID string) (*HealTask, error) {
+	resp, err := c.client.GetHealTask(ctx, &pb.GetHealTaskRequest{
+		Id: taskID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return HealTaskFromProto(resp.Task), nil
+}
+
+// ListPendingHealTasks returns all pending heal tasks.
+func (c *GRPCClient) ListPendingHealTasks(ctx context.Context) ([]*HealTask, error) {
+	resp, err := c.client.ListPendingHealTasks(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	tasks := make([]*HealTask, len(resp.Tasks))
+	for i, t := range resp.Tasks {
+		tasks[i] = HealTaskFromProto(t)
+	}
+	return tasks, nil
+}
+
+// ListHealTasksByVolume returns all heal tasks for a given volume.
+func (c *GRPCClient) ListHealTasksByVolume(ctx context.Context, volumeID string) ([]*HealTask, error) {
+	resp, err := c.client.ListHealTasksByVolume(ctx, &pb.ListHealTasksByVolumeRequest{
+		VolumeId: volumeID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	tasks := make([]*HealTask, len(resp.Tasks))
+	for i, t := range resp.Tasks {
+		tasks[i] = HealTaskFromProto(t)
+	}
+	return tasks, nil
+}
+
+// DeleteHealTask removes a heal task by ID.
+func (c *GRPCClient) DeleteHealTask(ctx context.Context, taskID string) error {
+	return c.retryOnUnavailable(func() error {
+		_, err := c.client.DeleteHealTask(ctx, &pb.DeleteHealTaskRequest{
+			Id: taskID,
+		})
+		return err
+	})
+}
+
+// ---- Quota operations ----
+
+// SetQuota sets a quota for a scope via the remote metadata service.
+func (c *GRPCClient) SetQuota(ctx context.Context, scope QuotaScope, spec *QuotaSpec) error {
+	return c.retryOnUnavailable(func() error {
+		_, err := c.client.SetQuota(ctx, &pb.SetQuotaRequest{
+			Spec: QuotaSpecToProto(scope, spec),
+		})
+		return err
+	})
+}
+
+// GetUsage retrieves the current usage for a scope via the remote metadata service.
+func (c *GRPCClient) GetUsage(ctx context.Context, scope QuotaScope) (*QuotaUsage, error) {
+	resp, err := c.client.GetUsage(ctx, &pb.GetUsageRequest{
+		Kind: scope.Kind,
+		Name: scope.Name,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return QuotaUsageFromProto(resp.Usage), nil
+}

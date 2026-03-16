@@ -42,7 +42,10 @@ impl<'a> PolicyEvaluator<'a> {
     ) -> Vec<PolicyAction> {
         let health = self.evaluate_chunk(location, policy);
         match health {
-            ChunkHealth::Healthy => Vec::new(),
+            // EC shard health is handled by generate_ec_actions, not here.
+            ChunkHealth::Healthy
+            | ChunkHealth::ShardDegraded { .. }
+            | ChunkHealth::ShardUnrecoverable { .. } => Vec::new(),
             ChunkHealth::UnderReplicated { actual, desired } => {
                 let needed = (desired - actual) as usize;
                 // Use CRUSH to find candidate nodes for this chunk.
@@ -76,11 +79,132 @@ impl<'a> PolicyEvaluator<'a> {
         }
     }
 
+    // -------------------------------------------------------------------
+    // EC shard evaluation
+    // -------------------------------------------------------------------
+
+    /// Evaluate EC shard health for a given chunk.
+    ///
+    /// Scans `all_locations` for shard entries matching `{chunk_id}:shard:N`
+    /// and compares against the expected shard count from the policy's EC
+    /// parameters. Returns the health status.
+    pub fn evaluate_ec_chunk(
+        &self,
+        chunk_id: &str,
+        ec: &crate::policy::types::EcPolicyParams,
+        all_locations: &[ChunkLocation],
+    ) -> ChunkHealth {
+        let total = ec.data_shards + ec.parity_shards;
+        let mut present_indices: Vec<usize> = Vec::new();
+        let prefix = format!("{chunk_id}:shard:");
+
+        for loc in all_locations {
+            if let Some(suffix) = loc.chunk_id.strip_prefix(&prefix) {
+                if let Ok(idx) = suffix.parse::<usize>() {
+                    if idx < total as usize && !loc.node_ids.is_empty() {
+                        present_indices.push(idx);
+                    }
+                }
+            }
+        }
+
+        present_indices.sort_unstable();
+        present_indices.dedup();
+
+        let present = present_indices.len() as u32;
+
+        if present >= total {
+            return ChunkHealth::Healthy;
+        }
+
+        // Determine which shard indices are missing.
+        let missing: Vec<usize> = (0..total as usize)
+            .filter(|i| !present_indices.contains(i))
+            .collect();
+
+        if present >= ec.data_shards {
+            // Recoverable: we have enough shards to reconstruct.
+            ChunkHealth::ShardDegraded {
+                total_shards: total,
+                present_shards: present,
+                missing_indices: missing,
+            }
+        } else {
+            // Unrecoverable: not enough shards.
+            ChunkHealth::ShardUnrecoverable {
+                total_shards: total,
+                present_shards: present,
+                data_shards: ec.data_shards,
+            }
+        }
+    }
+
+    /// Generate `ReconstructShard` actions for missing EC shards.
+    pub fn generate_ec_actions(
+        &self,
+        chunk_id: &str,
+        ec: &crate::policy::types::EcPolicyParams,
+        all_locations: &[ChunkLocation],
+    ) -> Vec<PolicyAction> {
+        let health = self.evaluate_ec_chunk(chunk_id, ec, all_locations);
+        match health {
+            ChunkHealth::ShardDegraded {
+                missing_indices,
+                total_shards,
+                ..
+            } => {
+                // Collect nodes that hold surviving shards.
+                let prefix = format!("{chunk_id}:shard:");
+                let source_nodes: Vec<String> = all_locations
+                    .iter()
+                    .filter(|loc| loc.chunk_id.starts_with(&prefix) && !loc.node_ids.is_empty())
+                    .flat_map(|loc| loc.node_ids.iter().cloned())
+                    .collect::<std::collections::HashSet<String>>()
+                    .into_iter()
+                    .collect();
+
+                // Use CRUSH to pick target nodes for reconstructed shards.
+                let placements = crush::select(chunk_id, total_shards as usize, self.topology);
+
+                let mut actions = Vec::new();
+                for missing_idx in &missing_indices {
+                    // Pick a target from CRUSH placements. If the shard index
+                    // maps to a CRUSH slot, use that node; otherwise use the
+                    // first available CRUSH node not already holding a shard.
+                    let target = if *missing_idx < placements.len() {
+                        placements[*missing_idx].0.clone()
+                    } else {
+                        placements
+                            .iter()
+                            .find(|(n, _)| !source_nodes.contains(n))
+                            .map(|(n, _)| n.clone())
+                            .unwrap_or_else(|| placements[0].0.clone())
+                    };
+
+                    actions.push(PolicyAction::ReconstructShard {
+                        chunk_id: chunk_id.to_string(),
+                        shard_index: *missing_idx,
+                        data_shards: ec.data_shards,
+                        parity_shards: ec.parity_shards,
+                        source_nodes: source_nodes.clone(),
+                        target_node: target,
+                    });
+                }
+                actions
+            }
+            _ => Vec::new(), // Healthy or unrecoverable — no actions.
+        }
+    }
+
     /// Scan all chunk locations against their volume policies, returning all
     /// needed corrective actions.
     ///
     /// Uses `refs` to map each chunk to its owning volume(s), then looks up the
     /// corresponding [`VolumePolicy`].  The first matching policy wins.
+    ///
+    /// For EC-protected volumes, the evaluator checks shard presence for
+    /// parent chunk IDs (those NOT containing `:shard:`) and emits
+    /// `ReconstructShard` actions for any missing shards.
     pub fn evaluate_all(
         &self,
         locations: &[ChunkLocation],
@@ -88,11 +212,28 @@ impl<'a> PolicyEvaluator<'a> {
         refs: &HashMap<String, ChunkRef>,
     ) -> Vec<PolicyAction> {
         let mut actions = Vec::new();
+        // Track parent chunk IDs already evaluated for EC to avoid duplicates.
+        let mut ec_evaluated: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         for loc in locations {
             if let Some(chunk_ref) = refs.get(&loc.chunk_id) {
                 for volume_id in &chunk_ref.volume_ids {
                     if let Some(policy) = policies.get(volume_id) {
-                        actions.extend(self.generate_actions(loc, policy));
+                        if let Some(ec) = &policy.ec_params {
+                            // For EC, we evaluate the parent chunk. If this
+                            // entry is a shard (`chunk:shard:N`), extract the
+                            // parent. Otherwise, this IS the parent.
+                            let parent_id = if let Some(pos) = loc.chunk_id.find(":shard:") {
+                                loc.chunk_id[..pos].to_string()
+                            } else {
+                                loc.chunk_id.clone()
+                            };
+                            if ec_evaluated.insert(parent_id.clone()) {
+                                actions.extend(self.generate_ec_actions(&parent_id, ec, locations));
+                            }
+                        } else {
+                            actions.extend(self.generate_actions(loc, policy));
+                        }
                         break; // Use first matching policy
                     }
                 }
@@ -312,6 +453,139 @@ mod tests {
             .count();
         assert_eq!(replicate_count, 2);
         assert_eq!(remove_count, 1);
+    }
+
+    #[test]
+    fn ec_healthy_all_shards_present() {
+        let topo = test_topology();
+        let eval = PolicyEvaluator::new(&topo);
+        let ec = crate::policy::types::EcPolicyParams {
+            data_shards: 2,
+            parity_shards: 1,
+        };
+
+        // All 3 shards present on distinct nodes.
+        let locations: Vec<ChunkLocation> = (0..3)
+            .map(|i| {
+                let mut loc = ChunkLocation::new(format!("chunk-ec:shard:{i}"));
+                loc.add_node(format!("node-{i}"));
+                loc
+            })
+            .collect();
+
+        let health = eval.evaluate_ec_chunk("chunk-ec", &ec, &locations);
+        assert_eq!(health, ChunkHealth::Healthy);
+    }
+
+    #[test]
+    fn ec_degraded_one_shard_missing() {
+        let topo = test_topology();
+        let eval = PolicyEvaluator::new(&topo);
+        let ec = crate::policy::types::EcPolicyParams {
+            data_shards: 2,
+            parity_shards: 1,
+        };
+
+        // Shard 0 and 1 present, shard 2 missing.
+        let mut loc0 = ChunkLocation::new("chunk-ec:shard:0".to_string());
+        loc0.add_node("node-0".to_string());
+        let mut loc1 = ChunkLocation::new("chunk-ec:shard:1".to_string());
+        loc1.add_node("node-1".to_string());
+        let locations = vec![loc0, loc1];
+
+        let health = eval.evaluate_ec_chunk("chunk-ec", &ec, &locations);
+        match &health {
+            ChunkHealth::ShardDegraded {
+                total_shards,
+                present_shards,
+                missing_indices,
+            } => {
+                assert_eq!(*total_shards, 3);
+                assert_eq!(*present_shards, 2);
+                assert_eq!(*missing_indices, vec![2]);
+            }
+            other => panic!("expected ShardDegraded, got {other:?}"),
+        }
+
+        // generate_ec_actions should produce 1 ReconstructShard action.
+        let actions = eval.generate_ec_actions("chunk-ec", &ec, &locations);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PolicyAction::ReconstructShard {
+                chunk_id,
+                shard_index,
+                data_shards,
+                parity_shards,
+                ..
+            } => {
+                assert_eq!(chunk_id, "chunk-ec");
+                assert_eq!(*shard_index, 2);
+                assert_eq!(*data_shards, 2);
+                assert_eq!(*parity_shards, 1);
+            }
+            other => panic!("expected ReconstructShard, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ec_unrecoverable_too_many_missing() {
+        let topo = test_topology();
+        let eval = PolicyEvaluator::new(&topo);
+        let ec = crate::policy::types::EcPolicyParams {
+            data_shards: 4,
+            parity_shards: 2,
+        };
+
+        // Only 3 shards present out of 6, need at least 4 (data_shards).
+        let locations: Vec<ChunkLocation> = (0..3)
+            .map(|i| {
+                let mut loc = ChunkLocation::new(format!("chunk-ec:shard:{i}"));
+                loc.add_node(format!("node-{i}"));
+                loc
+            })
+            .collect();
+
+        let health = eval.evaluate_ec_chunk("chunk-ec", &ec, &locations);
+        match health {
+            ChunkHealth::ShardUnrecoverable { .. } => {}
+            other => panic!("expected ShardUnrecoverable, got {other:?}"),
+        }
+
+        // No actions for unrecoverable state.
+        let actions = eval.generate_ec_actions("chunk-ec", &ec, &locations);
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn evaluate_all_with_ec_policy() {
+        let topo = test_topology();
+        let eval = PolicyEvaluator::new(&topo);
+
+        // EC 2+1 chunk with shard 2 missing.
+        let mut loc0 = ChunkLocation::new("chunk-ec:shard:0".to_string());
+        loc0.add_node("node-0".to_string());
+        let mut loc1 = ChunkLocation::new("chunk-ec:shard:1".to_string());
+        loc1.add_node("node-1".to_string());
+
+        let locations = vec![loc0, loc1];
+
+        let mut policies = HashMap::new();
+        policies.insert(
+            "vol-ec".to_string(),
+            VolumePolicy::new_ec("vol-ec".to_string(), 2, 1),
+        );
+
+        // Both shard entries reference vol-ec.
+        let mut refs = HashMap::new();
+        for shard_id in &["chunk-ec:shard:0", "chunk-ec:shard:1"] {
+            let mut cr = ChunkRef::new(shard_id.to_string());
+            cr.add_volume("vol-ec".to_string());
+            refs.insert(shard_id.to_string(), cr);
+        }
+
+        let actions = eval.evaluate_all(&locations, &policies, &refs);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], PolicyAction::ReconstructShard { .. }));
     }
 
     #[test]

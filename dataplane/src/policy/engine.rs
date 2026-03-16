@@ -206,6 +206,78 @@ impl PolicyEngine {
                         );
                     }
                 }
+                PolicyAction::ReconstructShard {
+                    chunk_id,
+                    shard_index,
+                    data_shards,
+                    parity_shards,
+                    source_nodes: _,
+                    target_node,
+                } => {
+                    let target_addr = self.node_addr(&topology, target_node);
+                    if let Some(tgt_addr) = target_addr {
+                        // Build (shard_idx, node_id, addr) for all surviving
+                        // shards by scanning location store.
+                        let total = (*data_shards + *parity_shards) as usize;
+                        let mut shard_addrs: Vec<(usize, String, String)> = Vec::new();
+                        for idx in 0..total {
+                            if idx == *shard_index {
+                                continue; // This is the missing one.
+                            }
+                            let shard_id = format!("{chunk_id}:shard:{idx}");
+                            if let Ok(Some(loc)) = self.location_store.get_location(&shard_id) {
+                                for nid in &loc.node_ids {
+                                    if let Some(addr) = self.node_addr(&topology, nid) {
+                                        shard_addrs.push((idx, nid.clone(), addr));
+                                        break; // One source per shard is enough.
+                                    }
+                                }
+                            }
+                        }
+
+                        match self
+                            .operations
+                            .reconstruct_shard(
+                                chunk_id,
+                                *shard_index,
+                                *data_shards,
+                                *parity_shards,
+                                &shard_addrs,
+                                target_node,
+                                &tgt_addr,
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                let shard_id = format!("{chunk_id}:shard:{shard_index}");
+                                if let Err(e) = self
+                                    .location_store
+                                    .add_node_to_chunk(&shard_id, target_node)
+                                {
+                                    warn!(
+                                        "failed to record shard location for {}: {}",
+                                        shard_id, e
+                                    );
+                                }
+                                info!(
+                                    "reconstructed EC shard {} index {} on {}",
+                                    chunk_id, shard_index, target_node
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "failed to reconstruct EC shard {} index {}: {}",
+                                    chunk_id, shard_index, e
+                                );
+                            }
+                        }
+                    } else {
+                        warn!(
+                            "cannot reconstruct shard {} index {}: missing address for target {}",
+                            chunk_id, shard_index, target_node
+                        );
+                    }
+                }
             }
         }
 

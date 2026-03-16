@@ -74,6 +74,148 @@ impl ChunkOperations {
         Ok(())
     }
 
+    /// Reconstruct a missing EC shard from surviving shards using
+    /// Reed-Solomon decoding, then write the result to the target node.
+    ///
+    /// `shard_addrs` maps shard index → (node_id, address) for all
+    /// surviving shards. The method reads the surviving shards, runs RS
+    /// decode, and writes the reconstructed shard to `target_addr`.
+    pub async fn reconstruct_shard(
+        &self,
+        chunk_id: &str,
+        shard_index: usize,
+        data_shards: u32,
+        parity_shards: u32,
+        shard_addrs: &[(usize, String, String)], // (shard_idx, node_id, addr)
+        target_node_id: &str,
+        target_addr: &str,
+    ) -> Result<()> {
+        use crate::backend::chunk_store::ChunkHeader;
+
+        // Read all surviving shards.
+        let mut available: Vec<(usize, Vec<u8>)> = Vec::new();
+        for (idx, node_id, addr) in shard_addrs {
+            let shard_id = format!("{chunk_id}:shard:{idx}");
+            let shard_with_header = if *node_id == self.local_node_id {
+                self.local_store.get(&shard_id).await?
+            } else {
+                let client = self.get_client(addr).await?;
+                client.get(&shard_id).await?
+            };
+            // Strip the chunk header to get raw shard data.
+            if shard_with_header.len() < ChunkHeader::SIZE {
+                continue;
+            }
+            let header_bytes: [u8; ChunkHeader::SIZE] = shard_with_header[..ChunkHeader::SIZE]
+                .try_into()
+                .map_err(|_| {
+                    crate::error::DataPlaneError::ChunkEngineError(
+                        "shard header read failed".into(),
+                    )
+                })?;
+            let header = ChunkHeader::from_bytes(&header_bytes)?;
+            let data_len = header.data_len as usize;
+            if shard_with_header.len() < ChunkHeader::SIZE + data_len {
+                continue;
+            }
+            let raw = shard_with_header[ChunkHeader::SIZE..ChunkHeader::SIZE + data_len].to_vec();
+            available.push((*idx, raw));
+        }
+
+        if available.len() < data_shards as usize {
+            return Err(crate::error::DataPlaneError::ChunkEngineError(format!(
+                "insufficient surviving shards for reconstruction: have {}, need {}",
+                available.len(),
+                data_shards
+            )));
+        }
+
+        // Separate into original (data) and recovery (parity) shard sets.
+        let mut originals: Vec<(usize, &[u8])> = Vec::new();
+        let mut recovery: Vec<(usize, &[u8])> = Vec::new();
+        for (idx, data) in &available {
+            if *idx < data_shards as usize {
+                originals.push((*idx, data.as_slice()));
+            } else {
+                let recovery_idx = *idx - data_shards as usize;
+                recovery.push((recovery_idx, data.as_slice()));
+            }
+        }
+
+        // If the missing shard is a data shard, use RS decode.
+        // If it's a parity shard, use RS encode to regenerate parity.
+        let reconstructed_shard = if shard_index < data_shards as usize {
+            // Missing data shard — decode.
+            let recovered = reed_solomon_simd::decode(
+                data_shards as usize,
+                parity_shards as usize,
+                originals,
+                recovery,
+            )
+            .map_err(|e| {
+                crate::error::DataPlaneError::ChunkEngineError(format!("RS decode failed: {e}"))
+            })?;
+            recovered.get(&shard_index).cloned().ok_or_else(|| {
+                crate::error::DataPlaneError::ChunkEngineError(format!(
+                    "RS decode did not produce shard {shard_index}"
+                ))
+            })?
+        } else {
+            // Missing parity shard — re-encode from data shards.
+            // First, ensure we have all data shards.
+            let mut data_pieces: Vec<Vec<u8>> = vec![Vec::new(); data_shards as usize];
+            for (idx, data) in &available {
+                if *idx < data_shards as usize {
+                    data_pieces[*idx] = data.clone();
+                }
+            }
+            let all_data_present = data_pieces.iter().all(|d| !d.is_empty());
+            if !all_data_present {
+                return Err(crate::error::DataPlaneError::ChunkEngineError(
+                    "cannot reconstruct parity: not all data shards available".into(),
+                ));
+            }
+            let data_refs: Vec<&[u8]> = data_pieces.iter().map(|d| d.as_slice()).collect();
+            let parity = reed_solomon_simd::encode(
+                data_shards as usize,
+                parity_shards as usize,
+                data_refs.into_iter(),
+            )
+            .map_err(|e| {
+                crate::error::DataPlaneError::ChunkEngineError(format!("RS encode failed: {e}"))
+            })?;
+            let parity_idx = shard_index - data_shards as usize;
+            parity.into_iter().nth(parity_idx).ok_or_else(|| {
+                crate::error::DataPlaneError::ChunkEngineError(format!(
+                    "RS encode did not produce parity shard {parity_idx}"
+                ))
+            })?
+        };
+
+        // Prepare the shard with a chunk header and write to target.
+        let header = ChunkHeader {
+            magic: *b"NVAC",
+            version: 1,
+            flags: 0,
+            checksum: crc32c::crc32c(&reconstructed_shard),
+            data_len: reconstructed_shard.len() as u32,
+            _reserved: [0; 2],
+        };
+        let mut prepared = Vec::with_capacity(ChunkHeader::SIZE + reconstructed_shard.len());
+        prepared.extend_from_slice(&header.to_bytes());
+        prepared.extend_from_slice(&reconstructed_shard);
+
+        let shard_id = format!("{chunk_id}:shard:{shard_index}");
+        if target_node_id == self.local_node_id {
+            self.local_store.put(&shard_id, &prepared).await?;
+        } else {
+            let client = self.get_client(target_addr).await?;
+            client.put(&shard_id, &prepared).await?;
+        }
+
+        Ok(())
+    }
+
     /// Remove a chunk replica from a node.
     ///
     /// If the node is this node, deletes from the local store.

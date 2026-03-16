@@ -36,6 +36,9 @@ struct LvmVolume {
     thin: bool,
     is_snapshot: bool,
     parent_snapshot: Option<String>,
+    /// Cached spdk_lvol pointer (as usize for Send). Set by create callback,
+    /// used by resize_volume to call vbdev_lvol_resize.
+    lvol_ptr: Option<usize>,
 }
 
 /// Internal snapshot tracking.
@@ -152,6 +155,26 @@ impl StorageBackend for LvmBackend {
         };
         info!("lvm: lvol bdev name = '{}'", bdev_name);
         let block_size = 512u32;
+
+        // Cache the spdk_lvol pointer for later resize operations.
+        let bdev_name_for_ctx = bdev_name.clone();
+        let lvol_ptr: Option<usize> = reactor_dispatch::dispatch_sync(move || {
+            let name_c = std::ffi::CString::new(bdev_name_for_ctx.as_str()).unwrap();
+            unsafe {
+                let bdev = ffi::spdk_bdev_get_by_name(name_c.as_ptr() as *const c_char);
+                if bdev.is_null() {
+                    None
+                } else {
+                    let ctx = ffi::spdk_bdev_get_module_ctx(bdev);
+                    if ctx.is_null() {
+                        None
+                    } else {
+                        Some(ctx as usize)
+                    }
+                }
+            }
+        });
+
         let vol = LvmVolume {
             name: name.to_string(),
             lvol_name: bdev_name.clone(),
@@ -161,6 +184,7 @@ impl StorageBackend for LvmBackend {
             thin,
             is_snapshot: false,
             parent_snapshot: None,
+            lvol_ptr,
         };
 
         let info = VolumeInfo {
@@ -239,14 +263,57 @@ impl StorageBackend for LvmBackend {
             )));
         }
 
-        // TODO(gap-18): Actually call spdk_lvol_resize via reactor_dispatch.
-        // This requires caching the spdk_lvol pointer from create_volume and
-        // passing it to vbdev_lvol_resize with a completion callback.
-        // For now, return an error rather than silently faking a resize.
-        Err(DataPlaneError::LvolError(
-            "lvol resize not yet implemented: vbdev_lvol_resize FFI integration pending (gap-18)"
-                .into(),
-        ))
+        // Get the cached lvol pointer.
+        let volumes = self.volumes.lock().unwrap();
+        let vol = volumes
+            .get(name)
+            .ok_or_else(|| DataPlaneError::LvolError(format!("volume '{}' not found", name)))?;
+        let lvol_ptr = vol.lvol_ptr.ok_or_else(|| {
+            DataPlaneError::LvolError(format!(
+                "lvol pointer not cached for '{}' — cannot resize",
+                name
+            ))
+        })?;
+        let was_thin = vol.thin;
+        drop(volumes);
+
+        // Call vbdev_lvol_resize on the SPDK reactor thread.
+        let completion = Arc::new(Completion::<i32>::new());
+        let comp = completion.clone();
+        reactor_dispatch::send_to_reactor(move || unsafe {
+            ffi::vbdev_lvol_resize(
+                lvol_ptr as *mut ffi::spdk_lvol,
+                new_size_bytes,
+                Some(lvol_op_cb),
+                comp.as_ptr(),
+            );
+        });
+
+        let rc = completion.wait();
+        if rc != 0 {
+            return Err(DataPlaneError::LvolError(format!(
+                "vbdev_lvol_resize failed: rc={rc}"
+            )));
+        }
+
+        // Update internal tracking.
+        let mut volumes = self.volumes.lock().unwrap();
+        if let Some(vol) = volumes.get_mut(name) {
+            vol.size_bytes = new_size_bytes;
+        }
+
+        info!("lvm: resized volume '{}' to {}B", name, new_size_bytes);
+        Ok(VolumeInfo {
+            name: name.to_string(),
+            backend: BackendType::Lvm,
+            size_bytes: new_size_bytes,
+            used_bytes: if was_thin { 0 } else { new_size_bytes },
+            block_size: 512,
+            healthy: true,
+            is_snapshot: false,
+            parent_snapshot: None,
+            thin_provisioned: was_thin,
+        })
     }
 
     fn stat_volume(&self, name: &str) -> Result<VolumeInfo> {

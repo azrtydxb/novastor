@@ -504,6 +504,22 @@ func (c *Client) UpdateTopology(generation uint64, nodes []*pb.TopologyNode) (bo
 }
 
 // --------------------------------------------------------------------------
+// Metadata Sync
+// --------------------------------------------------------------------------
+
+// GetChunkMaps returns all chunk map entries from the local MetadataStore.
+// Used by the agent to sync local metadata back to the management plane.
+func (c *Client) GetChunkMaps(bdevName string) ([]*pb.ChunkMapEntryProto, error) {
+	ctx, cancel := c.ctx()
+	defer cancel()
+	resp, err := c.svc.GetChunkMaps(ctx, &pb.GetChunkMapsRequest{BdevName: bdevName})
+	if err != nil {
+		return nil, fmt.Errorf("get chunk maps for %s: %w", bdevName, err)
+	}
+	return resp.GetEntries(), nil
+}
+
+// --------------------------------------------------------------------------
 // Health & Fencing
 // --------------------------------------------------------------------------
 
