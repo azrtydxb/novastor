@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -117,16 +118,37 @@ func (s *SPDKTargetServer) ensureChunkStore() error {
 	}
 
 	// Initialise the chunk store on the Rust data-plane via gRPC.
-	// Use the nodeUUID which matches the topology node IDs pushed to the dataplane.
-	if _, err := s.dpClient.InitChunkStore(s.baseBdev, s.nodeUUID); err != nil {
-		// The chunk store may already be initialised if the agent restarted
-		// while the dataplane kept running.
-		if !strings.Contains(err.Error(), "already") {
-			return fmt.Errorf("initialising chunk store on %s: %w", s.baseBdev, err)
+	// Retry up to 5 times with 2s delay — the BackendAssignment reconciler
+	// may still be initializing the backend bdev on this node.
+	var initErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if _, err := s.dpClient.InitChunkStore(s.baseBdev, s.nodeUUID); err != nil {
+			if strings.Contains(err.Error(), "already") {
+				logging.L.Info("spdk target: chunk store already initialised, reusing",
+					zap.String("baseBdev", s.baseBdev),
+				)
+				initErr = nil
+				break
+			}
+			initErr = err
+			if attempt < 4 {
+				logging.L.Warn("spdk target: chunk store init failed, retrying",
+					zap.String("baseBdev", s.baseBdev),
+					zap.Int("attempt", attempt+1),
+					zap.Error(err),
+				)
+				s.initMu.Unlock()
+				time.Sleep(2 * time.Second)
+				s.initMu.Lock()
+				continue
+			}
+		} else {
+			initErr = nil
+			break
 		}
-		logging.L.Info("spdk target: chunk store already initialised, reusing",
-			zap.String("baseBdev", s.baseBdev),
-		)
+	}
+	if initErr != nil {
+		return fmt.Errorf("initialising chunk store on %s after retries: %w", s.baseBdev, initErr)
 	}
 
 	logging.L.Info("spdk target: chunk store initialised",

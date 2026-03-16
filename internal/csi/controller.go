@@ -508,9 +508,13 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 
 		// Create NVMe-oF targets on ALL replica nodes for ANA multipath.
-		// Owner node: ANA state "optimized" (preferred path for I/O).
-		// Replica nodes: ANA state "non_optimized" (standby paths for failover).
-		// The kernel NVMe multipath driver selects the optimized path.
+		// Every node with chunk data can serve I/O via its local ChunkEngine.
+		// Reads for non-local chunks are fetched transparently via the
+		// inter-dataplane PutChunk/GetChunk gRPC (CRUSH-aware placement).
+		//
+		// Owner node: ANA "optimized" (preferred I/O path).
+		// Other nodes with chunks: ANA "optimized" (they have local data).
+		// Nodes without chunks: not targeted (no point routing I/O there).
 		ownerNode := uniqueNodes[0]
 		type targetInfo struct {
 			Addr    string `json:"addr"`
@@ -522,16 +526,15 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		var ownerAddr, ownerPort, ownerNQN string
 
 		for i, node := range uniqueNodes {
-			anaState := "non_optimized"
-			if i == 0 {
-				anaState = "optimized"
-			}
+			// All nodes that hold chunk data get "optimized" — they can
+			// serve reads locally. The owner is first (preferred by the
+			// kernel NVMe multipath round-robin policy).
+			anaState := "optimized"
 			nqn, addr, port, createErr := cs.agentTarget.CreateTarget(
 				ctx, node, volumeID, int64(requiredBytes), anaState, anaGroupID, protCfg,
 			)
 			if createErr != nil {
-				// Clean up already-created targets on failure.
-				logging.L.Warn("failed to create target on replica node (continuing)",
+				logging.L.Warn("failed to create target on node (continuing with remaining nodes)",
 					zap.String("volumeID", volumeID),
 					zap.String("node", node),
 					zap.Error(createErr),
@@ -580,8 +583,8 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		volContext["targetAddresses"] = string(targetsJSON)
 		volContext["writeOwner"] = ownerAddr
 		volContext["subsystemNQN"] = ownerNQN
-		volContext["targetAddress"] = ownerAddr // Backward compat
-		volContext["targetPort"] = ownerPort    // Backward compat
+		volContext["targetAddress"] = ownerAddr
+		volContext["targetPort"] = ownerPort
 
 		// Update volume metadata with primary target fields.
 		vm.TargetNodeID = ownerNode
