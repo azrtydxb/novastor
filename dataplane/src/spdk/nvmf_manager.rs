@@ -759,9 +759,10 @@ impl NvmfManager {
         let ana_enabled = sub_info.ana_group_id > 0;
 
         if ana_enabled {
-            // spdk_nvmf_subsystem_set_ana_state is async — it pauses the subsystem,
-            // sets the state, and resumes. We MUST provide a callback; passing NULL
-            // causes a segfault when SPDK tries to invoke it.
+            // spdk_nvmf_subsystem_set_ana_state requires a non-NULL trid to identify
+            // which listener's ANA state to update. Build it from the cached address.
+            let listen_addr = sub_info.listen_address.clone();
+            let listen_port = sub_info.listen_port;
             let completion = Arc::new(Completion::new());
             let completion_clone = completion.clone();
 
@@ -773,6 +774,25 @@ impl NvmfManager {
                     completion_clone.complete(());
                     return;
                 }
+
+                // Build trid matching the listener's transport ID.
+                let mut trid: ffi::spdk_nvme_transport_id = std::mem::zeroed();
+                trid.trtype = ffi::spdk_nvme_transport_type_SPDK_NVME_TRANSPORT_TCP;
+                trid.adrfam = ffi::spdk_nvmf_adrfam_SPDK_NVMF_ADRFAM_IPV4;
+                let addr_bytes = listen_addr.as_bytes();
+                let port_str = format!("{}", listen_port);
+                let port_bytes = port_str.as_bytes();
+                std::ptr::copy_nonoverlapping(
+                    addr_bytes.as_ptr() as *const c_char,
+                    trid.traddr.as_mut_ptr(),
+                    addr_bytes.len().min(trid.traddr.len()),
+                );
+                std::ptr::copy_nonoverlapping(
+                    port_bytes.as_ptr() as *const c_char,
+                    trid.trsvcid.as_mut_ptr(),
+                    port_bytes.len().min(trid.trsvcid.len()),
+                );
+
                 let state = match ana_state_owned.as_str() {
                     "optimized" => ffi::spdk_nvme_ana_state_SPDK_NVME_ANA_OPTIMIZED_STATE,
                     "non_optimized" | "non-optimized" => {
@@ -784,7 +804,7 @@ impl NvmfManager {
                 let cb_arg = Arc::into_raw(completion_clone) as *mut c_void;
                 ffi::spdk_nvmf_subsystem_set_ana_state(
                     subsystem,
-                    std::ptr::null(),
+                    &trid as *const ffi::spdk_nvme_transport_id,
                     state,
                     ana_group_id,
                     Some(ana_state_done_cb),
