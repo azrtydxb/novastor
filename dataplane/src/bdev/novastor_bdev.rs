@@ -1079,6 +1079,7 @@ unsafe extern "C" fn bdev_io_type_supported_cb(
             | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE
             | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_FLUSH
             | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES
+            | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_UNMAP
     )
 }
 
@@ -1373,34 +1374,17 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
             );
         }
-        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES => {
-            let bdev_params = (*bdev_io).u.bdev.as_ref();
-            let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
-            let length = bdev_params.num_blocks * (*bdev).blocklen as u64;
-            let bdev_io_addr = bdev_io as usize;
-
-            let data = vec![0u8; length as usize];
-
-            let handle = get_tokio_handle().expect("tokio handle");
-            handle.spawn(async move {
-                let result = async {
-                    sub_block_write(&volume_name, offset, &data).await?;
-                    Ok::<(), DataPlaneError>(())
-                }
-                .await;
-
-                let status = match result {
-                    Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                    Err(e) => {
-                        error!("novastor_bdev: write_zeroes failed: {}", e);
-                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
-                    }
-                };
-
-                reactor_dispatch::send_to_reactor(move || unsafe {
-                    ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
-                });
-            });
+        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES
+        | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_UNMAP => {
+            // Thin provisioning: unwritten blocks already return zeros on
+            // read, so WRITE_ZEROES is a no-op. UNMAP (trim/discard)
+            // deallocates blocks — also a no-op since we don't pre-allocate.
+            // This makes mkfs.ext4 near-instant instead of writing GBs of
+            // zeros through the I/O path.
+            ffi::spdk_bdev_io_complete(
+                bdev_io,
+                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+            );
         }
         _ => {
             // Unsupported I/O type.

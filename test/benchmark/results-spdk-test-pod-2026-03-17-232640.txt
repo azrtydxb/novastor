@@ -1,0 +1,43 @@
+============================================================
+NovaStor Storage Benchmark
+============================================================
+Date:           Tue Mar 17 23:26:41 +04 2026
+Pod:            spdk-test-pod
+PVC:            spdk-test
+StorageClass:   novastor-rep1
+Node:           master-13
+NVMe-oF Paths:  1
+Write size:     64 MB
+Label:          SPDK initiator + local bdev direct + mTLS
+------------------------------------------------------------
+[23:26:41] 
+[23:26:41] Phase 1: WRITE tests
+[23:26:41] 
+[23:26:41]   Sequential write (bs=1M, iodepth=4, 30s)...
+[23:27:11]     -> 316.4 MB/s | 316 IOPS | 12.63 ms lat
+[23:27:11]   Random write 4K (iodepth=4, 30s)...
+[23:27:42]     -> 42.0 MB/s | 10764 IOPS | 0.37 ms lat
+[23:27:42] 
+[23:27:42] Phase 2: READ tests
+[23:27:42] 
+[23:27:42]   Sequential read (bs=1M, iodepth=4, 30s)...
+[23:28:12]     -> 426.6 MB/s | 427 IOPS | 9.36 ms lat
+[23:28:12]   Random read 4K (iodepth=4, 30s)...
+[23:28:42]     -> 49.3 MB/s | 12613 IOPS | 0.31 ms lat
+[23:28:42] 
+[23:28:42] Phase 3: Data integrity
+[23:28:43]   Integrity: PASS (md5=852c0616fe086744bbef71ac5a3daf2b)
+
+============================================================
+SUMMARY: spdk-test-pod (novastor-rep1, 1 paths)
+Label: SPDK initiator + local bdev direct + mTLS
+============================================================
+Test                 | Result                             
+---------------------+------------------------------------
+Seq Write (1M)       | 316.4 MB/s | 316 IOPS | 12.63 ms lat
+Seq Read (1M)        | 426.6 MB/s | 427 IOPS | 9.36 ms lat
+Rand Write (4K)      | 42.0 MB/s | 10764 IOPS | 0.37 ms lat
+Rand Read (4K)       | 49.3 MB/s | 12613 IOPS | 0.31 ms lat
+Integrity            | PASS                               
+============================================================
+Results: /Users/pascal/Development/Nova/novastor/test/benchmark/results-spdk-test-pod-2026-03-17-232640.txt
