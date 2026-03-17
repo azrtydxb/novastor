@@ -96,6 +96,9 @@ pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
 unsafe extern "C" fn spdk_startup_cb(arg: *mut std::os::raw::c_void) {
     info!("SPDK startup callback: subsystems initialized");
 
+    // Pre-allocate DMA buffer pool for bdev I/O (eliminates per-I/O malloc).
+    super::reactor_dispatch::init_dma_pool();
+
     // Recover the startup data passed through the arg pointer.
     let data = Box::from_raw(arg as *mut SpdkStartupData);
 

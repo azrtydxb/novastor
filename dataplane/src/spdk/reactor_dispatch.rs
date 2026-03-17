@@ -12,9 +12,88 @@
 use crate::error::{DataPlaneError, Result};
 use std::collections::HashMap;
 use std::os::raw::c_char;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::context::Completion;
+
+// ---------------------------------------------------------------------------
+// Pre-allocated DMA buffer pool
+// ---------------------------------------------------------------------------
+// Eliminates per-I/O spdk_dma_malloc/free overhead. Each buffer is 64KB
+// (SUB_BLOCK_SIZE) aligned to 4096. Pool supports up to 256 concurrent I/Os.
+// All pool operations run on the SPDK reactor thread (no contention).
+
+const DMA_POOL_SIZE: usize = 256;
+const DMA_BUF_SIZE: usize = 64 * 1024; // 64KB
+
+struct DmaPool {
+    buffers: Vec<*mut u8>,
+}
+
+// SAFETY: Only accessed from the SPDK reactor thread via send_to_reactor.
+unsafe impl Send for DmaPool {}
+
+static DMA_POOL: OnceLock<Mutex<DmaPool>> = OnceLock::new();
+
+/// Initialize the DMA buffer pool. Must be called on the SPDK reactor thread
+/// after subsystems are initialized (e.g. from spdk_startup_cb).
+pub fn init_dma_pool() {
+    let mut buffers = Vec::with_capacity(DMA_POOL_SIZE);
+    for _ in 0..DMA_POOL_SIZE {
+        let buf =
+            unsafe { ffi::spdk_dma_malloc(DMA_BUF_SIZE, 0x1000, std::ptr::null_mut()) as *mut u8 };
+        if buf.is_null() {
+            log::warn!(
+                "DMA pool: could only pre-allocate {} of {} buffers",
+                buffers.len(),
+                DMA_POOL_SIZE
+            );
+            break;
+        }
+        buffers.push(buf);
+    }
+    log::info!(
+        "DMA buffer pool initialized: {} x {}KB buffers",
+        buffers.len(),
+        DMA_BUF_SIZE / 1024
+    );
+    DMA_POOL.set(Mutex::new(DmaPool { buffers })).ok();
+}
+
+/// Acquire a DMA buffer. For sizes <= 64KB, tries the pool first.
+/// Falls back to spdk_dma_malloc for larger buffers or when pool is empty.
+fn acquire_dma_buf(size: usize) -> *mut std::os::raw::c_void {
+    if size <= DMA_BUF_SIZE {
+        if let Some(pool) = DMA_POOL.get() {
+            if let Ok(mut p) = pool.lock() {
+                if let Some(buf) = p.buffers.pop() {
+                    return buf as *mut std::os::raw::c_void;
+                }
+            }
+        }
+    }
+    // Fall back to malloc for large buffers or when pool is empty.
+    unsafe { ffi::spdk_dma_malloc(size, 0x1000, std::ptr::null_mut()) }
+}
+
+/// Release a DMA buffer back to the pool. For buffers that came from the pool
+/// (size <= 64KB), returns them if the pool isn't full. Otherwise frees via
+/// spdk_dma_free.
+fn release_dma_buf(buf: *mut std::os::raw::c_void, size: usize) {
+    if size <= DMA_BUF_SIZE {
+        if let Some(pool) = DMA_POOL.get() {
+            if let Ok(mut p) = pool.lock() {
+                if p.buffers.len() < DMA_POOL_SIZE {
+                    p.buffers.push(buf as *mut u8);
+                    return;
+                }
+            }
+        }
+    }
+    unsafe {
+        ffi::spdk_dma_free(buf);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Lvol store pointer registry
@@ -213,6 +292,7 @@ struct ReadIoCtx {
     channel: *mut ffi::spdk_io_channel,
     buf: *mut std::os::raw::c_void,
     buf_len: usize,
+    aligned_len: usize,
     completion: Arc<Completion<Result<Vec<u8>>>>,
 }
 
@@ -224,6 +304,7 @@ struct WriteIoCtx {
     desc: *mut ffi::spdk_bdev_desc,
     channel: *mut ffi::spdk_io_channel,
     buf: *mut std::os::raw::c_void,
+    aligned_len: usize,
     completion: Arc<Completion<Result<()>>>,
 }
 
@@ -238,6 +319,7 @@ struct AsyncReadIoCtx {
     channel: *mut ffi::spdk_io_channel,
     buf: *mut std::os::raw::c_void,
     buf_len: usize,
+    aligned_len: usize,
     sender_ptr: *mut std::os::raw::c_void,
 }
 
@@ -247,6 +329,7 @@ struct AsyncWriteIoCtx {
     desc: *mut ffi::spdk_bdev_desc,
     channel: *mut ffi::spdk_io_channel,
     buf: *mut std::os::raw::c_void,
+    aligned_len: usize,
     sender_ptr: *mut std::os::raw::c_void,
 }
 
@@ -268,7 +351,7 @@ unsafe extern "C" fn async_read_io_done_cb(
     };
 
     ffi::spdk_bdev_free_io(bdev_io);
-    ffi::spdk_dma_free(io_ctx.buf);
+    release_dma_buf(io_ctx.buf, io_ctx.aligned_len);
     ffi::spdk_put_io_channel(io_ctx.channel);
     ffi::spdk_bdev_close(io_ctx.desc);
 
@@ -292,7 +375,7 @@ unsafe extern "C" fn async_write_io_done_cb(
     };
 
     ffi::spdk_bdev_free_io(bdev_io);
-    ffi::spdk_dma_free(io_ctx.buf);
+    release_dma_buf(io_ctx.buf, io_ctx.aligned_len);
     ffi::spdk_put_io_channel(io_ctx.channel);
     ffi::spdk_bdev_close(io_ctx.desc);
 
@@ -365,12 +448,12 @@ pub fn bdev_read(bdev_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
                 return;
             }
 
-            let buf = ffi::spdk_dma_malloc(aligned_len as usize, 0x1000, std::ptr::null_mut());
+            let buf = acquire_dma_buf(aligned_len as usize);
             if buf.is_null() {
                 ffi::spdk_put_io_channel(channel);
                 ffi::spdk_bdev_close(desc);
                 comp.complete(Err(DataPlaneError::BdevError(
-                    "spdk_dma_malloc failed".into(),
+                    "DMA buffer acquisition failed".into(),
                 )));
                 return;
             }
@@ -380,6 +463,7 @@ pub fn bdev_read(bdev_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
                 channel,
                 buf,
                 buf_len: requested_len,
+                aligned_len: aligned_len as usize,
                 completion: comp,
             });
             let io_ctx_ptr = Box::into_raw(io_ctx) as *mut std::os::raw::c_void;
@@ -395,7 +479,7 @@ pub fn bdev_read(bdev_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
             );
             if rc != 0 {
                 let ctx = Box::from_raw(io_ctx_ptr as *mut ReadIoCtx);
-                ffi::spdk_dma_free(ctx.buf);
+                release_dma_buf(ctx.buf, ctx.aligned_len);
                 ffi::spdk_put_io_channel(ctx.channel);
                 ffi::spdk_bdev_close(ctx.desc);
                 ctx.completion
@@ -464,12 +548,12 @@ pub fn bdev_write(bdev_name: &str, offset: u64, data: &[u8]) -> Result<()> {
                 return;
             }
 
-            let buf = ffi::spdk_dma_malloc(aligned_len as usize, 0x1000, std::ptr::null_mut());
+            let buf = acquire_dma_buf(aligned_len as usize);
             if buf.is_null() {
                 ffi::spdk_put_io_channel(channel);
                 ffi::spdk_bdev_close(desc);
                 comp.complete(Err(DataPlaneError::BdevError(
-                    "spdk_dma_malloc failed".into(),
+                    "DMA buffer acquisition failed".into(),
                 )));
                 return;
             }
@@ -481,6 +565,7 @@ pub fn bdev_write(bdev_name: &str, offset: u64, data: &[u8]) -> Result<()> {
                 desc,
                 channel,
                 buf,
+                aligned_len: aligned_len as usize,
                 completion: comp,
             });
             let io_ctx_ptr = Box::into_raw(io_ctx) as *mut std::os::raw::c_void;
@@ -496,7 +581,7 @@ pub fn bdev_write(bdev_name: &str, offset: u64, data: &[u8]) -> Result<()> {
             );
             if rc != 0 {
                 let ctx = Box::from_raw(io_ctx_ptr as *mut WriteIoCtx);
-                ffi::spdk_dma_free(ctx.buf);
+                release_dma_buf(ctx.buf, ctx.aligned_len);
                 ffi::spdk_put_io_channel(ctx.channel);
                 ffi::spdk_bdev_close(ctx.desc);
                 ctx.completion
@@ -551,7 +636,7 @@ unsafe extern "C" fn read_io_done_cb(
     };
 
     ffi::spdk_bdev_free_io(bdev_io);
-    ffi::spdk_dma_free(io_ctx.buf);
+    release_dma_buf(io_ctx.buf, io_ctx.aligned_len);
     ffi::spdk_put_io_channel(io_ctx.channel);
     ffi::spdk_bdev_close(io_ctx.desc);
 
@@ -572,7 +657,7 @@ unsafe extern "C" fn write_io_done_cb(
     };
 
     ffi::spdk_bdev_free_io(bdev_io);
-    ffi::spdk_dma_free(io_ctx.buf);
+    release_dma_buf(io_ctx.buf, io_ctx.aligned_len);
     ffi::spdk_put_io_channel(io_ctx.channel);
     ffi::spdk_bdev_close(io_ctx.desc);
 
@@ -665,14 +750,14 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
             return;
         }
 
-        let buf = ffi::spdk_dma_malloc(aligned_len as usize, 0x1000, std::ptr::null_mut());
+        let buf = acquire_dma_buf(aligned_len as usize);
         if buf.is_null() {
             ffi::spdk_put_io_channel(channel);
             ffi::spdk_bdev_close(desc);
             let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
                 AsyncCompletionSender::from_ptr(sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(
-                "spdk_dma_malloc failed".into(),
+                "DMA buffer acquisition failed".into(),
             )));
             return;
         }
@@ -682,6 +767,7 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
             channel,
             buf,
             buf_len: requested_len,
+            aligned_len: aligned_len as usize,
             sender_ptr,
         });
         let io_ctx_ptr = Box::into_raw(io_ctx) as *mut std::os::raw::c_void;
@@ -697,7 +783,7 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
         );
         if rc != 0 {
             let ctx = Box::from_raw(io_ctx_ptr as *mut AsyncReadIoCtx);
-            ffi::spdk_dma_free(ctx.buf);
+            release_dma_buf(ctx.buf, ctx.aligned_len);
             ffi::spdk_put_io_channel(ctx.channel);
             ffi::spdk_bdev_close(ctx.desc);
             let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
@@ -786,14 +872,14 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
             return;
         }
 
-        let buf = ffi::spdk_dma_malloc(aligned_len as usize, 0x1000, std::ptr::null_mut());
+        let buf = acquire_dma_buf(aligned_len as usize);
         if buf.is_null() {
             ffi::spdk_put_io_channel(channel);
             ffi::spdk_bdev_close(desc);
             let mut s: AsyncCompletionSender<Result<()>> =
                 AsyncCompletionSender::from_ptr(sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(
-                "spdk_dma_malloc failed".into(),
+                "DMA buffer acquisition failed".into(),
             )));
             return;
         }
@@ -804,6 +890,7 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
             desc,
             channel,
             buf,
+            aligned_len: aligned_len as usize,
             sender_ptr,
         });
         let io_ctx_ptr = Box::into_raw(io_ctx) as *mut std::os::raw::c_void;
@@ -825,7 +912,7 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
         if rc != 0 {
             log::error!("bdev_write_async REACTOR spdk_bdev_write failed rc={}", rc);
             let ctx = Box::from_raw(io_ctx_ptr as *mut AsyncWriteIoCtx);
-            ffi::spdk_dma_free(ctx.buf);
+            release_dma_buf(ctx.buf, ctx.aligned_len);
             ffi::spdk_put_io_channel(ctx.channel);
             ffi::spdk_bdev_close(ctx.desc);
             let mut s: AsyncCompletionSender<Result<()>> =
