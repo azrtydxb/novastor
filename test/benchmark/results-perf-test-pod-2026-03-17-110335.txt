@@ -1,0 +1,43 @@
+============================================================
+NovaStor Storage Benchmark
+============================================================
+Date:           Tue Mar 17 11:03:36 +04 2026
+Pod:            perf-test-pod
+PVC:            perf-test-pvc
+StorageClass:   novastor-rep1
+Node:           worker-22
+NVMe-oF Paths:  1
+Write size:     256 MB
+Label:          with tracing
+------------------------------------------------------------
+[11:03:36] 
+[11:03:36] Phase 1: WRITE tests
+[11:03:36] 
+[11:03:36]   Sequential write (bs=1M, iodepth=4, 30s)...
+[11:04:06]     -> 76.1 MB/s | 76 IOPS | 52.55 ms lat
+[11:04:06]   Random write 4K (iodepth=4, 30s)...
+[11:04:37]     -> 4.8 MB/s | 1233 IOPS | 3.24 ms lat
+[11:04:37] 
+[11:04:37] Phase 2: READ tests
+[11:04:37] 
+[11:04:37]   Sequential read (bs=1M, iodepth=4, 30s)...
+[11:05:07]     -> 557.4 MB/s | 557 IOPS | 7.15 ms lat
+[11:05:07]   Random read 4K (iodepth=4, 30s)...
+[11:05:38]     -> 40.2 MB/s | 10296 IOPS | 0.39 ms lat
+[11:05:38] 
+[11:05:38] Phase 3: Data integrity
+[11:05:38]   Integrity: PASS (md5=0ba291c3c4a84aae3f93842e24ea5ea3)
+
+============================================================
+SUMMARY: perf-test-pod (novastor-rep1, 1 paths)
+Label: with tracing
+============================================================
+Test                 | Result                             
+---------------------+------------------------------------
+Seq Write (1M)       | 76.1 MB/s | 76 IOPS | 52.55 ms lat 
+Seq Read (1M)        | 557.4 MB/s | 557 IOPS | 7.15 ms lat
+Rand Write (4K)      | 4.8 MB/s | 1233 IOPS | 3.24 ms lat 
+Rand Read (4K)       | 40.2 MB/s | 10296 IOPS | 0.39 ms lat
+Integrity            | PASS                               
+============================================================
+Results: /Users/pascal/Development/Nova/novastor/test/benchmark/results-perf-test-pod-2026-03-17-110335.txt

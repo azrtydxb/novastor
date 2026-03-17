@@ -48,6 +48,8 @@ spec:
         volumeMounts:
         - name: data
           mountPath: /var/lib/tempo
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       containers:
       - name: tempo
         image: grafana/tempo:2.6.1

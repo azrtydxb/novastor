@@ -61,7 +61,7 @@ fn build_otel_provider(
     use opentelemetry_sdk::Resource;
 
     let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .unwrap_or_else(|_| "http://tempo.novastor-system.svc:4317".to_string());
+        .unwrap_or_else(|_| "http://192.168.100.11:4317".to_string());
 
     let exporter = SpanExporter::builder()
         .with_tonic()

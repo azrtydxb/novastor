@@ -1,0 +1,16 @@
+============================================================
+NovaStor Storage Benchmark
+============================================================
+Date:           Tue Mar 17 11:47:30 +04 2026
+Pod:            perf-test-pod
+PVC:            perf-test-pvc
+StorageClass:   novastor-rep1
+Node:           worker-22
+NVMe-oF Paths:  1
+Write size:     256 MB
+Label:          cached bdev I/O
+------------------------------------------------------------
+[11:47:30] 
+[11:47:30] Phase 1: WRITE tests
+[11:47:30] 
+[11:47:30]   Sequential write (bs=1M, iodepth=4, 30s)...
