@@ -96,6 +96,94 @@ fn release_dma_buf(buf: *mut std::os::raw::c_void, size: usize) {
 }
 
 // ---------------------------------------------------------------------------
+// Cached bdev descriptor + I/O channel
+// ---------------------------------------------------------------------------
+// Eliminates per-I/O spdk_bdev_open_ext / spdk_bdev_close overhead.
+// All access is from reactor closures (single SPDK thread) — no contention.
+
+struct CachedBdev {
+    desc: *mut ffi::spdk_bdev_desc,
+    channel: *mut ffi::spdk_io_channel,
+    block_size: u64,
+}
+
+// SAFETY: Only accessed from the SPDK reactor thread via send_to_reactor.
+unsafe impl Send for CachedBdev {}
+
+static BDEV_CACHE: OnceLock<Mutex<HashMap<String, CachedBdev>>> = OnceLock::new();
+
+fn bdev_cache() -> &'static Mutex<HashMap<String, CachedBdev>> {
+    BDEV_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Open a bdev (or return cached handles). MUST be called on the reactor thread.
+/// Returns (desc, channel, block_size) or an error string.
+unsafe fn get_or_open_bdev(
+    name: &str,
+    write: bool,
+) -> std::result::Result<(*mut ffi::spdk_bdev_desc, *mut ffi::spdk_io_channel, u64), String> {
+    let mut cache = bdev_cache().lock().unwrap();
+    if let Some(entry) = cache.get(name) {
+        return Ok((entry.desc, entry.channel, entry.block_size));
+    }
+
+    // First access — open the bdev and cache.
+    let name_c = std::ffi::CString::new(name).map_err(|e| format!("invalid name: {e}"))?;
+    let mut desc: *mut ffi::spdk_bdev_desc = std::ptr::null_mut();
+    let rc = ffi::spdk_bdev_open_ext(
+        name_c.as_ptr() as *const c_char,
+        write,
+        Some(bdev_event_cb),
+        std::ptr::null_mut(),
+        &mut desc,
+    );
+    if rc != 0 {
+        return Err(format!("spdk_bdev_open_ext('{}') failed: rc={rc}", name));
+    }
+
+    let bdev = ffi::spdk_bdev_desc_get_bdev(desc);
+    let block_size = if bdev.is_null() {
+        512
+    } else {
+        ffi::spdk_bdev_get_block_size(bdev)
+    } as u64;
+
+    let channel = ffi::spdk_bdev_get_io_channel(desc);
+    if channel.is_null() {
+        ffi::spdk_bdev_close(desc);
+        return Err("spdk_bdev_get_io_channel null".into());
+    }
+
+    log::info!(
+        "bdev cache: opened '{}' (block_size={}, write={})",
+        name,
+        block_size,
+        write
+    );
+    cache.insert(
+        name.to_string(),
+        CachedBdev {
+            desc,
+            channel,
+            block_size,
+        },
+    );
+    Ok((desc, channel, block_size))
+}
+
+/// Close all cached bdev handles. Call on shutdown from the reactor thread.
+pub fn close_all_cached_bdevs() {
+    send_to_reactor(|| unsafe {
+        let mut cache = bdev_cache().lock().unwrap();
+        for (name, entry) in cache.drain() {
+            log::info!("bdev cache: closing '{}'", name);
+            ffi::spdk_put_io_channel(entry.channel);
+            ffi::spdk_bdev_close(entry.desc);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Lvol store pointer registry
 // ---------------------------------------------------------------------------
 // The spdk_lvol_store* pointer is received in lvs_init_cb and must be passed
@@ -315,8 +403,6 @@ unsafe impl Send for WriteIoCtx {}
 // ---------------------------------------------------------------------------
 
 struct AsyncReadIoCtx {
-    desc: *mut ffi::spdk_bdev_desc,
-    channel: *mut ffi::spdk_io_channel,
     buf: *mut std::os::raw::c_void,
     buf_len: usize,
     aligned_len: usize,
@@ -326,8 +412,6 @@ struct AsyncReadIoCtx {
 unsafe impl Send for AsyncReadIoCtx {}
 
 struct AsyncWriteIoCtx {
-    desc: *mut ffi::spdk_bdev_desc,
-    channel: *mut ffi::spdk_io_channel,
     buf: *mut std::os::raw::c_void,
     aligned_len: usize,
     sender_ptr: *mut std::os::raw::c_void,
@@ -352,8 +436,7 @@ unsafe extern "C" fn async_read_io_done_cb(
 
     ffi::spdk_bdev_free_io(bdev_io);
     release_dma_buf(io_ctx.buf, io_ctx.aligned_len);
-    ffi::spdk_put_io_channel(io_ctx.channel);
-    ffi::spdk_bdev_close(io_ctx.desc);
+    // desc + channel are cached — do NOT close/put them.
 
     let mut sender: AsyncCompletionSender<Result<Vec<u8>>> =
         AsyncCompletionSender::from_ptr(io_ctx.sender_ptr);
@@ -365,7 +448,6 @@ unsafe extern "C" fn async_write_io_done_cb(
     success: bool,
     ctx: *mut std::os::raw::c_void,
 ) {
-    log::debug!("async_write_io_done_cb success={}", success);
     let io_ctx = Box::from_raw(ctx as *mut AsyncWriteIoCtx);
 
     let result = if success {
@@ -376,13 +458,11 @@ unsafe extern "C" fn async_write_io_done_cb(
 
     ffi::spdk_bdev_free_io(bdev_io);
     release_dma_buf(io_ctx.buf, io_ctx.aligned_len);
-    ffi::spdk_put_io_channel(io_ctx.channel);
-    ffi::spdk_bdev_close(io_ctx.desc);
+    // desc + channel are cached — do NOT close/put them.
 
     let mut sender: AsyncCompletionSender<Result<()>> =
         AsyncCompletionSender::from_ptr(io_ctx.sender_ptr);
     sender.complete(result);
-    log::debug!("async_write_io_done_cb sender.complete done");
 }
 
 /// Round up `val` to the next multiple of `align`.
@@ -698,62 +778,26 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
     let name = bdev_name.to_string();
     let requested_len = length as usize;
     let (completion, sender) = AsyncCompletion::<Result<Vec<u8>>>::new();
-    // Convert to usize for Send safety (raw pointers aren't Send).
     let sender_addr = sender.into_ptr() as usize;
 
     send_to_reactor(move || unsafe {
         let sender_ptr = sender_addr as *mut std::os::raw::c_void;
-        let name_c = match std::ffi::CString::new(name.as_str()) {
-            Ok(c) => c,
+
+        // Open with write=true so the cached handle works for both reads and writes.
+        let (desc, channel, block_size) = match get_or_open_bdev(&name, true) {
+            Ok(v) => v,
             Err(e) => {
                 let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
                     AsyncCompletionSender::from_ptr(sender_ptr);
-                s.complete(Err(DataPlaneError::BdevError(format!("invalid name: {e}"))));
+                s.complete(Err(DataPlaneError::BdevError(e)));
                 return;
             }
         };
 
-        let mut desc: *mut ffi::spdk_bdev_desc = std::ptr::null_mut();
-        let rc = ffi::spdk_bdev_open_ext(
-            name_c.as_ptr() as *const c_char,
-            false,
-            Some(bdev_event_cb),
-            std::ptr::null_mut(),
-            &mut desc,
-        );
-        if rc != 0 {
-            let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
-                AsyncCompletionSender::from_ptr(sender_ptr);
-            s.complete(Err(DataPlaneError::BdevError(format!(
-                "spdk_bdev_open_ext('{}') failed: rc={rc}",
-                name
-            ))));
-            return;
-        }
-
-        let bdev = ffi::spdk_bdev_desc_get_bdev(desc);
-        let block_size = if bdev.is_null() {
-            512
-        } else {
-            ffi::spdk_bdev_get_block_size(bdev)
-        } as u64;
         let aligned_len = align_up(length, block_size);
-
-        let channel = ffi::spdk_bdev_get_io_channel(desc);
-        if channel.is_null() {
-            ffi::spdk_bdev_close(desc);
-            let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
-                AsyncCompletionSender::from_ptr(sender_ptr);
-            s.complete(Err(DataPlaneError::BdevError(
-                "spdk_bdev_get_io_channel null".into(),
-            )));
-            return;
-        }
 
         let buf = acquire_dma_buf(aligned_len as usize);
         if buf.is_null() {
-            ffi::spdk_put_io_channel(channel);
-            ffi::spdk_bdev_close(desc);
             let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
                 AsyncCompletionSender::from_ptr(sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(
@@ -763,8 +807,6 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
         }
 
         let io_ctx = Box::new(AsyncReadIoCtx {
-            desc,
-            channel,
             buf,
             buf_len: requested_len,
             aligned_len: aligned_len as usize,
@@ -784,8 +826,6 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
         if rc != 0 {
             let ctx = Box::from_raw(io_ctx_ptr as *mut AsyncReadIoCtx);
             release_dma_buf(ctx.buf, ctx.aligned_len);
-            ffi::spdk_put_io_channel(ctx.channel);
-            ffi::spdk_bdev_close(ctx.desc);
             let mut s: AsyncCompletionSender<Result<Vec<u8>>> =
                 AsyncCompletionSender::from_ptr(ctx.sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(format!(
@@ -799,83 +839,28 @@ pub async fn bdev_read_async(bdev_name: &str, offset: u64, length: u64) -> Resul
 
 /// Async version of [`bdev_write`]. Returns a future instead of blocking.
 pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Result<()> {
-    log::debug!(
-        "bdev_write_async ENTER bdev={} offset={} len={}",
-        bdev_name,
-        offset,
-        data.len()
-    );
     let name = bdev_name.to_string();
     let data = data.to_vec();
     let (completion, sender) = AsyncCompletion::<Result<()>>::new();
-    // Convert to usize for Send safety (raw pointers aren't Send).
     let sender_addr = sender.into_ptr() as usize;
 
     send_to_reactor(move || unsafe {
-        log::debug!(
-            "bdev_write_async REACTOR bdev={} offset={} len={}",
-            name,
-            offset,
-            data.len()
-        );
         let sender_ptr = sender_addr as *mut std::os::raw::c_void;
-        let name_c = match std::ffi::CString::new(name.as_str()) {
-            Ok(c) => c,
+
+        let (desc, channel, block_size) = match get_or_open_bdev(&name, true) {
+            Ok(v) => v,
             Err(e) => {
                 let mut s: AsyncCompletionSender<Result<()>> =
                     AsyncCompletionSender::from_ptr(sender_ptr);
-                s.complete(Err(DataPlaneError::BdevError(format!("invalid name: {e}"))));
+                s.complete(Err(DataPlaneError::BdevError(e)));
                 return;
             }
         };
 
-        let mut desc: *mut ffi::spdk_bdev_desc = std::ptr::null_mut();
-        let rc = ffi::spdk_bdev_open_ext(
-            name_c.as_ptr() as *const c_char,
-            true,
-            Some(bdev_event_cb),
-            std::ptr::null_mut(),
-            &mut desc,
-        );
-        if rc != 0 {
-            let mut s: AsyncCompletionSender<Result<()>> =
-                AsyncCompletionSender::from_ptr(sender_ptr);
-            s.complete(Err(DataPlaneError::BdevError(format!(
-                "spdk_bdev_open_ext('{}') failed: rc={rc}",
-                name
-            ))));
-            return;
-        }
-
-        let bdev = ffi::spdk_bdev_desc_get_bdev(desc);
-        let block_size = if bdev.is_null() {
-            512
-        } else {
-            ffi::spdk_bdev_get_block_size(bdev)
-        } as u64;
         let aligned_len = align_up(data.len() as u64, block_size);
-        log::debug!(
-            "bdev_write_async REACTOR open OK bdev={} block_size={} aligned_len={}",
-            name,
-            block_size,
-            aligned_len
-        );
-
-        let channel = ffi::spdk_bdev_get_io_channel(desc);
-        if channel.is_null() {
-            ffi::spdk_bdev_close(desc);
-            let mut s: AsyncCompletionSender<Result<()>> =
-                AsyncCompletionSender::from_ptr(sender_ptr);
-            s.complete(Err(DataPlaneError::BdevError(
-                "spdk_bdev_get_io_channel null".into(),
-            )));
-            return;
-        }
 
         let buf = acquire_dma_buf(aligned_len as usize);
         if buf.is_null() {
-            ffi::spdk_put_io_channel(channel);
-            ffi::spdk_bdev_close(desc);
             let mut s: AsyncCompletionSender<Result<()>> =
                 AsyncCompletionSender::from_ptr(sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(
@@ -887,19 +872,12 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
         std::ptr::copy_nonoverlapping(data.as_ptr(), buf as *mut u8, data.len());
 
         let io_ctx = Box::new(AsyncWriteIoCtx {
-            desc,
-            channel,
             buf,
             aligned_len: aligned_len as usize,
             sender_ptr,
         });
         let io_ctx_ptr = Box::into_raw(io_ctx) as *mut std::os::raw::c_void;
 
-        log::debug!(
-            "bdev_write_async REACTOR submitting spdk_bdev_write offset={} len={}",
-            offset,
-            aligned_len
-        );
         let rc = ffi::spdk_bdev_write(
             desc,
             channel,
@@ -910,22 +888,15 @@ pub async fn bdev_write_async(bdev_name: &str, offset: u64, data: &[u8]) -> Resu
             io_ctx_ptr,
         );
         if rc != 0 {
-            log::error!("bdev_write_async REACTOR spdk_bdev_write failed rc={}", rc);
             let ctx = Box::from_raw(io_ctx_ptr as *mut AsyncWriteIoCtx);
             release_dma_buf(ctx.buf, ctx.aligned_len);
-            ffi::spdk_put_io_channel(ctx.channel);
-            ffi::spdk_bdev_close(ctx.desc);
             let mut s: AsyncCompletionSender<Result<()>> =
                 AsyncCompletionSender::from_ptr(ctx.sender_ptr);
             s.complete(Err(DataPlaneError::BdevError(format!(
                 "spdk_bdev_write submit failed: rc={rc}"
             ))));
-        } else {
-            log::debug!("bdev_write_async REACTOR spdk_bdev_write submitted OK");
         }
     });
 
-    let result = completion.wait().await;
-    log::debug!("bdev_write_async completion received: {:?}", result.is_ok());
-    result
+    completion.wait().await
 }

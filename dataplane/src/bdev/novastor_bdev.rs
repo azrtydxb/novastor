@@ -2,15 +2,14 @@
 //!
 //! Each volume is registered as an SPDK bdev named `novastor_<volume_id>`.
 //! When SPDK's NVMe-oF subsystem submits I/O to this bdev, the module
-//! performs direct 64KB sub-block reads and writes against the backend SPDK
-//! bdev, bypassing the ChunkEngine on the hot I/O path.
+//! performs direct reads and writes against the backend SPDK bdev, bypassing
+//! the ChunkEngine on the hot I/O path.
 //!
-//! Volume data is laid out contiguously on the backend bdev. The sub-block
-//! write path does partial read-modify-write at 64KB granularity (instead
-//! of 4MB), and tracks which sub-blocks have been written via a per-chunk
-//! dirty bitmap in the chunk map entry. SHA-256 hashing and content-
-//! addressing happen only during periodic background sync (not on the hot
-//! path).
+//! Volume data is laid out contiguously on the backend bdev. Partial writes
+//! go directly to the exact byte offset on the backend — no read-modify-write
+//! — so a 4K random write produces a single 4K backend write. Dirty sub-blocks
+//! are tracked via a per-chunk bitmap; SHA-256 hashing and content-addressing
+//! happen only during periodic background sync (not on the hot path).
 
 use crate::bdev::sub_block::{self, bitmap_is_set, bitmap_set, CHUNK_SIZE, SUB_BLOCK_SIZE};
 use crate::chunk::engine::ChunkEngine;
@@ -377,54 +376,63 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
 
             i = run_end;
         } else {
-            // Partial sub-block write — lock + RMW.
-            let lock = sub_block_lock(volume_name, d.chunk_idx, d.sb_idx);
-            let _guard = lock.lock().await;
-
-            // Optimisation 2: skip read for never-written sub-blocks.
-            let previously_written = {
-                let maps = volume_chunk_maps().read().unwrap();
-                maps.get(volume_name)
-                    .and_then(|cm| cm.get(d.chunk_idx))
-                    .and_then(|entry| entry.as_ref())
-                    .map(|e| bitmap_is_set(e.dirty_bitmap, d.sb_idx))
-                    .unwrap_or(false)
-            };
-
-            let mut buf = if previously_written {
-                let chunk_base = vol_base + d.chunk_idx as u64 * CHUNK_SIZE as u64;
-                let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, d.sb_idx);
-                let mut existing = reactor_dispatch::bdev_read_async(
-                    backend_bdev,
-                    bdev_offset,
-                    SUB_BLOCK_SIZE as u64,
-                )
-                .instrument(info_span!(
-                    "bdev_read_rmw",
-                    chunk_idx = d.chunk_idx,
-                    sb_idx = d.sb_idx
-                ))
-                .await?;
-                existing.resize(SUB_BLOCK_SIZE, 0);
-                existing
-            } else {
-                // First write to this sub-block — no need to read undefined data.
-                vec![0u8; SUB_BLOCK_SIZE]
-            };
-
-            // Overlay the new data.
-            buf[d.offset_in_sb..d.offset_in_sb + d.write_len]
-                .copy_from_slice(&data[d.data_start..d.data_start + d.write_len]);
+            // Partial sub-block write — write directly at exact offset.
+            // No read-modify-write: just write the user's bytes at the
+            // precise backend position.  The dirty bitmap tracks which
+            // sub-blocks have data for the periodic sync/hash cycle.
+            const BDEV_BLOCK_SIZE: u64 = 512;
 
             let chunk_base = vol_base + d.chunk_idx as u64 * CHUNK_SIZE as u64;
-            let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, d.sb_idx);
-            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, &buf)
+            let sb_bdev_start = sub_block::backend_sub_block_offset(chunk_base, d.sb_idx);
+            let write_data = &data[d.data_start..d.data_start + d.write_len];
+
+            // SPDK requires block-aligned I/O.  Filesystem writes are
+            // always ≥512-byte aligned, so the fast path covers all
+            // realistic traffic.
+            let off_aligned = (d.offset_in_sb as u64) % BDEV_BLOCK_SIZE == 0;
+            let len_aligned = (d.write_len as u64) % BDEV_BLOCK_SIZE == 0;
+
+            if off_aligned && len_aligned {
+                // Fast path: direct write, no RMW, no lock.
+                reactor_dispatch::bdev_write_async(
+                    backend_bdev,
+                    sb_bdev_start + d.offset_in_sb as u64,
+                    write_data,
+                )
                 .instrument(info_span!(
-                    "bdev_write_rmw",
+                    "bdev_write_direct",
                     chunk_idx = d.chunk_idx,
-                    sb_idx = d.sb_idx
+                    sb_idx = d.sb_idx,
+                    offset_in_sb = d.offset_in_sb,
+                    write_len = d.write_len
                 ))
                 .await?;
+            } else {
+                // Unaligned partial write — RMW at 512-byte granularity.
+                let lock = sub_block_lock(volume_name, d.chunk_idx, d.sb_idx);
+                let _guard = lock.lock().await;
+
+                let aligned_off = (d.offset_in_sb as u64) & !(BDEV_BLOCK_SIZE - 1);
+                let aligned_end = ((d.offset_in_sb + d.write_len) as u64 + BDEV_BLOCK_SIZE - 1)
+                    & !(BDEV_BLOCK_SIZE - 1);
+                let aligned_len = (aligned_end - aligned_off) as usize;
+
+                let mut buf = reactor_dispatch::bdev_read_async(
+                    backend_bdev,
+                    sb_bdev_start + aligned_off,
+                    aligned_len as u64,
+                )
+                .instrument(info_span!("bdev_read_rmw_unaligned"))
+                .await?;
+                buf.resize(aligned_len, 0);
+
+                let buf_off = d.offset_in_sb - aligned_off as usize;
+                buf[buf_off..buf_off + d.write_len].copy_from_slice(write_data);
+
+                reactor_dispatch::bdev_write_async(backend_bdev, sb_bdev_start + aligned_off, &buf)
+                    .instrument(info_span!("bdev_write_rmw_unaligned"))
+                    .await?;
+            }
 
             update_dirty_bitmap(volume_name, d.chunk_idx, d.sb_idx)?;
             i += 1;
