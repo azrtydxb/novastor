@@ -41,6 +41,11 @@ spec:
             - {{ .Values.dataplane.memSize | quote }}
             - --grpc-port
             - "9500"
+            {{- if include "novastor.tls.enabled" . }}
+            - --tls-ca-cert={{ include "novastor.tls.caPath" . }}
+            - --tls-server-cert={{ include "novastor.tls.serverCertPath" . }}
+            - --tls-server-key={{ include "novastor.tls.serverKeyPath" . }}
+            {{- end }}
           ports:
             - name: grpc
               containerPort: 9500
@@ -67,6 +72,11 @@ spec:
               mountPath: /var/lib/novastor/metadata
             - name: policy-data
               mountPath: /var/lib/novastor/policy
+            {{- if include "novastor.tls.enabled" . }}
+            - name: tls-certs
+              mountPath: {{ include "novastor.tls.mountPath" . }}
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.dataplane.resources | nindent 12 }}
       volumes:
@@ -99,6 +109,12 @@ spec:
           hostPath:
             path: /var/lib/novastor/policy
             type: DirectoryOrCreate
+        {{- if include "novastor.tls.enabled" . }}
+        - name: tls-certs
+          secret:
+            secretName: {{ include "novastor.tls.volumeName" . }}
+            defaultMode: 0444
+        {{- end }}
       {{- with .Values.dataplane.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

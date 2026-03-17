@@ -460,10 +460,8 @@ func main() {
 		mounter := &novcsi.RealMounter{}
 
 		// Use the kernel NVMe-oF initiator (nvme-cli) for connecting to
-		// remote targets. The SPDK user-space initiator (spdk_nvme_connect)
-		// blocks the single reactor thread, preventing it from servicing
-		// its own NVMe-oF target simultaneously. The kernel initiator runs
-		// independently and avoids this deadlock.
+		// NVMe-oF targets. The SPDK initiator requires mTLS to the dataplane
+		// (not yet implemented) and multi-core reactor for self-connect.
 		initiator := &novcsi.LinuxInitiator{}
 		log.Printf("CSI node using kernel NVMe-oF initiator (nvme-cli)")
 

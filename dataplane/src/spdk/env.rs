@@ -19,6 +19,9 @@ mod ffi {
 struct SpdkStartupData {
     grpc_port: u16,
     listen_port: u16,
+    tls_ca_cert: String,
+    tls_server_cert: String,
+    tls_server_key: String,
 }
 
 pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
@@ -78,6 +81,9 @@ pub fn init_spdk_env(config: &DataPlaneConfig) -> Result<()> {
         let startup_data = Box::new(SpdkStartupData {
             grpc_port: config.grpc_port,
             listen_port: config.listen_port,
+            tls_ca_cert: config.tls_ca_cert.clone(),
+            tls_server_cert: config.tls_server_cert.clone(),
+            tls_server_key: config.tls_server_key.clone(),
         });
         let arg = Box::into_raw(startup_data) as *mut std::os::raw::c_void;
 
@@ -124,6 +130,9 @@ unsafe extern "C" fn spdk_startup_cb(arg: *mut std::os::raw::c_void) {
         let config = crate::transport::server::GrpcServerConfig {
             listen_address: "0.0.0.0".to_string(),
             port: grpc_port,
+            tls_ca_cert: data.tls_ca_cert.clone(),
+            tls_server_cert: data.tls_server_cert.clone(),
+            tls_server_key: data.tls_server_key.clone(),
         };
 
         let server = crate::transport::server::GrpcServer::new_management_only(config)

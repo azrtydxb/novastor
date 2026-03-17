@@ -11,6 +11,12 @@ pub struct DataPlaneConfig {
     pub listen_address: String,
     pub listen_port: u16,
     pub grpc_port: u16,
+    #[serde(default)]
+    pub tls_ca_cert: String,
+    #[serde(default)]
+    pub tls_server_cert: String,
+    #[serde(default)]
+    pub tls_server_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -60,6 +60,8 @@ func (l *LinuxInitiator) Connect(ctx context.Context, addr, port, nqn string) (s
 		"-a", addr,
 		"-s", port,
 		"-n", nqn,
+		"-i", "4", // 4 I/O queues for parallel I/O submission
+		"-k", "10", // 10-second keep-alive timeout
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

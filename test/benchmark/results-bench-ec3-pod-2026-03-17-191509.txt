@@ -1,0 +1,43 @@
+============================================================
+NovaStor Storage Benchmark
+============================================================
+Date:           Tue Mar 17 19:15:10 +04 2026
+Pod:            bench-ec3-pod
+PVC:            bench-ec3
+StorageClass:   novastor-ec3
+Node:           worker-21
+NVMe-oF Paths:  3
+Write size:     64 MB
+Label:          EC 2+1 (reactor-native, round-robin iopolicy)
+------------------------------------------------------------
+[19:15:10] 
+[19:15:10] Phase 1: WRITE tests
+[19:15:10] 
+[19:15:10]   Sequential write (bs=1M, iodepth=4, 30s)...
+[19:15:40]     -> 340.6 MB/s | 341 IOPS | 11.73 ms lat
+[19:15:40]   Random write 4K (iodepth=4, 30s)...
+[19:16:11]     -> 45.2 MB/s | 11580 IOPS | 0.34 ms lat
+[19:16:11] 
+[19:16:11] Phase 2: READ tests
+[19:16:11] 
+[19:16:11]   Sequential read (bs=1M, iodepth=4, 30s)...
+[19:16:41]     -> 36.3 MB/s | 36 IOPS | 109.97 ms lat
+[19:16:41]   Random read 4K (iodepth=4, 30s)...
+[19:17:12]     -> 31.8 MB/s | 8132 IOPS | 0.49 ms lat
+[19:17:12] 
+[19:17:12] Phase 3: Data integrity
+[19:17:12]   Integrity: PASS (md5=bedc8b3a7115ab1ff507edcf4a51dbc6)
+
+============================================================
+SUMMARY: bench-ec3-pod (novastor-ec3, 3 paths)
+Label: EC 2+1 (reactor-native, round-robin iopolicy)
+============================================================
+Test                 | Result                             
+---------------------+------------------------------------
+Seq Write (1M)       | 340.6 MB/s | 341 IOPS | 11.73 ms lat
+Seq Read (1M)        | 36.3 MB/s | 36 IOPS | 109.97 ms lat
+Rand Write (4K)      | 45.2 MB/s | 11580 IOPS | 0.34 ms lat
+Rand Read (4K)       | 31.8 MB/s | 8132 IOPS | 0.49 ms lat
+Integrity            | PASS                               
+============================================================
+Results: /Users/pascal/Development/Nova/novastor/test/benchmark/results-bench-ec3-pod-2026-03-17-191509.txt

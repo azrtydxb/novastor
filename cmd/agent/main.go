@@ -329,13 +329,40 @@ func main() {
 		)
 	}
 
-	// Connect to the Rust data-plane via gRPC. SPDK is always required;
-	// all data-path I/O goes through the Rust dataplane.
+	// Build TLS client dial options for outbound gRPC connections
+	// (dataplane, metadata). Built early so dpClient can use them.
+	var dialOpts []grpc.DialOption
+	clientCertPath := *tlsClientCert
+	clientKeyPath := *tlsClientKey
+	if clientCertPath == "" {
+		clientCertPath = *tlsCert
+	}
+	if clientKeyPath == "" {
+		clientKeyPath = *tlsKey
+	}
+	if *tlsCA != "" && clientCertPath != "" && clientKeyPath != "" {
+		clientRotator := transport.NewCertRotator(clientCertPath, clientKeyPath, *tlsRotationInterval)
+		clientRotator.Start(ctx)
+		clientTLSOpt, clientTLSErr := transport.NewClientTLSWithRotation(transport.TLSConfig{
+			CACertPath: *tlsCA,
+			CertPath:   clientCertPath,
+			KeyPath:    clientKeyPath,
+		}, clientRotator)
+		if clientTLSErr != nil {
+			logging.L.Fatal("failed to configure client TLS", zap.Error(clientTLSErr))
+		}
+		dialOpts = append(dialOpts, clientTLSOpt)
+	}
+
+	// Connect to the Rust data-plane via gRPC with mTLS.
+	dpDialOpts := []grpc.DialOption{grpc.WithStatsHandler(otelgrpc.NewClientHandler())}
+	if len(dialOpts) > 0 {
+		dpDialOpts = append(dpDialOpts, dialOpts...)
+	} else {
+		dpDialOpts = append(dpDialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
 	logging.L.Info("connecting to Rust data-plane via gRPC", zap.String("addr", *dataplaneAddr))
-	dpClient, err := dataplane.Dial(*dataplaneAddr, logging.L,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-	)
+	dpClient, err := dataplane.Dial(*dataplaneAddr, logging.L, dpDialOpts...)
 	if err != nil {
 		logging.L.Fatal("failed to connect to Rust data-plane", zap.Error(err))
 	}
@@ -417,29 +444,7 @@ func main() {
 	serverOpts = append(serverOpts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	srv := grpc.NewServer(serverOpts...)
 
-	// Build TLS dial options for outbound metadata connections.
-	var dialOpts []grpc.DialOption
-	clientCertPath := *tlsClientCert
-	clientKeyPath := *tlsClientKey
-	if clientCertPath == "" {
-		clientCertPath = *tlsCert
-	}
-	if clientKeyPath == "" {
-		clientKeyPath = *tlsKey
-	}
-	if *tlsCA != "" && clientCertPath != "" && clientKeyPath != "" {
-		clientRotator := transport.NewCertRotator(clientCertPath, clientKeyPath, *tlsRotationInterval)
-		clientRotator.Start(ctx)
-		clientTLSOpt, clientTLSErr := transport.NewClientTLSWithRotation(transport.TLSConfig{
-			CACertPath: *tlsCA,
-			CertPath:   clientCertPath,
-			KeyPath:    clientKeyPath,
-		}, clientRotator)
-		if clientTLSErr != nil {
-			logging.L.Fatal("failed to configure client TLS for metadata connection", zap.Error(clientTLSErr))
-		}
-		dialOpts = append(dialOpts, clientTLSOpt)
-	}
+	// dialOpts (with client TLS) were built earlier, before the dataplane connection.
 
 	// Connect to the metadata service.
 	var metaClient *metadata.GRPCClient

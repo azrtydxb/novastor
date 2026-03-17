@@ -52,6 +52,15 @@ spec:
               mountPath: {{ include "novastor.tls.mountPath" . }}
               readOnly: true
         {{- end }}
+        - name: set-nvme-iopolicy
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo round-robin > /sys/module/nvme_core/parameters/iopolicy 2>/dev/null || true
+              echo "NVMe multipath iopolicy set to round-robin"
+          securityContext:
+            privileged: true
       containers:
         - name: csi-plugin
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.csi.node.image.repository }}:{{ include "novastor.imageTag" . }}"

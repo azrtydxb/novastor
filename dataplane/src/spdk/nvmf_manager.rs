@@ -153,6 +153,18 @@ impl NvmfManager {
                         ));
                     }
 
+                    // Tune transport: set io_unit_size=131072 (128KB) and
+                    // max_qpairs_per_ctrlr=8 for parallel I/O queues.
+                    // Field offsets from spdk/nvmf.h spdk_nvmf_transport_opts:
+                    //   offset 2: max_qpairs_per_ctrlr (u16)
+                    //   offset 12: io_unit_size (u32)
+                    let opts_ptr = &mut transport_opts as *mut _ as *mut u8;
+                    // max_qpairs_per_ctrlr at offset 2 (u16)
+                    *(opts_ptr.add(2) as *mut u16) = 8;
+                    // io_unit_size at offset 12 (u32)
+                    *(opts_ptr.add(12) as *mut u32) = 131072;
+                    info!("NVMe-oF TCP transport opts: max_qpairs_per_ctrlr=8, io_unit_size=128KB");
+
                     // Create the TCP transport.
                     let transport = ffi::spdk_nvmf_transport_create(
                         transport_name.as_ptr() as *const c_char,
@@ -561,7 +573,8 @@ impl NvmfManager {
                 "adrfam": "IPv4",
                 "traddr": addr,
                 "trsvcid": port.to_string(),
-                "subnqn": subnqn
+                "subnqn": subnqn,
+                "nr_io_queues": 4
             }
         });
 

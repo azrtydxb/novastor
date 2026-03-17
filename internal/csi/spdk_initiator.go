@@ -18,8 +18,7 @@ type SPDKInitiator struct {
 }
 
 // NewSPDKInitiator returns an SPDKInitiator backed by the given gRPC dataplane client.
-// hostIP is the local node's IP address; targets at this address are skipped to
-// avoid single-reactor deadlock (SPDK can't connect to itself on one core).
+// hostIP is the local node's IP address (retained for future path-preference hints).
 func NewSPDKInitiator(client *dataplane.Client, hostIP string) *SPDKInitiator {
 	return &SPDKInitiator{client: client, hostIP: hostIP}
 }
@@ -92,12 +91,6 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 	var exportFailures int
 
 	for i, t := range targets {
-		// Skip targets on the local node — SPDK with a single reactor core
-		// deadlocks when connecting as initiator to its own target.
-		if t.Addr == s.hostIP {
-			continue
-		}
-
 		if _, err := strconv.ParseUint(t.Port, 10, 16); err != nil {
 			t.Port = "4430"
 		}

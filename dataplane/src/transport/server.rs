@@ -16,6 +16,12 @@ use crate::transport::dataplane_service::DataplaneServiceImpl;
 pub struct GrpcServerConfig {
     pub listen_address: String,
     pub port: u16,
+    /// Path to CA certificate for mTLS (empty = no TLS).
+    pub tls_ca_cert: String,
+    /// Path to server certificate.
+    pub tls_server_cert: String,
+    /// Path to server private key.
+    pub tls_server_key: String,
 }
 
 impl Default for GrpcServerConfig {
@@ -23,6 +29,9 @@ impl Default for GrpcServerConfig {
         Self {
             listen_address: "0.0.0.0".to_string(),
             port: 9500,
+            tls_ca_cert: String::new(),
+            tls_server_cert: String::new(),
+            tls_server_key: String::new(),
         }
     }
 }
@@ -90,6 +99,44 @@ impl GrpcServer {
                 crate::error::DataPlaneError::TransportError(format!("invalid listen address: {e}"))
             })?;
 
+        // Configure mTLS if cert paths are provided.
+        let tls_config = if !self.config.tls_ca_cert.is_empty()
+            && !self.config.tls_server_cert.is_empty()
+            && !self.config.tls_server_key.is_empty()
+        {
+            let ca_cert = std::fs::read(&self.config.tls_ca_cert).map_err(|e| {
+                crate::error::DataPlaneError::TransportError(format!(
+                    "read CA cert {}: {e}",
+                    self.config.tls_ca_cert
+                ))
+            })?;
+            let server_cert = std::fs::read(&self.config.tls_server_cert).map_err(|e| {
+                crate::error::DataPlaneError::TransportError(format!(
+                    "read server cert {}: {e}",
+                    self.config.tls_server_cert
+                ))
+            })?;
+            let server_key = std::fs::read(&self.config.tls_server_key).map_err(|e| {
+                crate::error::DataPlaneError::TransportError(format!(
+                    "read server key {}: {e}",
+                    self.config.tls_server_key
+                ))
+            })?;
+
+            let identity = tonic::transport::Identity::from_pem(server_cert, server_key);
+            let client_ca = tonic::transport::Certificate::from_pem(ca_cert);
+
+            let tls = tonic::transport::ServerTlsConfig::new()
+                .identity(identity)
+                .client_ca_root(client_ca);
+
+            log::info!("gRPC server TLS enabled (mTLS with client CA verification)");
+            Some(tls)
+        } else {
+            log::warn!("gRPC server TLS DISABLED — no cert paths configured");
+            None
+        };
+
         let chunk_store = self.chunk_store.clone();
 
         let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
@@ -107,12 +154,21 @@ impl GrpcServer {
         let task = tokio::spawn(async move {
             let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
+            // Build the server, optionally with TLS.
+            let mut builder = tonic::transport::Server::builder();
+            if let Some(tls) = tls_config {
+                builder = builder.tls_config(tls).unwrap_or_else(|e| {
+                    log::error!("gRPC TLS config error: {}", e);
+                    tonic::transport::Server::builder()
+                });
+            }
+
             // Tonic's add_service changes the router type at compile time, so
             // we branch based on which services are available.
             match (chunk_store, bdev_mgr, nvmf_mgr) {
                 // Full services: ChunkService + DataplaneService
                 (Some(cs), Some(bm), Some(nm)) => {
-                    tonic::transport::Server::builder()
+                    builder
                         .add_service(ChunkServiceServer::new(ChunkServiceImpl::new(cs)))
                         .add_service(
                             DataplaneServiceServer::new(DataplaneServiceImpl::new(bm, nm))
@@ -124,10 +180,8 @@ impl GrpcServer {
                         .unwrap_or_else(|e| log::error!("gRPC server error: {}", e));
                 }
                 // Chunk store unavailable — DataplaneService only (production path).
-                // PutChunk/GetChunk inter-dataplane RPCs handle 4MB+ chunks,
-                // so we increase the max message size from the 4MB default.
                 (None, Some(bm), Some(nm)) => {
-                    tonic::transport::Server::builder()
+                    builder
                         .add_service(
                             DataplaneServiceServer::new(DataplaneServiceImpl::new(bm, nm))
                                 .max_decoding_message_size(8 * 1024 * 1024)
@@ -139,7 +193,7 @@ impl GrpcServer {
                 }
                 // ChunkService only (no dataplane managers)
                 (Some(cs), _, _) => {
-                    tonic::transport::Server::builder()
+                    builder
                         .add_service(ChunkServiceServer::new(ChunkServiceImpl::new(cs)))
                         .serve_with_incoming(incoming)
                         .await
@@ -182,6 +236,7 @@ mod tests {
         let config = GrpcServerConfig {
             listen_address: "127.0.0.1".to_string(),
             port: 0, // OS assigns port
+            ..Default::default()
         };
 
         let server = GrpcServer::new(config, Arc::new(store));

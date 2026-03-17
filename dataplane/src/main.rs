@@ -37,6 +37,18 @@ struct Args {
     /// Log level
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    /// Path to CA certificate for mTLS (empty = no TLS)
+    #[arg(long, default_value = "")]
+    tls_ca_cert: String,
+
+    /// Path to server certificate for mTLS
+    #[arg(long, default_value = "")]
+    tls_server_cert: String,
+
+    /// Path to server private key for mTLS
+    #[arg(long, default_value = "")]
+    tls_server_key: String,
 }
 
 fn main() {
@@ -75,6 +87,9 @@ fn main() {
             listen_address: args.listen_address,
             listen_port: args.listen_port,
             grpc_port: args.grpc_port,
+            tls_ca_cert: args.tls_ca_cert,
+            tls_server_cert: args.tls_server_cert,
+            tls_server_key: args.tls_server_key,
         };
 
         // spdk::run() blocks in the SPDK reactor loop on the main thread.
