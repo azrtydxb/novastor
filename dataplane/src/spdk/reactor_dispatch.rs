@@ -76,6 +76,16 @@ fn acquire_dma_buf(size: usize) -> *mut std::os::raw::c_void {
     unsafe { ffi::spdk_dma_malloc(size, 0x1000, std::ptr::null_mut()) }
 }
 
+/// Public wrapper for acquire_dma_buf (used by reactor-native I/O path).
+pub fn acquire_dma_buf_public(size: usize) -> *mut std::os::raw::c_void {
+    acquire_dma_buf(size)
+}
+
+/// Public wrapper for release_dma_buf (used by reactor-native I/O path).
+pub fn release_dma_buf_public(buf: *mut std::os::raw::c_void, size: usize) {
+    release_dma_buf(buf, size);
+}
+
 /// Release a DMA buffer back to the pool. For buffers that came from the pool
 /// (size <= 64KB), returns them if the pool isn't full. Otherwise frees via
 /// spdk_dma_free.
