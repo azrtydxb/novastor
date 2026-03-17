@@ -12,7 +12,7 @@
 //! addressing happen only during periodic background sync (not on the hot
 //! path).
 
-use crate::bdev::sub_block::{self, bitmap_set, CHUNK_SIZE, SUB_BLOCK_SIZE};
+use crate::bdev::sub_block::{self, bitmap_is_set, bitmap_set, CHUNK_SIZE, SUB_BLOCK_SIZE};
 use crate::chunk::engine::ChunkEngine;
 use crate::error::{DataPlaneError, Result};
 use crate::metadata::store::MetadataStore;
@@ -276,10 +276,14 @@ fn cleanup_volume_locks(volume_name: &str) {
 /// Sub-block write: writes data in 64KB sub-block granularity directly to the
 /// backend bdev, bypassing the ChunkEngine for hot-path I/O.
 ///
-/// For each sub-block the write touches:
-/// - If the write covers the entire 64KB sub-block: write directly (no read).
-/// - Otherwise: read the existing 64KB, overlay new bytes, write 64KB back.
-/// - Update the dirty bitmap and persist the chunk map entry.
+/// Optimisations:
+/// - **Batch contiguous**: consecutive full sub-blocks within the same chunk
+///   are issued as a single `bdev_write_async` call (e.g. 1MB aligned write →
+///   one 1MB bdev write instead of 16 × 64KB writes).
+/// - **Skip first-write read**: partial writes to a never-written sub-block
+///   start from a zeroed buffer (checked via dirty bitmap) instead of reading
+///   64KB of undefined data from the bdev.
+/// - Dirty bitmap is updated per sub-block as before.
 ///
 /// No SHA-256 hashing — content-addressing happens during background sync.
 /// Volume data is laid out contiguously on the backend bdev: offset maps directly.
@@ -291,142 +295,314 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
     let end_offset = offset + total_len;
     let mut data_cursor = 0usize;
 
-    // Walk through each sub-block the write touches.
+    // ---------------------------------------------------------------
+    // Phase 1: decompose the write into per-sub-block descriptors.
+    // ---------------------------------------------------------------
+    struct SbDesc {
+        chunk_idx: usize,
+        sb_idx: usize,
+        offset_in_sb: usize,
+        write_len: usize,
+        data_start: usize, // index into `data`
+        full: bool,        // covers entire 64KB sub-block?
+    }
+
+    let mut descs: Vec<SbDesc> = Vec::new();
     let mut pos = offset;
     while pos < end_offset {
         let chunk_idx = sub_block::chunk_index(pos) as usize;
         let sb_idx = sub_block::sub_block_index(pos);
         let offset_in_sb = sub_block::offset_in_sub_block(pos);
-
-        // How many bytes to write in this sub-block.
         let remaining_in_sb = SUB_BLOCK_SIZE - offset_in_sb;
         let remaining_data = (end_offset - pos) as usize;
         let write_len = remaining_in_sb.min(remaining_data);
+        let full = offset_in_sb == 0 && write_len == SUB_BLOCK_SIZE;
 
-        let covers_full_sb = offset_in_sb == 0 && write_len == SUB_BLOCK_SIZE;
-
-        // Backend bdev offset: volume base + chunk offset + sub-block offset.
-        let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
-        let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx);
-
-        if covers_full_sb {
-            // Full sub-block write — no read needed.
-            let sb_data = &data[data_cursor..data_cursor + SUB_BLOCK_SIZE];
-            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, sb_data)
-                .instrument(info_span!("bdev_write_64k", chunk_idx, sb_idx))
-                .await?;
-        } else {
-            // Partial sub-block write — lock, read-modify-write at 64KB granularity.
-            let lock = sub_block_lock(volume_name, chunk_idx, sb_idx);
-            let _guard = lock.lock().await;
-
-            let mut buf = match reactor_dispatch::bdev_read_async(
-                backend_bdev,
-                bdev_offset,
-                SUB_BLOCK_SIZE as u64,
-            )
-            .instrument(info_span!("bdev_read_64k", chunk_idx, sb_idx))
-            .await
-            {
-                Ok(existing) => existing,
-                Err(_) => {
-                    // Sub-block never written — start with zeros.
-                    vec![0u8; SUB_BLOCK_SIZE]
-                }
-            };
-
-            // Ensure buffer is exactly SUB_BLOCK_SIZE.
-            buf.resize(SUB_BLOCK_SIZE, 0);
-
-            // Overlay the new data.
-            buf[offset_in_sb..offset_in_sb + write_len]
-                .copy_from_slice(&data[data_cursor..data_cursor + write_len]);
-
-            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, &buf)
-                .instrument(info_span!("bdev_write_64k", chunk_idx, sb_idx))
-                .await?;
-        }
-
-        // Update the chunk map entry's dirty bitmap.
-        let chunk_id = format!("{}:{}", volume_name, chunk_idx);
-        let entry = {
-            let _bm_span = info_span!("bitmap_update", chunk_idx, sb_idx).entered();
-            let mut maps = volume_chunk_maps().write().unwrap();
-            let chunk_map = maps.get_mut(volume_name).ok_or_else(|| {
-                DataPlaneError::BdevError(format!("no chunk map for volume '{}'", volume_name))
-            })?;
-
-            // Grow the chunk map if needed.
-            if chunk_idx >= chunk_map.len() {
-                chunk_map.resize(chunk_idx + 1, None);
-            }
-
-            let entry = chunk_map[chunk_idx].get_or_insert_with(|| ChunkMapEntry {
-                chunk_index: chunk_idx as u64,
-                chunk_id: chunk_id.clone(),
-                ec_params: None,
-                dirty_bitmap: 0,
-            });
-            bitmap_set(&mut entry.dirty_bitmap, sb_idx);
-            entry.clone()
-        }; // maps guard dropped here, before any .await
-
-        // Metadata persistence DEFERRED to background sync (BlueStore V3 pattern).
-        // Dirty bitmap is in memory only. On clean shutdown, destage_all_bitmaps()
-        // bulk-writes everything. On crash, sync rebuilds by scanning chunks.
-        // This eliminates ~816μs (63%) of per-write latency.
-
+        descs.push(SbDesc {
+            chunk_idx,
+            sb_idx,
+            offset_in_sb,
+            write_len,
+            data_start: data_cursor,
+            full,
+        });
         data_cursor += write_len;
         pos += write_len as u64;
+    }
+
+    // ---------------------------------------------------------------
+    // Phase 2: issue I/O — batch contiguous full sub-blocks, RMW partials.
+    // ---------------------------------------------------------------
+    let mut i = 0;
+    while i < descs.len() {
+        let d = &descs[i];
+
+        if d.full {
+            // Try to extend a contiguous run of full sub-blocks in the same chunk.
+            let run_start = i;
+            let mut run_end = i + 1;
+            while run_end < descs.len() {
+                let next = &descs[run_end];
+                let prev = &descs[run_end - 1];
+                if next.full && next.chunk_idx == d.chunk_idx && next.sb_idx == prev.sb_idx + 1 {
+                    run_end += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let first = &descs[run_start];
+            let last = &descs[run_end - 1];
+            let n_sbs = run_end - run_start;
+            let batch_bytes = n_sbs * SUB_BLOCK_SIZE;
+            let batch_data = &data[first.data_start..first.data_start + batch_bytes];
+
+            let chunk_base = vol_base + first.chunk_idx as u64 * CHUNK_SIZE as u64;
+            let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, first.sb_idx);
+
+            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, batch_data)
+                .instrument(info_span!(
+                    "bdev_write_batch",
+                    chunk_idx = first.chunk_idx,
+                    sb_start = first.sb_idx,
+                    sb_end = last.sb_idx,
+                    n_sbs
+                ))
+                .await?;
+
+            // Update bitmaps for all sub-blocks in the batch.
+            for desc in &descs[run_start..run_end] {
+                update_dirty_bitmap(volume_name, desc.chunk_idx, desc.sb_idx)?;
+            }
+
+            i = run_end;
+        } else {
+            // Partial sub-block write — lock + RMW.
+            let lock = sub_block_lock(volume_name, d.chunk_idx, d.sb_idx);
+            let _guard = lock.lock().await;
+
+            // Optimisation 2: skip read for never-written sub-blocks.
+            let previously_written = {
+                let maps = volume_chunk_maps().read().unwrap();
+                maps.get(volume_name)
+                    .and_then(|cm| cm.get(d.chunk_idx))
+                    .and_then(|entry| entry.as_ref())
+                    .map(|e| bitmap_is_set(e.dirty_bitmap, d.sb_idx))
+                    .unwrap_or(false)
+            };
+
+            let mut buf = if previously_written {
+                let chunk_base = vol_base + d.chunk_idx as u64 * CHUNK_SIZE as u64;
+                let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, d.sb_idx);
+                let mut existing = reactor_dispatch::bdev_read_async(
+                    backend_bdev,
+                    bdev_offset,
+                    SUB_BLOCK_SIZE as u64,
+                )
+                .instrument(info_span!(
+                    "bdev_read_rmw",
+                    chunk_idx = d.chunk_idx,
+                    sb_idx = d.sb_idx
+                ))
+                .await?;
+                existing.resize(SUB_BLOCK_SIZE, 0);
+                existing
+            } else {
+                // First write to this sub-block — no need to read undefined data.
+                vec![0u8; SUB_BLOCK_SIZE]
+            };
+
+            // Overlay the new data.
+            buf[d.offset_in_sb..d.offset_in_sb + d.write_len]
+                .copy_from_slice(&data[d.data_start..d.data_start + d.write_len]);
+
+            let chunk_base = vol_base + d.chunk_idx as u64 * CHUNK_SIZE as u64;
+            let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, d.sb_idx);
+            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, &buf)
+                .instrument(info_span!(
+                    "bdev_write_rmw",
+                    chunk_idx = d.chunk_idx,
+                    sb_idx = d.sb_idx
+                ))
+                .await?;
+
+            update_dirty_bitmap(volume_name, d.chunk_idx, d.sb_idx)?;
+            i += 1;
+        }
     }
 
     Ok(())
 }
 
-/// Sub-block read: reads data in 64KB sub-block granularity directly from the
-/// backend bdev, bypassing the ChunkEngine for hot-path I/O.
+/// Helper: set the dirty bit for a single sub-block and ensure the chunk map
+/// entry exists. Called after every successful write.
+fn update_dirty_bitmap(volume_name: &str, chunk_idx: usize, sb_idx: usize) -> Result<()> {
+    let chunk_id = format!("{}:{}", volume_name, chunk_idx);
+    let _bm_span = info_span!("bitmap_update", chunk_idx, sb_idx).entered();
+    let mut maps = volume_chunk_maps().write().unwrap();
+    let chunk_map = maps.get_mut(volume_name).ok_or_else(|| {
+        DataPlaneError::BdevError(format!("no chunk map for volume '{}'", volume_name))
+    })?;
+
+    // Grow the chunk map if needed.
+    if chunk_idx >= chunk_map.len() {
+        chunk_map.resize(chunk_idx + 1, None);
+    }
+
+    let entry = chunk_map[chunk_idx].get_or_insert_with(|| ChunkMapEntry {
+        chunk_index: chunk_idx as u64,
+        chunk_id: chunk_id.clone(),
+        ec_params: None,
+        dirty_bitmap: 0,
+    });
+    bitmap_set(&mut entry.dirty_bitmap, sb_idx);
+    Ok(())
+}
+
+/// Sub-block read: reads data directly from the backend bdev, bypassing the
+/// ChunkEngine for hot-path I/O.
 ///
-/// For each sub-block the read spans, reads 64KB from the backend bdev at the
-/// direct volume offset and extracts the requested bytes. Unwritten sub-blocks
-/// (dirty bitmap bit not set) return zeros.
+/// Optimisations:
+/// - **Batch contiguous**: consecutive sub-blocks within the same chunk are
+///   read with a single `bdev_read_async` call and the result sliced.
+/// - **Read exact size**: when only a portion of a sub-block is needed, reads
+///   only the required bytes (aligned to BDEV_BLOCK_SIZE) instead of the full
+///   64KB. A 4K read becomes ~4KB bdev I/O, not 64KB.
 #[tracing::instrument(skip_all, fields(volume = %volume_name, offset, length))]
 async fn sub_block_read(volume_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+    /// SPDK bdev block alignment (bytes). Reads must be aligned to this.
+    const BDEV_BLOCK_SIZE: u64 = 512;
+
     let backend_bdev = get_backend_bdev_name()?;
     let vol_base = get_volume_base_offset(volume_name)?;
     let end_offset = offset + length;
     let mut result = Vec::with_capacity(length as usize);
 
+    // ---------------------------------------------------------------
+    // Phase 1: decompose into per-sub-block descriptors.
+    // ---------------------------------------------------------------
+    struct RdDesc {
+        chunk_idx: usize,
+        sb_idx: usize,
+        offset_in_sb: usize,
+        read_len: usize,
+    }
+
+    let mut descs: Vec<RdDesc> = Vec::new();
     let mut pos = offset;
     while pos < end_offset {
         let chunk_idx = sub_block::chunk_index(pos) as usize;
         let sb_idx = sub_block::sub_block_index(pos);
         let offset_in_sb = sub_block::offset_in_sub_block(pos);
-
-        // How many bytes to read from this sub-block.
         let remaining_in_sb = SUB_BLOCK_SIZE - offset_in_sb;
         let remaining_req = (end_offset - pos) as usize;
         let read_len = remaining_in_sb.min(remaining_req);
+        descs.push(RdDesc {
+            chunk_idx,
+            sb_idx,
+            offset_in_sb,
+            read_len,
+        });
+        pos += read_len as u64;
+    }
 
-        // Always read from the backend — no assumptions about disk content.
-        {
-            let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
-            let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx);
-            let sb_data =
-                reactor_dispatch::bdev_read_async(backend_bdev, bdev_offset, SUB_BLOCK_SIZE as u64)
-                    .instrument(info_span!("bdev_read_64k", chunk_idx, sb_idx))
-                    .await?;
+    // ---------------------------------------------------------------
+    // Phase 2: issue I/O — batch contiguous sub-blocks when possible,
+    //          read exact size for single sub-block accesses.
+    // ---------------------------------------------------------------
+    let mut i = 0;
+    while i < descs.len() {
+        let d = &descs[i];
 
-            // Extract the requested range from the sub-block.
-            let available = sb_data.len().saturating_sub(offset_in_sb);
-            let to_copy = read_len.min(available);
-            result.extend_from_slice(&sb_data[offset_in_sb..offset_in_sb + to_copy]);
-            // Pad with zeros if the sub-block data was shorter than expected.
-            if to_copy < read_len {
-                result.extend(std::iter::repeat(0u8).take(read_len - to_copy));
+        // Check if we can batch contiguous sub-blocks in the same chunk.
+        // Batching is only beneficial when consecutive sub-blocks line up.
+        let run_start = i;
+        let mut run_end = i + 1;
+        while run_end < descs.len() {
+            let next = &descs[run_end];
+            let prev = &descs[run_end - 1];
+            if next.chunk_idx == d.chunk_idx && next.sb_idx == prev.sb_idx + 1 {
+                run_end += 1;
+            } else {
+                break;
             }
         }
 
-        pos += read_len as u64;
+        let n_sbs = run_end - run_start;
+
+        if n_sbs > 1 {
+            // ---- Batched contiguous read across N sub-blocks ----
+            let first = &descs[run_start];
+            let last = &descs[run_end - 1];
+
+            // The bdev range spans from (first sb start + first offset_in_sb)
+            // to (last sb start + last offset_in_sb + last read_len), but for
+            // batching we read full sub-block ranges to keep it simple and
+            // aligned — the overhead is small when N > 1.
+            let chunk_base = vol_base + first.chunk_idx as u64 * CHUNK_SIZE as u64;
+            let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, first.sb_idx);
+            let total_bdev_bytes = (n_sbs * SUB_BLOCK_SIZE) as u64;
+
+            let batch_buf =
+                reactor_dispatch::bdev_read_async(backend_bdev, bdev_offset, total_bdev_bytes)
+                    .instrument(info_span!(
+                        "bdev_read_batch",
+                        chunk_idx = first.chunk_idx,
+                        sb_start = first.sb_idx,
+                        sb_end = last.sb_idx,
+                        n_sbs
+                    ))
+                    .await?;
+
+            // Extract each descriptor's requested range from the batch buffer.
+            for desc in &descs[run_start..run_end] {
+                let buf_sb_start = (desc.sb_idx - first.sb_idx) * SUB_BLOCK_SIZE;
+                let src_start = buf_sb_start + desc.offset_in_sb;
+                let available = batch_buf.len().saturating_sub(src_start);
+                let to_copy = desc.read_len.min(available);
+                result.extend_from_slice(&batch_buf[src_start..src_start + to_copy]);
+                if to_copy < desc.read_len {
+                    result.extend(std::iter::repeat(0u8).take(desc.read_len - to_copy));
+                }
+            }
+
+            i = run_end;
+        } else {
+            // ---- Single sub-block: read exact size (aligned) ----
+            let chunk_base = vol_base + d.chunk_idx as u64 * CHUNK_SIZE as u64;
+            let sb_bdev_start = sub_block::backend_sub_block_offset(chunk_base, d.sb_idx);
+
+            // Align offset down and length up to BDEV_BLOCK_SIZE.
+            let aligned_off = (d.offset_in_sb as u64) & !(BDEV_BLOCK_SIZE - 1);
+            let aligned_end = ((d.offset_in_sb + d.read_len) as u64 + BDEV_BLOCK_SIZE - 1)
+                & !(BDEV_BLOCK_SIZE - 1);
+            let aligned_len = aligned_end - aligned_off;
+
+            let buf = reactor_dispatch::bdev_read_async(
+                backend_bdev,
+                sb_bdev_start + aligned_off,
+                aligned_len,
+            )
+            .instrument(info_span!(
+                "bdev_read_exact",
+                chunk_idx = d.chunk_idx,
+                sb_idx = d.sb_idx,
+                aligned_off,
+                aligned_len
+            ))
+            .await?;
+
+            // The requested bytes start at (offset_in_sb - aligned_off) within buf.
+            let buf_off = d.offset_in_sb - aligned_off as usize;
+            let available = buf.len().saturating_sub(buf_off);
+            let to_copy = d.read_len.min(available);
+            result.extend_from_slice(&buf[buf_off..buf_off + to_copy]);
+            if to_copy < d.read_len {
+                result.extend(std::iter::repeat(0u8).take(d.read_len - to_copy));
+            }
+
+            i += 1;
+        }
     }
 
     Ok(result)
