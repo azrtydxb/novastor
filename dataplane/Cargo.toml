@@ -20,6 +20,7 @@ reed-solomon-simd = "3"
 crc32c = "0.6"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+dashmap = "6"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "fs", "macros", "net"] }
 async-trait = "0.1"
 ctrlc = "3"

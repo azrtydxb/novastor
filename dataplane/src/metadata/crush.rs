@@ -87,9 +87,25 @@ fn select_backend(chunk_id: &str, node: &Node, replica: usize) -> String {
 
 /// Deterministic hash: SHA-256 of `"chunk_id:candidate_id:replica"`, first 4
 /// bytes interpreted as a big-endian u32.
+///
+/// Uses `ring::digest::Context` to incrementally feed segments, avoiding the
+/// heap allocation that `format!()` would incur on every call.
 fn crush_hash(chunk_id: &str, candidate_id: &str, replica: usize) -> u32 {
-    let input = format!("{}:{}:{}", chunk_id, candidate_id, replica);
-    let result = digest::digest(&digest::SHA256, input.as_bytes());
+    let mut ctx = digest::Context::new(&digest::SHA256);
+    ctx.update(chunk_id.as_bytes());
+    ctx.update(b":");
+    ctx.update(candidate_id.as_bytes());
+    ctx.update(b":");
+    // Write the replica number into a small stack buffer to avoid allocation.
+    let mut buf = [0u8; 20]; // max u64 decimal digits
+    let len = {
+        use std::io::Write;
+        let mut cursor = std::io::Cursor::new(&mut buf[..]);
+        write!(cursor, "{}", replica).unwrap();
+        cursor.position() as usize
+    };
+    ctx.update(&buf[..len]);
+    let result = ctx.finish();
     let bytes = result.as_ref();
     u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }

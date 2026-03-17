@@ -27,7 +27,7 @@ pub struct PolicyEngine {
     node_id: String,
     location_store: Arc<ChunkLocationStore>,
     operations: ChunkOperations,
-    topology: RwLock<ClusterMap>,
+    topology: RwLock<Arc<ClusterMap>>,
     policies: RwLock<HashMap<String, VolumePolicy>>,
 }
 
@@ -50,7 +50,7 @@ impl PolicyEngine {
             node_id,
             location_store,
             operations,
-            topology: RwLock::new(topology),
+            topology: RwLock::new(Arc::new(topology)),
             policies: RwLock::new(HashMap::new()),
         }
     }
@@ -79,7 +79,7 @@ impl PolicyEngine {
             topo.generation(),
             topology.generation()
         );
-        *topo = topology;
+        *topo = Arc::new(topology);
     }
 
     /// Record that a chunk is stored on a given node.

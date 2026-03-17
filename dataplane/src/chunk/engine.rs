@@ -22,7 +22,7 @@ use crate::transport::chunk_client::ChunkClient;
 pub struct ChunkEngine {
     node_id: String,
     local_store: Arc<dyn ChunkStore>,
-    topology: RwLock<ClusterMap>,
+    topology: RwLock<Arc<ClusterMap>>,
     /// Data protection scheme for this engine instance.
     /// Behind RwLock so SetVolumePolicy can update it at runtime.
     protection: RwLock<Protection>,
@@ -38,7 +38,7 @@ impl ChunkEngine {
         Self {
             node_id,
             local_store,
-            topology: RwLock::new(topology),
+            topology: RwLock::new(Arc::new(topology)),
             protection: RwLock::new(Protection::Replication { factor: 1 }),
             connections: Mutex::new(HashMap::new()),
             policy: None,
@@ -55,7 +55,7 @@ impl ChunkEngine {
         Self {
             node_id,
             local_store,
-            topology: RwLock::new(topology),
+            topology: RwLock::new(Arc::new(topology)),
             protection: RwLock::new(Protection::Replication { factor: 1 }),
             connections: Mutex::new(HashMap::new()),
             policy: Some(policy),
@@ -72,7 +72,7 @@ impl ChunkEngine {
         Self {
             node_id,
             local_store,
-            topology: RwLock::new(topology),
+            topology: RwLock::new(Arc::new(topology)),
             protection: RwLock::new(protection),
             connections: Mutex::new(HashMap::new()),
             policy: None,
@@ -90,7 +90,7 @@ impl ChunkEngine {
         Self {
             node_id,
             local_store,
-            topology: RwLock::new(topology),
+            topology: RwLock::new(Arc::new(topology)),
             protection: RwLock::new(protection),
             connections: Mutex::new(HashMap::new()),
             policy: Some(policy),
@@ -129,7 +129,7 @@ impl ChunkEngine {
             new_gen,
             new_topology.nodes().len(),
         );
-        *topo = new_topology;
+        *topo = Arc::new(new_topology);
         true
     }
 

@@ -17,6 +17,7 @@ use crate::error::{DataPlaneError, Result};
 use crate::metadata::store::MetadataStore;
 use crate::metadata::types::ChunkMapEntry;
 use crate::spdk::reactor_dispatch;
+use dashmap::DashMap;
 use log::{error, info, warn};
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_void};
@@ -91,18 +92,18 @@ static BACKEND_BDEV_NAME: OnceLock<String> = OnceLock::new();
 /// Per-volume base offset on the backend bdev. Volumes are laid out
 /// sequentially after a reserved region. The reserved region matches
 /// BdevChunkStore's data_region_offset (metadata area at start of bdev).
-static VOLUME_BASE_OFFSETS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+static VOLUME_BASE_OFFSETS: OnceLock<RwLock<HashMap<String, u64>>> = OnceLock::new();
 
 /// Next free offset for allocating new volumes.
 static NEXT_VOLUME_OFFSET: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
 
-fn volume_offsets() -> &'static Mutex<HashMap<String, u64>> {
-    VOLUME_BASE_OFFSETS.get_or_init(|| Mutex::new(HashMap::new()))
+fn volume_offsets() -> &'static RwLock<HashMap<String, u64>> {
+    VOLUME_BASE_OFFSETS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 /// Reserve space for a volume and return its base offset on the bdev.
 pub fn allocate_volume_offset(volume_name: &str, size_bytes: u64) -> u64 {
-    let mut offsets = volume_offsets().lock().unwrap();
+    let mut offsets = volume_offsets().write().unwrap();
     if let Some(&existing) = offsets.get(volume_name) {
         return existing;
     }
@@ -126,7 +127,7 @@ pub fn allocate_volume_offset(volume_name: &str, size_bytes: u64) -> u64 {
 
 /// Get the base offset for an existing volume.
 fn get_volume_base_offset(volume_name: &str) -> Result<u64> {
-    let offsets = volume_offsets().lock().unwrap();
+    let offsets = volume_offsets().read().unwrap();
     offsets.get(volume_name).copied().ok_or_else(|| {
         DataPlaneError::BdevError(format!("no base offset for volume '{}'", volume_name))
     })
@@ -243,14 +244,13 @@ fn get_tokio_handle() -> Result<&'static tokio::runtime::Handle> {
 
 /// Per-sub-block lock to serialize concurrent partial writes on the same sub-block.
 /// Key: (volume_name, chunk_index, sub_block_index). The Mutex<()> provides mutual exclusion.
-static SUB_BLOCK_LOCKS: OnceLock<
-    Mutex<HashMap<(String, usize, usize), Arc<tokio::sync::Mutex<()>>>>,
-> = OnceLock::new();
+static SUB_BLOCK_LOCKS: OnceLock<DashMap<(String, usize, usize), Arc<tokio::sync::Mutex<()>>>> =
+    OnceLock::new();
 
 fn sub_block_lock(volume: &str, chunk_idx: usize, sb_idx: usize) -> Arc<tokio::sync::Mutex<()>> {
-    let locks = SUB_BLOCK_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut map = locks.lock().unwrap();
-    map.entry((volume.to_string(), chunk_idx, sb_idx))
+    let locks = SUB_BLOCK_LOCKS.get_or_init(DashMap::new);
+    locks
+        .entry((volume.to_string(), chunk_idx, sb_idx))
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
 }
@@ -259,10 +259,9 @@ fn sub_block_lock(volume: &str, chunk_idx: usize, sb_idx: usize) -> Arc<tokio::s
 /// Called during volume destruction to prevent unbounded memory growth.
 fn cleanup_volume_locks(volume_name: &str) {
     if let Some(locks) = SUB_BLOCK_LOCKS.get() {
-        let mut map = locks.lock().unwrap();
-        let before = map.len();
-        map.retain(|key, _| key.0 != volume_name);
-        let removed = before - map.len();
+        let before = locks.len();
+        locks.retain(|key, _| key.0 != volume_name);
+        let removed = before - locks.len();
         if removed > 0 {
             info!(
                 "novastor_bdev: cleaned up {} sub-block locks for volume '{}'",
