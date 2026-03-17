@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -164,6 +165,9 @@ func (s *SPDKTargetServer) ensureChunkStore() error {
 // target via the data-plane process. The volume is stored as content-addressed
 // 4MB chunks in the Rust dataplane's chunk engine.
 func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTargetRequest) (*pb.CreateTargetResponse, error) {
+	_, span := otel.Tracer("novastor-agent").Start(ctx, "SPDKTargetServer.CreateTarget")
+	defer span.End()
+
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume_id is required")

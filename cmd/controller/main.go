@@ -26,6 +26,7 @@ import (
 	"github.com/azrtydxb/novastor/internal/controller"
 	"github.com/azrtydxb/novastor/internal/logging"
 	"github.com/azrtydxb/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/observability"
 	"github.com/azrtydxb/novastor/internal/operator"
 	"github.com/azrtydxb/novastor/internal/policy"
 	"github.com/azrtydxb/novastor/internal/transport"
@@ -228,6 +229,9 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stdout, "novastor-controller %s (commit: %s, built: %s)\n", version, commit, date)
 		os.Exit(0)
 	}
+
+	shutdownTracer := observability.InitTracer("novastor-controller", logging.L)
+	defer shutdownTracer()
 
 	ctrl.SetLogger(crzap.New(crzap.UseFlagOptions(&opts)))
 	setupLog := ctrl.Log.WithName("setup")

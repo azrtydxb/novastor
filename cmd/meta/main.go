@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/azrtydxb/novastor/internal/logging"
 	"github.com/azrtydxb/novastor/internal/metadata"
 	"github.com/azrtydxb/novastor/internal/metrics"
+	"github.com/azrtydxb/novastor/internal/observability"
 	"github.com/azrtydxb/novastor/internal/transport"
 )
 
@@ -52,6 +54,9 @@ func main() {
 
 	logging.Init(false)
 	defer logging.Sync()
+
+	shutdownTracer := observability.InitTracer("novastor-meta", logging.L)
+	defer shutdownTracer()
 
 	log.Printf("novastor-meta %s (commit: %s, built: %s)", version, commit, date)
 
@@ -139,6 +144,7 @@ func main() {
 	}
 
 	// Create and register the gRPC metadata server.
+	serverOpts = append(serverOpts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	grpcServer := grpc.NewServer(serverOpts...)
 	metaServer := metadata.NewGRPCServer(store)
 	metaServer.Register(grpcServer)

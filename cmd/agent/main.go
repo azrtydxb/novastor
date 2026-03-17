@@ -21,8 +21,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -38,6 +40,7 @@ import (
 	"github.com/azrtydxb/novastor/internal/logging"
 	"github.com/azrtydxb/novastor/internal/metadata"
 	"github.com/azrtydxb/novastor/internal/metrics"
+	"github.com/azrtydxb/novastor/internal/observability"
 	"github.com/azrtydxb/novastor/internal/transport"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -275,6 +278,9 @@ func main() {
 	logging.Init(false)
 	defer logging.Sync()
 
+	shutdownTracer := observability.InitTracer("novastor-agent", logging.L)
+	defer shutdownTracer()
+
 	logging.L.Info("novastor-agent starting",
 		zap.String("version", version),
 		zap.String("commit", commit),
@@ -326,7 +332,10 @@ func main() {
 	// Connect to the Rust data-plane via gRPC. SPDK is always required;
 	// all data-path I/O goes through the Rust dataplane.
 	logging.L.Info("connecting to Rust data-plane via gRPC", zap.String("addr", *dataplaneAddr))
-	dpClient, err := dataplane.Dial(*dataplaneAddr, logging.L)
+	dpClient, err := dataplane.Dial(*dataplaneAddr, logging.L,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		logging.L.Fatal("failed to connect to Rust data-plane", zap.Error(err))
 	}
@@ -405,6 +414,7 @@ func main() {
 		serverOpts = append(serverOpts, tlsOpt)
 	}
 
+	serverOpts = append(serverOpts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	srv := grpc.NewServer(serverOpts...)
 
 	// Build TLS dial options for outbound metadata connections.

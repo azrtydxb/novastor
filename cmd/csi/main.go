@@ -18,11 +18,14 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
 	"github.com/azrtydxb/novastor/internal/agent"
 	novcsi "github.com/azrtydxb/novastor/internal/csi"
 	"github.com/azrtydxb/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/internal/observability"
 	"github.com/azrtydxb/novastor/internal/placement"
 	"github.com/azrtydxb/novastor/internal/transport"
 )
@@ -193,6 +196,11 @@ func main() {
 	flag.Parse()
 
 	log.Printf("novastor-csi %s (commit: %s, built: %s)", version, commit, date)
+
+	// Initialise OpenTelemetry tracing.
+	zapLogger, _ := zap.NewProduction()
+	shutdownTracer := observability.InitTracer("novastor-csi", zapLogger)
+	defer shutdownTracer()
 
 	// Main context for the CSI driver lifetime.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -441,7 +449,7 @@ func main() {
 	}
 	defer func() { _ = listener.Close() }()
 
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 
 	// Register CSI Identity service.
 	identity := novcsi.NewIdentityServer()

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -47,6 +48,9 @@ type BackendAssignmentReconciler struct {
 //  4. Call InitChunkStore to set up the chunk engine on the bdev.
 //  5. Update the BackendAssignment status to Ready.
 func (r *BackendAssignmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx, span := otel.Tracer("novastor-agent").Start(ctx, "BackendAssignment.Reconcile")
+	defer span.End()
+
 	logger := log.FromContext(ctx)
 
 	var ba novastorev1alpha1.BackendAssignment
