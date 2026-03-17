@@ -442,6 +442,75 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
     Ok(())
 }
 
+/// Find the byte offset of the next data (written) region at or after `offset`.
+/// Returns `u64::MAX` if no data exists after `offset`.
+fn find_next_data(volume_name: &str, offset: u64) -> u64 {
+    let maps = volume_chunk_maps().read().unwrap();
+    let chunk_map = match maps.get(volume_name) {
+        Some(cm) => cm,
+        None => return u64::MAX,
+    };
+
+    let mut pos = offset;
+    loop {
+        let chunk_idx = sub_block::chunk_index(pos) as usize;
+        let sb_idx = sub_block::sub_block_index(pos);
+
+        if chunk_idx >= chunk_map.len() {
+            return u64::MAX;
+        }
+
+        if let Some(entry) = chunk_map.get(chunk_idx).and_then(|e| e.as_ref()) {
+            // Scan from sb_idx to end of this chunk for a dirty bit.
+            for i in sb_idx..sub_block::SUB_BLOCKS_PER_CHUNK {
+                if bitmap_is_set(entry.dirty_bitmap, i) {
+                    let data_offset =
+                        chunk_idx as u64 * CHUNK_SIZE as u64 + i as u64 * SUB_BLOCK_SIZE as u64;
+                    return data_offset.max(offset);
+                }
+            }
+        }
+
+        // Move to the next chunk.
+        pos = (chunk_idx as u64 + 1) * CHUNK_SIZE as u64;
+    }
+}
+
+/// Find the byte offset of the next hole (unwritten) region at or after `offset`.
+/// Returns `u64::MAX` if the entire remaining volume is data.
+fn find_next_hole(volume_name: &str, offset: u64) -> u64 {
+    let maps = volume_chunk_maps().read().unwrap();
+    let chunk_map = match maps.get(volume_name) {
+        Some(cm) => cm,
+        None => return offset, // No data at all — entire volume is a hole.
+    };
+
+    let chunk_idx = sub_block::chunk_index(offset) as usize;
+    let sb_idx = sub_block::sub_block_index(offset);
+
+    // If chunk doesn't exist in the map, it's all holes.
+    if chunk_idx >= chunk_map.len() {
+        return offset;
+    }
+
+    if let Some(entry) = chunk_map.get(chunk_idx).and_then(|e| e.as_ref()) {
+        // Scan from sb_idx for an unset bit.
+        for i in sb_idx..sub_block::SUB_BLOCKS_PER_CHUNK {
+            if !bitmap_is_set(entry.dirty_bitmap, i) {
+                let hole_offset =
+                    chunk_idx as u64 * CHUNK_SIZE as u64 + i as u64 * SUB_BLOCK_SIZE as u64;
+                return hole_offset.max(offset);
+            }
+        }
+        // This chunk is fully written. Next chunk starts a new scan.
+        let next_chunk = (chunk_idx + 1) as u64 * CHUNK_SIZE as u64;
+        return find_next_hole(volume_name, next_chunk);
+    }
+
+    // No entry for this chunk — it's a hole.
+    offset
+}
+
 /// Helper: set the dirty bit for a single sub-block and ensure the chunk map
 /// entry exists. Called after every successful write.
 fn update_dirty_bitmap(volume_name: &str, chunk_idx: usize, sb_idx: usize) -> Result<()> {
@@ -1080,6 +1149,8 @@ unsafe extern "C" fn bdev_io_type_supported_cb(
             | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_FLUSH
             | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES
             | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_UNMAP
+            | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_RESET
+            | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_COPY
     )
 }
 
@@ -1381,6 +1452,94 @@ unsafe extern "C" fn bdev_submit_request_cb(
             // deallocates blocks — also a no-op since we don't pre-allocate.
             // This makes mkfs.ext4 near-instant instead of writing GBs of
             // zeros through the I/O path.
+            ffi::spdk_bdev_io_complete(
+                bdev_io,
+                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+            );
+        }
+        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_RESET => {
+            // Reset: gracefully accept — no state to reset.
+            ffi::spdk_bdev_io_complete(
+                bdev_io,
+                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+            );
+        }
+        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_COPY => {
+            // Copy: read source range, write to destination.
+            let bdev_params = (*bdev_io).u.bdev.as_ref();
+            let dst_offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
+            let num_bytes = bdev_params.num_blocks * (*bdev).blocklen as u64;
+            // Source offset is in the copy union member. It shares the
+            // same position as iovs in the union, so we access it via
+            // the raw struct layout: copy.src_offset_blocks is at the
+            // start of the union that also holds iovs/iovcnt.
+            let src_offset_blocks_ptr = &bdev_params.iovs as *const _ as *const u64;
+            let src_offset = (*src_offset_blocks_ptr) * (*bdev).blocklen as u64;
+            let bdev_io_addr = bdev_io as usize;
+
+            let handle = get_tokio_handle().expect("tokio handle");
+            handle.spawn(async move {
+                let result = async {
+                    let data = sub_block_read(&volume_name, src_offset, num_bytes).await?;
+                    sub_block_write(&volume_name, dst_offset, &data).await?;
+                    Ok::<(), DataPlaneError>(())
+                }
+                .await;
+                let status = match result {
+                    Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                    Err(e) => {
+                        error!("novastor_bdev: copy failed: {}", e);
+                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                    }
+                };
+                reactor_dispatch::send_to_reactor(move || unsafe {
+                    ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
+                });
+            });
+        }
+        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_SEEK_DATA => {
+            // SEEK_DATA: find the next offset (in blocks) that has data.
+            // Check the dirty bitmap to find the first sub-block with data
+            // at or after the requested offset.
+            let bdev_params = (*bdev_io).u.bdev.as_ref();
+            let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
+
+            let result_offset = find_next_data(&volume_name, offset);
+
+            // Set the seek result in blocks. The seek.offset field is the
+            // first u64 in the bdev params union (same position as
+            // offset_blocks).
+            let block_size = (*bdev).blocklen as u64;
+            let result_blocks = if result_offset == u64::MAX {
+                u64::MAX
+            } else {
+                result_offset / block_size
+            };
+            let seek_ptr = &mut (*bdev_io).u.bdev as *mut _ as *mut u64;
+            *seek_ptr = result_blocks;
+
+            ffi::spdk_bdev_io_complete(
+                bdev_io,
+                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+            );
+        }
+        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_SEEK_HOLE => {
+            // SEEK_HOLE: find the next offset (in blocks) that is a hole
+            // (unwritten). Check dirty bitmap for the first unset bit.
+            let bdev_params = (*bdev_io).u.bdev.as_ref();
+            let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
+
+            let result_offset = find_next_hole(&volume_name, offset);
+
+            let block_size = (*bdev).blocklen as u64;
+            let result_blocks = if result_offset == u64::MAX {
+                u64::MAX
+            } else {
+                result_offset / block_size
+            };
+            let seek_ptr = &mut (*bdev_io).u.bdev as *mut _ as *mut u64;
+            *seek_ptr = result_blocks;
+
             ffi::spdk_bdev_io_complete(
                 bdev_io,
                 ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
