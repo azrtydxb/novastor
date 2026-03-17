@@ -241,9 +241,8 @@ fn cleanup_volume_locks(volume_name: &str) {
 ///
 /// No SHA-256 hashing — content-addressing happens during background sync.
 /// Volume data is laid out contiguously on the backend bdev: offset maps directly.
+#[tracing::instrument(skip_all, fields(volume = %volume_name, offset, len = data.len()))]
 async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<()> {
-    let _span =
-        info_span!("sub_block_write", volume = %volume_name, offset, len = data.len()).entered();
     let backend_bdev = get_backend_bdev_name()?;
     let total_len = data.len() as u64;
     let end_offset = offset + total_len;
@@ -359,8 +358,8 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
 /// For each sub-block the read spans, reads 64KB from the backend bdev at the
 /// direct volume offset and extracts the requested bytes. Unwritten sub-blocks
 /// (dirty bitmap bit not set) return zeros.
+#[tracing::instrument(skip_all, fields(volume = %volume_name, offset, length))]
 async fn sub_block_read(volume_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
-    let _span = info_span!("sub_block_read", volume = %volume_name, offset, length).entered();
     let backend_bdev = get_backend_bdev_name()?;
     let end_offset = offset + length;
     let mut result = Vec::with_capacity(length as usize);
