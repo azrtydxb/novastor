@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/azrtydxb/novastor/internal/dataplane"
 )
@@ -82,6 +83,13 @@ type TargetInfo struct {
 
 // ConnectMultipath connects to multiple NVMe-oF targets and exports each as
 // a local loopback target so the kernel NVMe multipath layer aggregates them.
+//
+// For the local node (t.Addr == s.hostIP), the bdev already exists in the
+// local SPDK process — we export it directly via loopback without connecting
+// as an NVMe-oF initiator (avoids single-reactor self-connect deadlock).
+//
+// For remote nodes, we connect as an NVMe-oF initiator first, then export
+// the resulting bdev via loopback.
 func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo) (string, error) {
 	if len(targets) == 0 {
 		return "", fmt.Errorf("no targets provided")
@@ -94,27 +102,36 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 		if _, err := strconv.ParseUint(t.Port, 10, 16); err != nil {
 			t.Port = "4430"
 		}
-		_, err := s.client.ConnectInitiator(t.Addr, t.Port, t.NQN)
-		if err != nil {
-			// Cleanup already-connected
-			for _, nqn := range connectedNQNs {
-				_ = s.client.DisconnectInitiator(nqn)
-			}
-			return "", fmt.Errorf("connect target %s: %w", t.Addr, err)
-		}
-		connectedNQNs = append(connectedNQNs, t.NQN)
 
-		// Export each as loopback
 		localVolumeID := fmt.Sprintf("local-%s-path%d", t.NQN, i)
-		bdevName := fmt.Sprintf("initiator_%s_path%d", t.NQN, i)
-		if _, err := s.client.ExportLocal(localVolumeID, bdevName); err != nil {
-			// Non-fatal for individual paths, but track failures.
-			exportFailures++
+
+		if t.Addr == s.hostIP {
+			// Local path: the bdev "novastor_<volumeID>" is already
+			// registered in our SPDK process. Export it directly as a
+			// loopback NVMe-oF target — no ConnectInitiator needed.
+			volumeID := extractVolumeID(t.NQN)
+			localBdevName := "novastor_" + volumeID
+			if _, err := s.client.ExportLocal(localVolumeID, localBdevName); err != nil {
+				exportFailures++
+			}
+		} else {
+			// Remote path: connect as NVMe-oF initiator, then export.
+			bdevName, err := s.client.ConnectInitiator(t.Addr, t.Port, t.NQN)
+			if err != nil {
+				for _, nqn := range connectedNQNs {
+					_ = s.client.DisconnectInitiator(nqn)
+				}
+				return "", fmt.Errorf("connect target %s: %w", t.Addr, err)
+			}
+			connectedNQNs = append(connectedNQNs, t.NQN)
+
+			if _, err := s.client.ExportLocal(localVolumeID, bdevName); err != nil {
+				exportFailures++
+			}
 		}
 	}
 
 	if exportFailures == len(targets) {
-		// Cleanup all connections since no paths could be exported.
 		for _, nqn := range connectedNQNs {
 			_ = s.client.DisconnectInitiator(nqn)
 		}
@@ -130,8 +147,24 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 	return devicePath, nil
 }
 
+// extractVolumeID extracts the volume UUID from an NQN string.
+// NQN format: "nqn.2024-01.io.novastor:volume-<uuid>"
+func extractVolumeID(nqn string) string {
+	const prefix = "volume-"
+	idx := strings.LastIndex(nqn, prefix)
+	if idx >= 0 {
+		return nqn[idx+len(prefix):]
+	}
+	// Fallback: return the part after the last colon.
+	if colon := strings.LastIndex(nqn, ":"); colon >= 0 {
+		return nqn[colon+1:]
+	}
+	return nqn
+}
+
 // DisconnectMultipath tears down all local loopback exports and disconnects
-// from all remote NVMe-oF targets.
+// from remote NVMe-oF targets. Local-node paths only have loopback exports
+// (no initiator connection to tear down).
 func (s *SPDKInitiator) DisconnectMultipath(_ context.Context, targets []TargetInfo) error {
 	var lastErr error
 	for i, t := range targets {
@@ -139,8 +172,12 @@ func (s *SPDKInitiator) DisconnectMultipath(_ context.Context, targets []TargetI
 		if err := s.client.DeleteNvmfTarget(localVolumeID); err != nil {
 			lastErr = err
 		}
-		if err := s.client.DisconnectInitiator(t.NQN); err != nil {
-			lastErr = err
+		// Only disconnect initiator for remote paths — local paths
+		// used the existing bdev directly (no initiator connection).
+		if t.Addr != s.hostIP {
+			if err := s.client.DisconnectInitiator(t.NQN); err != nil {
+				lastErr = err
+			}
 		}
 	}
 	return lastErr
