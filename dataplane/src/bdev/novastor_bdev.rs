@@ -87,9 +87,51 @@ pub fn metadata_store_ref() -> Option<&'static Arc<MetadataStore>> {
 }
 
 /// The backend SPDK bdev name for direct sub-block I/O.
-/// Set during init_chunk_store — this is the underlying storage bdev that
-/// volumes are laid out contiguously on.
 static BACKEND_BDEV_NAME: OnceLock<String> = OnceLock::new();
+
+/// Per-volume base offset on the backend bdev. Volumes are laid out
+/// sequentially after a reserved region. The reserved region matches
+/// BdevChunkStore's data_region_offset (metadata area at start of bdev).
+static VOLUME_BASE_OFFSETS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+
+/// Next free offset for allocating new volumes.
+static NEXT_VOLUME_OFFSET: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
+
+fn volume_offsets() -> &'static Mutex<HashMap<String, u64>> {
+    VOLUME_BASE_OFFSETS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Reserve space for a volume and return its base offset on the bdev.
+pub fn allocate_volume_offset(volume_name: &str, size_bytes: u64) -> u64 {
+    let mut offsets = volume_offsets().lock().unwrap();
+    if let Some(&existing) = offsets.get(volume_name) {
+        return existing;
+    }
+    // Start after 64MB reserved region (metadata, superblock, etc.)
+    let next =
+        NEXT_VOLUME_OFFSET.get_or_init(|| std::sync::atomic::AtomicU64::new(64 * 1024 * 1024));
+    let base = next.fetch_add(
+        // Align size up to 4MB chunk boundary
+        (size_bytes + CHUNK_SIZE as u64 - 1) & !(CHUNK_SIZE as u64 - 1),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    offsets.insert(volume_name.to_string(), base);
+    info!(
+        "novastor_bdev: allocated volume '{}' at bdev offset {} ({}MB)",
+        volume_name,
+        base,
+        base / (1024 * 1024)
+    );
+    base
+}
+
+/// Get the base offset for an existing volume.
+fn get_volume_base_offset(volume_name: &str) -> Result<u64> {
+    let offsets = volume_offsets().lock().unwrap();
+    offsets.get(volume_name).copied().ok_or_else(|| {
+        DataPlaneError::BdevError(format!("no base offset for volume '{}'", volume_name))
+    })
+}
 
 /// Set the backend bdev name used for direct sub-block I/O.
 /// Must be called once during init_chunk_store.
@@ -244,6 +286,7 @@ fn cleanup_volume_locks(volume_name: &str) {
 #[tracing::instrument(skip_all, fields(volume = %volume_name, offset, len = data.len()))]
 async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<()> {
     let backend_bdev = get_backend_bdev_name()?;
+    let vol_base = get_volume_base_offset(volume_name)?;
     let total_len = data.len() as u64;
     let end_offset = offset + total_len;
     let mut data_cursor = 0usize;
@@ -262,8 +305,8 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
 
         let covers_full_sb = offset_in_sb == 0 && write_len == SUB_BLOCK_SIZE;
 
-        // Backend bdev offset for this sub-block.
-        let chunk_base = chunk_idx as u64 * CHUNK_SIZE as u64;
+        // Backend bdev offset: volume base + chunk offset + sub-block offset.
+        let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
         let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx);
 
         if covers_full_sb {
@@ -349,6 +392,7 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
 #[tracing::instrument(skip_all, fields(volume = %volume_name, offset, length))]
 async fn sub_block_read(volume_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
     let backend_bdev = get_backend_bdev_name()?;
+    let vol_base = get_volume_base_offset(volume_name)?;
     let end_offset = offset + length;
     let mut result = Vec::with_capacity(length as usize);
 
@@ -365,7 +409,7 @@ async fn sub_block_read(volume_name: &str, offset: u64, length: u64) -> Result<V
 
         // Always read from the backend — no assumptions about disk content.
         {
-            let chunk_base = chunk_idx as u64 * CHUNK_SIZE as u64;
+            let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
             let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx);
             let sb_data =
                 reactor_dispatch::bdev_read_async(backend_bdev, bdev_offset, SUB_BLOCK_SIZE as u64)
@@ -422,6 +466,9 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
     // Verify the chunk engine is ready.
     let _engine = get_chunk_engine()?;
     let bdev_name = format!("novastor_{}", volume_name);
+
+    // Allocate a contiguous region on the backend bdev for this volume.
+    let _base_offset = allocate_volume_offset(volume_name, size_bytes);
 
     // Initialise an empty chunk map for this volume.
     let num_chunks = (size_bytes + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64;
