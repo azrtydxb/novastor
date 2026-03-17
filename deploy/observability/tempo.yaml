@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo-config
+  namespace: novastor-system
+data:
+  tempo.yaml: |
+    server:
+      http_listen_port: 3200
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: "0.0.0.0:4317"
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /var/lib/tempo/traces
+        wal:
+          path: /var/lib/tempo/wal
+    compactor:
+      compaction:
+        block_retention: 24h
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tempo
+  namespace: novastor-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tempo
+  template:
+    metadata:
+      labels:
+        app: tempo
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: master-11
+      containers:
+      - name: tempo
+        image: grafana/tempo:2.6.1
+        args: ["-config.file=/etc/tempo/tempo.yaml"]
+        ports:
+        - containerPort: 4317
+          name: otlp-grpc
+        - containerPort: 3200
+          name: http
+        volumeMounts:
+        - name: config
+          mountPath: /etc/tempo
+        - name: data
+          mountPath: /var/lib/tempo
+      volumes:
+      - name: config
+        configMap:
+          name: tempo-config
+      - name: data
+        hostPath:
+          path: /var/lib/tempo
+          type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  namespace: novastor-system
+spec:
+  selector:
+    app: tempo
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+  - name: http
+    port: 3200
+    targetPort: 3200
