@@ -1,7 +1,7 @@
 //! NovaStor SPDK Data Plane — binary entry point.
 
 use clap::Parser;
-use log::info;
+use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(name = "novastor-dataplane", version, about)]
@@ -41,23 +41,24 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&args.log_level))
-        .init();
+
+    // Build the tokio runtime early so that init_tracing can use it for the
+    // OTLP batch exporter's background task.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime");
+
+    // Enter the runtime context so init_tracing can spawn the batch exporter.
+    let _rt_guard = runtime.enter();
+    novastor_dataplane::tracing_init::init_tracing("novastor-dataplane", &args.log_level);
 
     info!(
         "novastor-dataplane starting (reactor_mask={}, mem={}MB)",
         args.reactor_mask, args.mem_size
     );
 
-    // Start tokio runtime on background threads.
-    // SPDK requires the main thread for its reactor, so tokio runs alongside.
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        // 8 worker threads for concurrent gRPC chunk replication fan-out.
-        // JoinSet tasks spawned from write_replicated run on these threads.
-        .worker_threads(8)
-        .enable_all()
-        .build()
-        .expect("failed to create tokio runtime");
     novastor_dataplane::set_tokio_handle(runtime.handle().clone());
     info!("tokio runtime started (2 worker threads)");
 
@@ -96,6 +97,9 @@ fn main() {
             args.grpc_port,
         );
     }
+
+    // Flush pending OTel spans before tearing down the runtime.
+    novastor_dataplane::tracing_init::shutdown_tracing();
 
     // Shut down tokio runtime after SPDK exits.
     runtime.shutdown_background();

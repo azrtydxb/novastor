@@ -22,6 +22,7 @@ use log::{error, info, warn};
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_void};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use tracing::{info_span, Instrument};
 
 #[allow(
     non_camel_case_types,
@@ -241,6 +242,8 @@ fn cleanup_volume_locks(volume_name: &str) {
 /// No SHA-256 hashing — content-addressing happens during background sync.
 /// Volume data is laid out contiguously on the backend bdev: offset maps directly.
 async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<()> {
+    let _span =
+        info_span!("sub_block_write", volume = %volume_name, offset, len = data.len()).entered();
     let backend_bdev = get_backend_bdev_name()?;
     let total_len = data.len() as u64;
     let end_offset = offset + total_len;
@@ -267,7 +270,9 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
         if covers_full_sb {
             // Full sub-block write — no read needed.
             let sb_data = &data[data_cursor..data_cursor + SUB_BLOCK_SIZE];
-            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, sb_data).await?;
+            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, sb_data)
+                .instrument(info_span!("bdev_write_64k", chunk_idx, sb_idx))
+                .await?;
         } else {
             // Partial sub-block write — lock, read-modify-write at 64KB granularity.
             let lock = sub_block_lock(volume_name, chunk_idx, sb_idx);
@@ -278,6 +283,7 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
                 bdev_offset,
                 SUB_BLOCK_SIZE as u64,
             )
+            .instrument(info_span!("bdev_read_64k", chunk_idx, sb_idx))
             .await
             {
                 Ok(existing) => existing,
@@ -294,12 +300,15 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
             buf[offset_in_sb..offset_in_sb + write_len]
                 .copy_from_slice(&data[data_cursor..data_cursor + write_len]);
 
-            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, &buf).await?;
+            reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, &buf)
+                .instrument(info_span!("bdev_write_64k", chunk_idx, sb_idx))
+                .await?;
         }
 
         // Update the chunk map entry's dirty bitmap.
         let chunk_id = format!("{}:{}", volume_name, chunk_idx);
         let entry = {
+            let _bm_span = info_span!("bitmap_update", chunk_idx, sb_idx).entered();
             let mut maps = volume_chunk_maps().write().unwrap();
             let chunk_map = maps.get_mut(volume_name).ok_or_else(|| {
                 DataPlaneError::BdevError(format!("no chunk map for volume '{}'", volume_name))
@@ -321,6 +330,7 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
         }; // maps guard dropped here, before any .await
 
         // Write-through: persist the chunk map entry to the metadata store.
+        let _md_span = info_span!("metadata_persist", chunk_idx).entered();
         if let Some(store) = get_metadata_store() {
             if let Err(e) = store.put_chunk_map(volume_name, &entry) {
                 log::error!(
@@ -350,6 +360,7 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
 /// direct volume offset and extracts the requested bytes. Unwritten sub-blocks
 /// (dirty bitmap bit not set) return zeros.
 async fn sub_block_read(volume_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+    let _span = info_span!("sub_block_read", volume = %volume_name, offset, length).entered();
     let backend_bdev = get_backend_bdev_name()?;
     let end_offset = offset + length;
     let mut result = Vec::with_capacity(length as usize);
@@ -367,6 +378,7 @@ async fn sub_block_read(volume_name: &str, offset: u64, length: u64) -> Result<V
 
         // Check if this sub-block has been written via the dirty bitmap.
         let is_dirty = {
+            let _bm_span = info_span!("bitmap_check", chunk_idx, sb_idx).entered();
             let maps = volume_chunk_maps().read().unwrap();
             maps.get(volume_name)
                 .and_then(|chunk_map| {
@@ -389,6 +401,7 @@ async fn sub_block_read(volume_name: &str, offset: u64, length: u64) -> Result<V
             let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx);
             let sb_data =
                 reactor_dispatch::bdev_read_async(backend_bdev, bdev_offset, SUB_BLOCK_SIZE as u64)
+                    .instrument(info_span!("bdev_read_64k", chunk_idx, sb_idx))
                     .await?;
 
             // Extract the requested range from the sub-block.

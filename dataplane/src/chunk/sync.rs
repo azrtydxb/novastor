@@ -10,6 +10,7 @@ use crate::bdev::novastor_bdev::{get_backend_bdev_name, get_metadata_store, volu
 use crate::bdev::sub_block::CHUNK_SIZE;
 use crate::chunk::engine::ChunkEngine;
 use crate::spdk::reactor_dispatch;
+use tracing::{info_span, Instrument};
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -97,6 +98,7 @@ async fn sync_one_chunk(
     bdev_name: &str,
     chunk_idx: u64,
 ) -> crate::error::Result<()> {
+    let _span = info_span!("sync_one_chunk", volume = %volume_name, chunk_idx).entered();
     let chunk_base = chunk_idx * CHUNK_SIZE as u64;
 
     // Read the full 4MB chunk from backend (all 64 sub-blocks).
