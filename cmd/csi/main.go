@@ -24,6 +24,7 @@ import (
 
 	"github.com/azrtydxb/novastor/internal/agent"
 	novcsi "github.com/azrtydxb/novastor/internal/csi"
+	"github.com/azrtydxb/novastor/internal/dataplane"
 	"github.com/azrtydxb/novastor/internal/metadata"
 	"github.com/azrtydxb/novastor/internal/observability"
 	"github.com/azrtydxb/novastor/internal/placement"
@@ -459,11 +460,17 @@ func main() {
 	if *nodeID != "" {
 		mounter := &novcsi.RealMounter{}
 
-		// Use the kernel NVMe-oF initiator (nvme-cli) for connecting to
-		// NVMe-oF targets. The SPDK initiator requires mTLS to the dataplane
-		// (not yet implemented) and multi-core reactor for self-connect.
-		initiator := &novcsi.LinuxInitiator{}
-		log.Printf("CSI node using kernel NVMe-oF initiator (nvme-cli)")
+		// Connect to the local SPDK dataplane for the NVMe-oF initiator.
+		// Uses mTLS client credentials (same as agent connections).
+		hostIP := os.Getenv("HOST_IP")
+		dpAddr := fmt.Sprintf("%s:9500", hostIP)
+		dpLogger, _ := zap.NewProduction()
+		dpClient, dpErr := dataplane.Dial(dpAddr, dpLogger, agentDialOpts...)
+		if dpErr != nil {
+			log.Fatalf("Failed to connect to local dataplane at %s: %v", dpAddr, dpErr)
+		}
+		initiator := novcsi.NewSPDKInitiator(dpClient, hostIP)
+		log.Printf("CSI node using SPDK NVMe-oF initiator (dataplane at %s)", dpAddr)
 
 		// Use topology-aware constructor if zone/region provided.
 		var node *novcsi.NodeService
