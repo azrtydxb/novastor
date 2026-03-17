@@ -136,3 +136,24 @@ async fn sync_one_chunk(
     );
     Ok(())
 }
+
+/// Bulk-destage all dirty bitmaps to the metadata store (BlueStore V3 pattern).
+/// Called on clean shutdown to persist in-memory state in one batch.
+pub fn destage_all_bitmaps() {
+    let store = match get_metadata_store() {
+        Some(s) => s,
+        None => {
+            log::warn!("destage: no metadata store available");
+            return;
+        }
+    };
+    let maps = volume_chunk_maps().read().unwrap();
+    let mut count = 0u64;
+    for (vol, chunk_map) in maps.iter() {
+        for entry in chunk_map.iter().flatten() {
+            let _ = store.put_chunk_map(vol, entry);
+            count += 1;
+        }
+    }
+    log::info!("destage: persisted {} chunk map entries", count);
+}

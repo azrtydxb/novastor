@@ -98,6 +98,9 @@ fn main() {
         );
     }
 
+    // Bulk-destage all dirty bitmaps to redb (BlueStore V3 pattern).
+    novastor_dataplane::chunk::sync::destage_all_bitmaps();
+
     // Flush pending OTel spans before tearing down the runtime.
     novastor_dataplane::tracing_init::shutdown_tracing();
 

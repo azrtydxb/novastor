@@ -655,19 +655,10 @@ impl DataplaneService for DataplaneServiceImpl {
             crate::bdev::novastor_bdev::set_chunk_engine(engine, handle);
             crate::bdev::novastor_bdev::set_backend_bdev_name(&req.bdev_name);
 
-            // Pre-open the backend bdev for cached I/O (avoids per-I/O open/close).
-            if let Err(e) = crate::spdk::reactor_dispatch::ensure_bdev_open(&req.bdev_name) {
-                log::warn!(
-                    "init_chunk_store: failed to pre-open bdev '{}': {}",
-                    req.bdev_name,
-                    e
-                );
-            } else {
-                log::info!(
-                    "init_chunk_store: backend bdev '{}' pre-opened for cached I/O",
-                    req.bdev_name
-                );
-            }
+            log::info!(
+                "init_chunk_store: backend bdev '{}' ready for sub-block I/O",
+                req.bdev_name
+            );
 
             // Spawn a background reconciliation loop that runs every 30 seconds.
             let reconcile_engine = policy_engine;
