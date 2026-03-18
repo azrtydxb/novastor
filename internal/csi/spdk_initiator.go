@@ -86,78 +86,48 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 		return "", fmt.Errorf("no targets provided")
 	}
 
-	// Find the owner target (primary I/O path).
-	owner := targets[0]
+	// Connect to ALL targets for read fanout. All targets share the same
+	// NQN, so the kernel NVMe multipath layer groups them as multiple
+	// paths to the same namespace. With round-robin iopolicy, reads are
+	// distributed across all replica nodes — scaling read bandwidth
+	// linearly with the number of replicas.
+	//
+	// Writes go to whichever path the kernel selects; the chunk engine
+	// on that node handles replication fan-out to other nodes.
+	nqn := targets[0].NQN
+	connected := 0
 	for _, t := range targets {
-		if t.IsOwner {
-			owner = t
-			break
+		if _, err := strconv.ParseUint(t.Port, 10, 16); err != nil {
+			t.Port = "4430"
 		}
+		if err := nvmeConnect(t.Addr, t.Port, t.NQN); err != nil {
+			// Non-fatal: continue connecting to remaining targets.
+			// At least one must succeed.
+			continue
+		}
+		connected++
 	}
 
-	if _, err := strconv.ParseUint(owner.Port, 10, 16); err != nil {
-		owner.Port = "4430"
+	if connected == 0 {
+		return "", fmt.Errorf("failed to connect to any of %d targets", len(targets))
 	}
 
-	localVolumeID := "local-" + owner.NQN
-
-	if owner.Addr == s.hostIP {
-		// Local: the SPDK NVMe-oF target is already serving this bdev
-		// on hostIP:4430 (created by the agent). Connect the kernel
-		// directly to the existing target — no SPDK initiator needed,
-		// no self-connect, just kernel-to-SPDK NVMe-oF.
-		if err := nvmeConnect(owner.Addr, owner.Port, owner.NQN); err != nil {
-			return "", fmt.Errorf("connect kernel to local SPDK target %s: %w", owner.Addr, err)
-		}
-	} else {
-		// Remote: connect as SPDK NVMe-oF initiator, then export.
-		bdevName, err := s.client.ConnectInitiator(owner.Addr, owner.Port, owner.NQN)
-		if err != nil {
-			return "", fmt.Errorf("connect target %s: %w", owner.Addr, err)
-		}
-		if _, err := s.client.ExportLocal(localVolumeID, bdevName); err != nil {
-			_ = s.client.DisconnectInitiator(owner.NQN)
-			return "", fmt.Errorf("export remote bdev %s: %w", bdevName, err)
-		}
-	}
-
-	// Discover the kernel block device via sysfs.
-	devicePath, err := discoverNVMeDevice(context.Background(), owner.NQN)
+	// Discover the kernel multipath device via sysfs.
+	devicePath, err := discoverNVMeDevice(context.Background(), nqn)
 	if err != nil {
-		return "", fmt.Errorf("discover device for %s: %w", owner.NQN, err)
+		return "", fmt.Errorf("discover device for %s: %w", nqn, err)
 	}
 
 	return devicePath, nil
 }
 
-// DisconnectMultipath tears down the loopback export and any SPDK initiator.
+// DisconnectMultipath disconnects all NVMe-oF paths.
 func (s *SPDKInitiator) DisconnectMultipath(_ context.Context, targets []TargetInfo) error {
-	var lastErr error
-	// Find owner.
-	owner := targets[0]
-	for _, t := range targets {
-		if t.IsOwner {
-			owner = t
-			break
-		}
+	if len(targets) == 0 {
+		return nil
 	}
-
-	if owner.Addr == s.hostIP {
-		// Local: kernel connected directly to SPDK target.
-		if err := nvmeDisconnect(owner.NQN); err != nil {
-			lastErr = err
-		}
-	} else {
-		// Remote: tear down loopback export + SPDK initiator.
-		localVolumeID := "local-" + owner.NQN
-		if err := s.client.DeleteNvmfTarget(localVolumeID); err != nil {
-			lastErr = err
-		}
-		if err := s.client.DisconnectInitiator(owner.NQN); err != nil {
-			lastErr = err
-		}
-	}
-	return lastErr
+	// All targets share the same NQN. One disconnect-by-NQN removes all paths.
+	return nvmeDisconnect(targets[0].NQN)
 }
 
 // nvmeConnect runs `nvme connect` to attach the kernel to an existing
