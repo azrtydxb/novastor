@@ -8,17 +8,22 @@ Split the NovaStor dataplane into two separate components: a lightweight **Front
 
 ```
 Pod (app)
-  └── kernel NVMe-oF initiator
-        └── ANA optimized → LOCAL Frontend Controller
-        └── ANA non-optimized → Remote Frontend Controllers (failover)
+  └── kernel NVMe-oF initiator (nvme connect)
+        └── ANA optimized → LOCAL kernel nvmet target
+        └── ANA non-optimized → Remote kernel nvmet targets (failover)
 
-Frontend Controller (per node, Rust + tokio, no SPDK)
-  ├── NVMe-oF TCP target (userspace, on tokio)
+kernel nvmet TCP target (port 4430)
+  └── namespace backed by /dev/nbdX
+
+/dev/nbdX ← NBD protocol (Unix domain socket) → Frontend Controller
+
+Frontend Controller (per node, Rust + tokio, NO SPDK)
+  ├── NBD server (serves /dev/nbdX, tokio async)
   ├── CRUSH map (read-only, pushed by Go agent)
   ├── NDP client connections to ALL chunk engines (persistent pool)
   └── Routes I/O to chunk engines based on CRUSH placement
 
-Chunk Engine (per node, Rust + SPDK, owns NVMe)
+Chunk Engine (per node, SPDK, owns NVMe)
   ├── SPDK reactor (pinned to A76 core)
   ├── Sub-block I/O, atomic dirty bitmaps, DMA buffer pool
   ├── NDP server (serves data to frontends and other chunk engines)
@@ -26,11 +31,70 @@ Chunk Engine (per node, Rust + SPDK, owns NVMe)
   └── gRPC control plane (volume lifecycle, topology — unchanged)
 ```
 
-### Separation of Concerns
+### Key Design Decisions
+
+**No SPDK in the frontend.** The frontend is pure Rust + tokio. No reactor core burned. CPU usage is zero when idle, proportional to I/O when active.
+
+**Kernel nvmet for NVMe-oF.** The kernel's built-in NVMe-oF TCP target (`CONFIG_NVME_TARGET_TCP=m`) handles the NVMe-oF protocol. Configured via configfs. No userspace NVMe-oF implementation needed.
+
+**NBD as the bridge.** The kernel NBD client (`CONFIG_BLK_DEV_NBD=m`) creates `/dev/nbdX` backed by our frontend's NBD server over a Unix domain socket. The frontend translates NBD requests to NDP requests to chunk engines.
+
+**NVMe multipath for failover.** Multiple frontends on different nodes create nvmet subsystems with the same NQN. Kernel NVMe multipath handles failover. The frontend is stateless — no stale subsystem issues.
+
+**NDP for all data-path communication.** Frontend→chunk engine and chunk engine→chunk engine use NDP (custom 64-byte header TCP protocol). gRPC retained for control plane only.
+
+### I/O Path
+
+```
+Write (4K):
+  Pod write → kernel NVMe-oF initiator
+    → kernel nvmet TCP target (same node)
+    → /dev/nbdX (kernel NBD client)
+    → Unix socket → Frontend NBD server (tokio)
+    → CRUSH lookup → owner chunk engine
+    → NDP WRITE → chunk engine
+    → chunk engine: sub-block write to NVMe + REPLICATE to replicas
+    → NDP WRITE_RESP → frontend
+    → NBD response → kernel → nvmet response → Pod
+
+Read (4K):
+  Pod read → kernel NVMe-oF initiator
+    → kernel nvmet TCP target
+    → /dev/nbdX → Unix socket → Frontend
+    → CRUSH lookup → pick closest chunk engine with data
+    → NDP READ → chunk engine
+    → chunk engine: sub-block read from NVMe
+    → NDP READ_RESP (with data) → frontend
+    → NBD response → kernel → nvmet response → Pod
+```
+
+### Latency Budget (4K random, local path)
+
+| Hop | Estimated Latency |
+|---|---|
+| NVMe-oF initiator → nvmet (same node, TCP loopback) | ~50-80μs |
+| nvmet → NBD → Unix socket → Frontend | ~5-10μs |
+| Frontend CRUSH lookup + NDP send | ~2-5μs |
+| NDP TCP to local chunk engine | ~10-20μs |
+| Chunk engine sub-block I/O to NVMe | ~60-90μs |
+| Total | ~130-200μs |
+
+Current single-process path: ~91μs. The split adds ~40-110μs overhead from the extra hops. At qd=32 this will be partially hidden by pipelining.
+
+### What We Gain
+
+- **Read fanout**: Frontend reads from ANY chunk engine, not just local. With rep=3, reads from 3 NVMe drives.
+- **Frontend doesn't burn a core**: Pure tokio, zero CPU when idle.
+- **Clean NVMe-oF**: No SPDK-managed NVMe-oF subsystems. Kernel nvmet configured via configfs is simple and reliable. No stale subsystem issues.
+- **Failover**: Kernel NVMe multipath across frontends on different nodes. Frontends are stateless — restart is instant.
+- **Multi-protocol**: NFS and S3 can be added to the frontend without touching the chunk engine.
+
+## Separation of Concerns
 
 | Responsibility | Frontend Controller | Chunk Engine |
 |---|---|---|
-| Client protocols (NVMe-oF, NFS, S3) | Yes | No |
+| NBD server (block device to kernel) | Yes | No |
+| nvmet configuration (configfs) | Yes | No |
 | CRUSH placement lookup | Yes | No |
 | I/O routing to correct engine | Yes | No |
 | Failover on engine failure | Yes | No |
@@ -39,7 +103,7 @@ Chunk Engine (per node, Rust + SPDK, owns NVMe)
 | Replication fan-out | No | Yes |
 | EC encoding/decoding | No | Yes |
 | SPDK reactor | No | Yes |
-| Hugepages / privileged | No | Yes |
+| Hugepages / privileged | No | Yes (NVMe access) |
 
 ## NovaStor Data Protocol (NDP)
 
@@ -83,13 +147,6 @@ Bytes 56-63: reserved
 | 0x0A | PING | request | no | Health check |
 | 0x0B | PONG | response | no | Health response |
 
-### Design Properties
-
-- **Multiplexed**: multiple in-flight requests per connection via `request_id`
-- **Zero-copy friendly**: fixed header parsed by struct cast, no serialization
-- **Checksummed**: CRC32 on header and data for integrity
-- **Volume identity**: `volume_hash` is precomputed u64 hash, avoids 32-byte UUID per I/O
-
 ### Used By
 
 - Frontend → Chunk Engine: WRITE, READ, WRITE_ZEROES, UNMAP
@@ -104,72 +161,88 @@ Bytes 56-63: reserved
 
 ### Runtime
 
-Tokio async runtime. No SPDK reactor, no hugepages, no privileged mode. Shares CPU with other workloads when idle (no 100% poll loop).
+Tokio async runtime. No SPDK reactor, no hugepages, no privileged mode (except access to configfs and /dev/nbdX). Shares CPU with other workloads when idle.
 
-### NVMe-oF Target
+### NBD Server
 
-Userspace NVMe-oF TCP implementation on tokio. The frontend implements the NVMe-oF TCP protocol directly — no kernel nvmet, no SPDK. Handles NVMe commands: read, write, write_zeroes, unmap, flush, reset.
+Implements the NBD protocol (Linux kernel NBD spec) over a Unix domain socket. Each volume gets one NBD device (`/dev/nbdX`). The frontend:
+
+1. Creates a Unix domain socket at `/var/run/novastor/nbd-<volume_id>.sock`
+2. Starts the NBD server on that socket
+3. Configures the kernel NBD client to connect: `nbd-client -u /var/run/novastor/nbd-<volume_id>.sock /dev/nbdX`
+4. Configures kernel nvmet via configfs to use `/dev/nbdX` as the namespace backend
+5. Adds nvmet TCP listener on port 4430
+
+The NBD protocol is simple:
+- **Request** (28 bytes): `[magic:4][flags:2][type:2][handle:8][offset:8][length:4]`
+- **Response** (16 bytes + data): `[magic:4][error:4][handle:8][data...]`
+
+The frontend translates each NBD request to an NDP request to the appropriate chunk engine.
+
+### Kernel nvmet Configuration
+
+The frontend configures kernel nvmet via configfs:
+
+```
+/sys/kernel/config/nvmet/
+  subsystems/<nqn>/
+    namespaces/1/
+      device_path = /dev/nbdX
+      enable = 1
+    allowed_hosts/
+    attr_allow_any_host = 1
+  ports/1/
+    addr_trtype = tcp
+    addr_trsvcid = 4430
+    addr_traddr = 0.0.0.0
+    addr_adrfam = ipv4
+    subsystems/<nqn>  (symlink)
+```
+
+This is done programmatically from the frontend binary using standard file writes to configfs.
 
 ### Connection Pool
 
-Persistent TCP connections to ALL chunk engines at startup (one per engine). With 8 nodes, this is 8 connections. Connections are long-lived and reconnect automatically on failure.
+Persistent TCP connections to ALL chunk engines at startup (one per engine). Connections are long-lived and reconnect automatically on failure.
 
 ### Write Path
 
 ```
-1. NVMe-oF target receives write command
+1. NBD server receives write request (on tokio async task)
 2. Compute chunk_idx, sb_idx, offset_in_sb from volume byte offset
 3. CRUSH lookup → owner chunk engine for this chunk
 4. Send NDP WRITE to owner (persistent connection)
 5. Owner CE writes locally + REPLICATE to replicas (parallel)
 6. Owner CE sends WRITE_RESP after write quorum achieved
-7. Frontend completes NVMe-oF write command
+7. Frontend sends NBD write response
 ```
 
-If owner is unreachable: send write to any other chunk engine that has the data (CRUSH knows all replicas). That engine handles replication.
+If owner is unreachable: send write to any other chunk engine that has the data.
 
 ### Read Path
 
 ```
-1. NVMe-oF target receives read command
+1. NBD server receives read request
 2. Compute chunk_idx, sb_idx, offset_in_sb
 3. CRUSH lookup → all chunk engines with this chunk
 4. Pick closest engine (prefer local, then same rack, then any)
 5. Send NDP READ
 6. CE reads from local NVMe, sends READ_RESP
-7. Frontend completes NVMe-oF read command
+7. Frontend sends NBD read response with data
 ```
 
 If preferred engine is unreachable: try next in CRUSH order.
 
-### Read Preference Order
-
-1. Local chunk engine (same node — zero network hop)
-2. Same rack/zone
-3. Any engine with the data
-
-### ANA Configuration
-
-- Every frontend runs an NVMe-oF subsystem for every volume it can serve
-- Local frontend: ANA optimized (kernel routes I/O here)
-- Remote frontends: ANA non-optimized (failover only)
-- CSI ConnectMultipath connects to all frontends
-- Kernel handles failover via ANA state change
-
 ### Failure Detection
 
 - PING/PONG health checks on each chunk engine connection (every 1-2s)
-- If a chunk engine becomes unreachable:
-  - In-flight writes: retry on another engine that has the data
-  - In-flight reads: retry on next engine in CRUSH order
-  - Mark engine as down, stop routing new I/O to it
-  - Reconnect in background, resume routing when healthy
+- If chunk engine unreachable: mark down, route to alternates, reconnect in background
 
 ## Chunk Engine Changes
 
 ### Removed
 
-- NVMe-oF target (moves to frontend)
+- NVMe-oF target (moves to frontend via kernel nvmet)
 - CSI-related bdev presentation code
 
 ### Added
@@ -180,23 +253,9 @@ If preferred engine is unreachable: try next in CRUSH order.
 ### Unchanged
 
 - SPDK reactor pinned to A76 core
-- Sub-block I/O (direct write, exact-size read)
-- Atomic dirty bitmaps in BdevCtx
-- DMA buffer pool, write context pool
-- Background sync task (SHA-256, dirty bitmap destage)
-- CRUSH map, protection policy
+- Sub-block I/O, atomic dirty bitmaps, DMA buffer pool
+- Background sync, CRUSH, protection policy
 - gRPC control plane (volume lifecycle, topology)
-- mTLS for gRPC control plane
-
-### NDP Server
-
-Runs on a tokio task (not the SPDK reactor). Receives NDP messages and dispatches I/O to the SPDK reactor via `spdk_thread_send_msg`. Completion is signaled back to the tokio task which sends the NDP response.
-
-For the reactor-native fast path: the NDP server can submit I/O directly to the reactor and handle completion in the reactor callback — same pattern as the current `bdev_submit_request_cb` but triggered by NDP instead of NVMe-oF.
-
-### Replication via NDP
-
-Current gRPC `PutChunk`/`GetChunk` RPCs for inter-chunk-engine replication are replaced by NDP REPLICATE/EC_SHARD messages. Same semantics, ~10× lower overhead (no protobuf, no HTTP/2, no TLS framing on data path).
 
 ## Deployment
 
@@ -204,71 +263,45 @@ Current gRPC `PutChunk`/`GetChunk` RPCs for inter-chunk-engine replication are r
 
 | Component | K8s Resource | Image | Ports | Privileged |
 |---|---|---|---|---|
-| Frontend Controller | DaemonSet | `novastor-frontend` | 4430 (NVMe-oF) | No |
-| Chunk Engine | DaemonSet | `novastor-dataplane` | 4500 (NDP) | Yes |
+| Frontend Controller | DaemonSet | `novastor-frontend` | 4430 (nvmet TCP) | Yes (configfs, NBD) |
+| Chunk Engine | DaemonSet | `novastor-dataplane` | 4500 (NDP) | Yes (hugepages, NVMe) |
 | Go Agent | DaemonSet | `novastor-agent` | 9100 (gRPC) | No |
+
+### Prerequisites per Node
+
+Kernel modules must be loaded:
+```bash
+modprobe nbd max_part=0 nbds_max=64
+modprobe nvmet
+modprobe nvmet-tcp
+```
+
+These can be loaded via a node init DaemonSet or systemd unit.
 
 ### Frontend Controller Pod
 
-- No hugepages
-- No `/dev` access
+- Needs access to `/sys/kernel/config/nvmet/` (configfs) for nvmet setup
+- Needs access to `/dev/nbd*` for NBD devices
+- Needs access to `/var/run/novastor/` for Unix domain sockets
 - TLS certs mounted for mTLS to chunk engines (future)
-- hostNetwork for NVMe-oF port
+- hostNetwork for nvmet port 4430
 - Resource requests: 100m CPU, 128Mi memory
 
 ### Chunk Engine Pod
 
-- Same as current dataplane DaemonSet
-- Hugepages, privileged, NVMe access
+- Same as current dataplane DaemonSet minus NVMe-oF target
 - SPDK reactor pinned to A76 core (reactor_mask=0x10)
 - NDP server on port 4500 (hostNetwork)
-
-## Performance Expectations
-
-### Latency (4K random write, qd=1)
-
-| Path | Latency | Notes |
-|---|---|---|
-| Current (single process) | ~91μs | SPDK reactor handles everything |
-| New, local CE | ~110μs | +10-20μs NDP hop on same node |
-| New, remote CE | ~200-300μs | +100-200μs network hop |
-
-### IOPS (qd=32)
-
-| Metric | Current | Expected (local CE) | Expected (read fanout, rep=3) |
-|---|---|---|---|
-| 4K Random Write | 60K | ~50-55K | Same (writes go to owner) |
-| 4K Random Read | 66K | ~60K | Up to ~180K aggregate |
-| Seq Write | 740 MB/s | ~600 MB/s | Same |
-| Seq Read | 846 MB/s | ~700 MB/s | Up to ~2.5 GB/s aggregate |
-
-### Trade-off
-
-10-15% reduction in single-node latency/IOPS in exchange for:
-- Horizontal read scaling across all replica nodes
-- Proper failover without kernel ANA complexity
-- Multi-protocol support (NFS, S3) without touching chunk engine
-- Frontend doesn't burn a reactor core
-
-## Control Plane (unchanged)
-
-gRPC remains for all control plane operations:
-- Volume create/delete (Go agent → chunk engine)
-- Topology/CRUSH map updates (Go agent → frontend + chunk engine)
-- Chunk store initialization
-- Health monitoring, metrics
-
-Only data-path I/O moves to NDP.
+- Hugepages, privileged, NVMe access
 
 ## Implementation Order
 
-1. **NDP protocol library** — Rust crate with header struct, encode/decode, CRC, connection handling
-2. **NDP server in chunk engine** — Accept connections, dispatch I/O to SPDK reactor
-3. **NDP client library** — Async connection pool, request/response matching, reconnect
-4. **Frontend Controller binary** — Skeleton with NDP client, CRUSH map, volume registry
-5. **Userspace NVMe-oF target** — NVMe-oF TCP protocol on tokio in the frontend
-6. **Wire it up** — Frontend receives NVMe-oF, routes via NDP to chunk engines
-7. **Replace gRPC replication** — Chunk engine uses NDP for REPLICATE/EC_SHARD
-8. **CSI changes** — CreateTarget creates targets on frontends, ANA configuration
-9. **Helm charts** — New DaemonSet for frontend controller
-10. **Testing** — Benchmarks, failover, multi-protocol
+1. **NDP protocol library** ✅ Done (ndp crate)
+2. **NDP server in chunk engine** ✅ Done (ndp_server.rs)
+3. **NBD server library** — Rust NBD protocol implementation on tokio
+4. **Frontend controller binary** — NBD server + NDP client + CRUSH routing
+5. **Kernel nvmet configuration** — configfs setup from frontend
+6. **CSI changes** — CreateTarget creates nvmet subsystems on frontends
+7. **Helm charts** — New DaemonSet, kernel module loading
+8. **Replace gRPC replication** — Chunk engine uses NDP for REPLICATE/EC_SHARD
+9. **Testing** — Benchmarks, failover
