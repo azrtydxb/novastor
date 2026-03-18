@@ -59,73 +59,24 @@ pub fn volume_chunk_maps() -> &'static RwLock<HashMap<String, Vec<Option<ChunkMa
     VOLUME_CHUNK_MAPS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-/// Lock-free per-volume dirty bitmaps for the hot I/O path.
-/// Each volume has a Vec of AtomicU64, one per chunk. Writes use
-/// fetch_or to set bits without any locking. The background sync
-/// task reads these atomics and copies to ChunkMapEntry for persistence.
-static ATOMIC_BITMAPS: OnceLock<DashMap<String, Vec<std::sync::atomic::AtomicU64>>> =
-    OnceLock::new();
-
-fn atomic_bitmaps() -> &'static DashMap<String, Vec<std::sync::atomic::AtomicU64>> {
-    ATOMIC_BITMAPS.get_or_init(DashMap::new)
-}
-
-/// Ensure the atomic bitmap vec for a volume has at least `chunk_count` entries.
-fn ensure_atomic_bitmap(volume_name: &str, chunk_idx: usize) {
-    let bitmaps = atomic_bitmaps();
-    let mut entry = bitmaps
-        .entry(volume_name.to_string())
-        .or_insert_with(Vec::new);
-    if chunk_idx >= entry.len() {
-        entry.resize_with(chunk_idx + 1, || std::sync::atomic::AtomicU64::new(0));
-    }
-}
-
-/// Set a dirty bit atomically — lock-free, no RwLock, no String allocation.
-/// Called from the reactor write completion callback on every write.
-fn atomic_bitmap_set(volume_name: &str, chunk_idx: usize, sb_idx: usize) {
-    let bitmaps = atomic_bitmaps();
-    if let Some(entry) = bitmaps.get(volume_name) {
-        if chunk_idx < entry.len() {
-            entry[chunk_idx].fetch_or(1u64 << sb_idx, std::sync::atomic::Ordering::Relaxed);
-            return;
-        }
-    }
-    // Slow path: grow the vec (rare — only on first write to a new chunk).
-    ensure_atomic_bitmap(volume_name, chunk_idx);
-    if let Some(entry) = bitmaps.get(volume_name) {
-        if chunk_idx < entry.len() {
-            entry[chunk_idx].fetch_or(1u64 << sb_idx, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-}
-
-/// Read a dirty bit atomically — for the reactor read fast path.
-pub fn atomic_bitmap_is_set(volume_name: &str, chunk_idx: usize, sb_idx: usize) -> bool {
-    let bitmaps = atomic_bitmaps();
-    if let Some(entry) = bitmaps.get(volume_name) {
-        if chunk_idx < entry.len() {
-            return (entry[chunk_idx].load(std::sync::atomic::Ordering::Relaxed) >> sb_idx) & 1
-                == 1;
-        }
-    }
-    false
-}
-
-/// Snapshot all atomic bitmaps into the ChunkMapEntry structures for persistence.
+/// Snapshot all atomic bitmaps from BdevCtx into ChunkMapEntry for persistence.
 /// Called by the background sync task before persisting dirty chunks.
 pub fn sync_atomic_bitmaps_to_chunk_maps() {
-    let bitmaps = atomic_bitmaps();
+    // Read bitmaps from each registered bdev's BdevCtx.
+    let registry = bdev_registry().lock().unwrap();
     let mut maps = volume_chunk_maps().write().unwrap();
-    for entry in bitmaps.iter() {
-        let vol_name = entry.key();
-        let atomic_vec = entry.value();
+    for (_, entry) in registry.iter() {
+        let ctx = entry.ctx_ptr as *const BdevCtx;
+        if ctx.is_null() {
+            continue;
+        }
+        let bdev_ctx = unsafe { &*ctx };
+        let vol_name = &bdev_ctx.volume_name;
         if let Some(chunk_map) = maps.get_mut(vol_name.as_str()) {
-            // Grow chunk map if needed.
-            if atomic_vec.len() > chunk_map.len() {
-                chunk_map.resize(atomic_vec.len(), None);
+            if bdev_ctx.dirty_bitmaps.len() > chunk_map.len() {
+                chunk_map.resize(bdev_ctx.dirty_bitmaps.len(), None);
             }
-            for (i, atomic_bm) in atomic_vec.iter().enumerate() {
+            for (i, atomic_bm) in bdev_ctx.dirty_bitmaps.iter().enumerate() {
                 let bm = atomic_bm.load(std::sync::atomic::Ordering::Relaxed);
                 if bm != 0 {
                     let cm_entry = chunk_map[i].get_or_insert_with(|| ChunkMapEntry {
@@ -592,10 +543,38 @@ fn find_next_hole(volume_name: &str, offset: u64) -> u64 {
     offset
 }
 
-/// Set the dirty bit for a single sub-block. Lock-free on the hot path
-/// via atomic bitmap. No RwLock, no String allocation, no tracing span.
+/// Set the dirty bit for a single sub-block. Used by the tokio fallback path.
+/// The reactor fast path uses BdevCtx.dirty_bitmaps directly (no function call).
 fn update_dirty_bitmap(volume_name: &str, chunk_idx: usize, sb_idx: usize) -> Result<()> {
-    atomic_bitmap_set(volume_name, chunk_idx, sb_idx);
+    // Update via the bdev registry's BdevCtx if available (flat array, fast).
+    if let Ok(registry) = bdev_registry().lock() {
+        let bdev_key = format!("novastor_{}", volume_name);
+        if let Some(entry) = registry.get(&bdev_key) {
+            let ctx = entry.ctx_ptr as *const BdevCtx;
+            if !ctx.is_null() {
+                let bdev_ctx = unsafe { &*ctx };
+                if chunk_idx < bdev_ctx.dirty_bitmaps.len() {
+                    bdev_ctx.dirty_bitmaps[chunk_idx]
+                        .fetch_or(1u64 << sb_idx, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(());
+                }
+            }
+        }
+    }
+    // Fallback: update chunk map directly (rare — only if bdev not found).
+    let mut maps = volume_chunk_maps().write().unwrap();
+    if let Some(chunk_map) = maps.get_mut(volume_name) {
+        if chunk_idx >= chunk_map.len() {
+            chunk_map.resize(chunk_idx + 1, None);
+        }
+        let entry = chunk_map[chunk_idx].get_or_insert_with(|| ChunkMapEntry {
+            chunk_index: chunk_idx as u64,
+            chunk_id: format!("{}:{}", volume_name, chunk_idx),
+            ec_params: None,
+            dirty_bitmap: 0,
+        });
+        bitmap_set(&mut entry.dirty_bitmap, sb_idx);
+    }
     Ok(())
 }
 
@@ -857,13 +836,17 @@ unsafe extern "C" fn reactor_write_done_cb(
     success: bool,
     ctx: *mut c_void,
 ) {
-    let rctx = Box::from_raw(ctx as *mut ReactorWriteCtx);
+    let mut rctx = Box::from_raw(ctx as *mut ReactorWriteCtx);
     ffi::spdk_bdev_free_io(child_io);
 
+    let bdev_ctx = &*rctx.bdev_ctx;
     if success {
-        // Update dirty bitmap — atomic fetch_or, no locks.
-        let vol_name = &(*rctx.bdev_ctx).volume_name;
-        let _ = update_dirty_bitmap(vol_name, rctx.chunk_idx, rctx.sb_idx);
+        // Update dirty bitmap — direct array index, atomic fetch_or.
+        // No DashMap lookup, no String hash, no pointer chasing.
+        if rctx.chunk_idx < bdev_ctx.dirty_bitmaps.len() {
+            bdev_ctx.dirty_bitmaps[rctx.chunk_idx]
+                .fetch_or(1u64 << rctx.sb_idx, std::sync::atomic::Ordering::Relaxed);
+        }
         ffi::spdk_bdev_io_complete(
             rctx.parent_io,
             ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
@@ -874,6 +857,12 @@ unsafe extern "C" fn reactor_write_done_cb(
             rctx.parent_io,
             ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
         );
+    }
+
+    // Return context to pool (avoids malloc on next I/O).
+    rctx.parent_io = std::ptr::null_mut();
+    if let Ok(mut pool) = bdev_ctx.write_ctx_pool.lock() {
+        pool.push(rctx);
     }
 }
 
@@ -916,9 +905,16 @@ struct NovastorBdevEntry {
     ctx_ptr: usize,
 }
 
-/// Bdev context stored in `bdev->ctxt`. Points back to the volume name.
+/// Bdev context stored in `bdev->ctxt`. Points back to the volume name
+/// and holds the per-volume atomic dirty bitmap (flat array, no HashMap).
 struct BdevCtx {
     volume_name: String,
+    /// Flat array of AtomicU64, one per chunk. Direct index by chunk_idx —
+    /// no DashMap lookup, no hashing, no pointer chasing.
+    dirty_bitmaps: Box<[std::sync::atomic::AtomicU64]>,
+    /// Pre-allocated pool of write completion contexts to avoid per-I/O
+    /// Box::new allocation. The reactor is single-threaded so no contention.
+    write_ctx_pool: Mutex<Vec<Box<ReactorWriteCtx>>>,
 }
 
 // Safety: BdevCtx is only accessed from SPDK reactor thread or our I/O pool
@@ -953,8 +949,7 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
             .or_insert_with(|| vec![None; num_chunks as usize]);
     }
 
-    // Pre-allocate the atomic bitmap so the hot path never resizes.
-    ensure_atomic_bitmap(volume_name, num_chunks as usize);
+    // Bitmap is now pre-allocated inside BdevCtx (created below).
 
     // Persist the volume definition so chunk maps can be restored on restart.
     if let Some(store) = get_metadata_store() {
@@ -988,8 +983,29 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
     );
 
     // Allocate the bdev context on the heap. SPDK stores it in bdev->ctxt.
+    // Pre-allocate the dirty bitmap (one AtomicU64 per chunk) and I/O
+    // context pools to eliminate per-I/O allocation on the hot path.
+    let chunk_count = (size_bytes + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64;
+    let dirty_bitmaps: Box<[std::sync::atomic::AtomicU64]> = (0..chunk_count)
+        .map(|_| std::sync::atomic::AtomicU64::new(0))
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+
+    const CTX_POOL_SIZE: usize = 64;
+    let write_pool: Vec<Box<ReactorWriteCtx>> = (0..CTX_POOL_SIZE)
+        .map(|_| {
+            Box::new(ReactorWriteCtx {
+                parent_io: std::ptr::null_mut(),
+                bdev_ctx: std::ptr::null(),
+                chunk_idx: 0,
+                sb_idx: 0,
+            })
+        })
+        .collect();
     let ctx = Box::new(BdevCtx {
         volume_name: volume_name.to_string(),
+        dirty_bitmaps,
+        write_ctx_pool: Mutex::new(write_pool),
     });
     let ctx_ptr = Box::into_raw(ctx);
     // Wrap the raw pointer so it can cross the Send boundary to the reactor thread.
@@ -1438,12 +1454,26 @@ unsafe extern "C" fn bdev_submit_request_cb(
                             (dma_buf, true)
                         };
 
-                        let rctx = Box::new(ReactorWriteCtx {
-                            parent_io: bdev_io,
-                            bdev_ctx: ctx,
-                            chunk_idx,
-                            sb_idx,
-                        });
+                        // Try to reuse a pre-allocated context from the pool.
+                        // Falls back to Box::new if pool is empty (rare at steady state).
+                        let bdev_ctx_ref = &*ctx;
+                        let mut rctx = bdev_ctx_ref
+                            .write_ctx_pool
+                            .lock()
+                            .ok()
+                            .and_then(|mut pool| pool.pop())
+                            .unwrap_or_else(|| {
+                                Box::new(ReactorWriteCtx {
+                                    parent_io: std::ptr::null_mut(),
+                                    bdev_ctx: std::ptr::null(),
+                                    chunk_idx: 0,
+                                    sb_idx: 0,
+                                })
+                            });
+                        rctx.parent_io = bdev_io;
+                        rctx.bdev_ctx = ctx;
+                        rctx.chunk_idx = chunk_idx;
+                        rctx.sb_idx = sb_idx;
                         let rctx_ptr = Box::into_raw(rctx) as *mut c_void;
 
                         let rc = ffi::spdk_bdev_write(
