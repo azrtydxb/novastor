@@ -52,15 +52,30 @@ spec:
               mountPath: {{ include "novastor.tls.mountPath" . }}
               readOnly: true
         {{- end }}
-        - name: set-nvme-iopolicy
+        - name: set-nvme-multipath
           image: busybox:1.36
           command: ["/bin/sh", "-c"]
           args:
             - |
               echo round-robin > /sys/module/nvme_core/parameters/iopolicy 2>/dev/null || true
               echo "NVMe multipath iopolicy set to round-robin"
+              # Write a stable hostnqn so all nvme connect calls from this
+              # node use the same identity. Required for kernel NVMe multipath
+              # to group paths under a single subsystem.
+              mkdir -p /etc/nvme
+              if [ ! -f /etc/nvme/hostnqn ]; then
+                HOSTUUID=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null | tr '[:upper:]' '[:lower:]')
+                if [ -z "$HOSTUUID" ]; then
+                  HOSTUUID=$(echo -n "novastor-$(hostname)" | md5sum | sed 's/\(.\{8\}\)\(.\{4\}\)\(.\{4\}\)\(.\{4\}\)\(.\{12\}\).*/\1-\2-\3-\4-\5/')
+                fi
+                echo "nqn.2014-08.org.nvmexpress:uuid:${HOSTUUID}" > /etc/nvme/hostnqn
+              fi
+              echo "hostnqn: $(cat /etc/nvme/hostnqn)"
           securityContext:
             privileged: true
+          volumeMounts:
+            - name: nvme-config
+              mountPath: /etc/nvme
       containers:
         - name: csi-plugin
           image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.csi.node.image.repository }}:{{ include "novastor.imageTag" . }}"
@@ -135,6 +150,8 @@ spec:
               mountPath: {{ include "novastor.tls.mountPath" . }}
               readOnly: true
             {{- end }}
+            - name: nvme-config
+              mountPath: /etc/nvme
           resources:
             {{- toYaml .Values.csi.node.resources | nindent 12 }}
         - name: node-driver-registrar
@@ -185,3 +202,7 @@ spec:
             secretName: {{ include "novastor.tls.volumeName" . }}
             defaultMode: 0o444
         {{- end }}
+        - name: nvme-config
+          hostPath:
+            path: /etc/nvme
+            type: DirectoryOrCreate

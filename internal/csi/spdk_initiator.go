@@ -2,6 +2,7 @@ package csi
 
 import (
 	"context"
+	"crypto/md5"
 	"fmt"
 	"os"
 	"os/exec"
@@ -167,15 +168,12 @@ func getHostNQN() string {
 			return nqn
 		}
 	}
-	// Fallback: read from sysfs.
-	if data, err := os.ReadFile("/sys/class/nvme/nvme0/hostnqn"); err == nil {
-		if nqn := strings.TrimSpace(string(data)); nqn != "" {
-			return nqn
-		}
-	}
-	// Last resort: generate from hostname.
+	// Generate a deterministic UUID-format hostnqn from hostname.
+	// Must be nqn.2014-08.org.nvmexpress:uuid:<valid-uuid> format.
 	hostname, _ := os.Hostname()
-	return "nqn.2024-01.io.novastor:host-" + hostname
+	h := md5.Sum([]byte("novastor-" + hostname))
+	return fmt.Sprintf("nqn.2014-08.org.nvmexpress:uuid:%x-%x-%x-%x-%x",
+		h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
 }
 
 // nvmeDisconnect runs `nvme disconnect` by NQN.
