@@ -3,8 +3,10 @@ package csi
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/azrtydxb/novastor/internal/dataplane"
 )
@@ -134,19 +136,46 @@ func (s *SPDKInitiator) DisconnectMultipath(_ context.Context, targets []TargetI
 // SPDK NVMe-oF target. Used for local-node volumes where the SPDK target
 // is already serving — avoids SPDK initiator self-connect.
 func nvmeConnect(addr, port, nqn string) error {
-	cmd := exec.CommandContext(context.Background(), "nvme", "connect",
+	args := []string{"connect",
 		"-t", "tcp",
 		"-a", addr,
 		"-s", port,
 		"-n", nqn,
 		"-i", "4",
 		"-k", "10",
-	)
+	}
+	// Use a stable hostnqn so the kernel groups all paths to the same
+	// NQN under a single multipath subsystem.
+	if hostnqn := getHostNQN(); hostnqn != "" {
+		args = append(args, "-q", hostnqn)
+	}
+	cmd := exec.CommandContext(context.Background(), "nvme", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("nvme connect failed: %w: %s", err, string(output))
 	}
 	return nil
+}
+
+// getHostNQN returns a stable host NQN for this node. All nvme connect
+// calls must use the same hostnqn so the kernel groups them as paths
+// under a single multipath subsystem.
+func getHostNQN() string {
+	// Try the system hostnqn first (set by nvme-cli or kernel).
+	if data, err := os.ReadFile("/etc/nvme/hostnqn"); err == nil {
+		if nqn := strings.TrimSpace(string(data)); nqn != "" {
+			return nqn
+		}
+	}
+	// Fallback: read from sysfs.
+	if data, err := os.ReadFile("/sys/class/nvme/nvme0/hostnqn"); err == nil {
+		if nqn := strings.TrimSpace(string(data)); nqn != "" {
+			return nqn
+		}
+	}
+	// Last resort: generate from hostname.
+	hostname, _ := os.Hostname()
+	return "nqn.2024-01.io.novastor:host-" + hostname
 }
 
 // nvmeDisconnect runs `nvme disconnect` by NQN.
