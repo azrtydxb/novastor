@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/azrtydxb/novastor/internal/dataplane"
 )
@@ -91,53 +90,28 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 		return "", fmt.Errorf("no targets provided")
 	}
 
-	// Connect to ALL targets for read fanout. All targets share the same
-	// NQN, so the kernel NVMe multipath layer groups them as multiple
-	// paths to the same namespace. With round-robin iopolicy, reads are
-	// distributed across all replica nodes — scaling read bandwidth
-	// linearly with the number of replicas.
-	//
-	// Writes go to whichever path the kernel selects; the chunk engine
-	// on that node handles replication fan-out to other nodes.
-	// Ensure /etc/nvme/hostnqn exists BEFORE any connect call so the
-	// kernel uses the same hostnqn for all paths (required for multipath
-	// path grouping under a single subsystem).
-	_ = getHostNQN()
-
-	// Clean stale NVMe-oF subsystems from previous volumes that no longer
-	// have live controllers. These zombie entries can prevent new connects.
+	// Clean stale NVMe-oF subsystems from previous volumes.
 	cleanStaleNVMeSubsystems()
 
-	nqn := targets[0].NQN
-	connected := 0
+	// Connect to the owner target (single path).
+	owner := targets[0]
 	for _, t := range targets {
-		if _, err := strconv.ParseUint(t.Port, 10, 16); err != nil {
-			t.Port = "4430"
-		}
-		if err := nvmeConnect(t.Addr, t.Port, t.NQN); err != nil {
-			// Non-fatal: continue connecting to remaining targets.
-			// At least one must succeed.
-			continue
-		}
-		connected++
-		// Brief pause between connects to the same NQN — the kernel
-		// needs time to register the controller before accepting the
-		// next path to the same subsystem.
-		if connected < len(targets) {
-			time.Sleep(200 * time.Millisecond)
+		if t.IsOwner {
+			owner = t
+			break
 		}
 	}
-
-	if connected == 0 {
-		return "", fmt.Errorf("failed to connect to any of %d targets", len(targets))
+	if _, err := strconv.ParseUint(owner.Port, 10, 16); err != nil {
+		owner.Port = "4430"
+	}
+	if err := nvmeConnect(owner.Addr, owner.Port, owner.NQN); err != nil {
+		return "", fmt.Errorf("connect to owner target %s: %w", owner.Addr, err)
 	}
 
-	// Discover the kernel multipath device via sysfs.
-	devicePath, err := discoverNVMeDevice(context.Background(), nqn)
+	devicePath, err := discoverNVMeDevice(context.Background(), owner.NQN)
 	if err != nil {
-		return "", fmt.Errorf("discover device for %s: %w", nqn, err)
+		return "", fmt.Errorf("discover device for %s: %w", owner.NQN, err)
 	}
-
 	return devicePath, nil
 }
 
