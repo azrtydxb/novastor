@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/azrtydxb/novastor/internal/dataplane"
 )
@@ -114,6 +115,12 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 			continue
 		}
 		connected++
+		// Brief pause between connects to the same NQN — the kernel
+		// needs time to register the controller before accepting the
+		// next path to the same subsystem.
+		if connected < len(targets) {
+			time.Sleep(200 * time.Millisecond)
+		}
 	}
 
 	if connected == 0 {
