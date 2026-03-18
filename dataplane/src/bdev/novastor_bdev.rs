@@ -59,6 +59,88 @@ pub fn volume_chunk_maps() -> &'static RwLock<HashMap<String, Vec<Option<ChunkMa
     VOLUME_CHUNK_MAPS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+/// Lock-free per-volume dirty bitmaps for the hot I/O path.
+/// Each volume has a Vec of AtomicU64, one per chunk. Writes use
+/// fetch_or to set bits without any locking. The background sync
+/// task reads these atomics and copies to ChunkMapEntry for persistence.
+static ATOMIC_BITMAPS: OnceLock<DashMap<String, Vec<std::sync::atomic::AtomicU64>>> =
+    OnceLock::new();
+
+fn atomic_bitmaps() -> &'static DashMap<String, Vec<std::sync::atomic::AtomicU64>> {
+    ATOMIC_BITMAPS.get_or_init(DashMap::new)
+}
+
+/// Ensure the atomic bitmap vec for a volume has at least `chunk_count` entries.
+fn ensure_atomic_bitmap(volume_name: &str, chunk_idx: usize) {
+    let bitmaps = atomic_bitmaps();
+    let mut entry = bitmaps
+        .entry(volume_name.to_string())
+        .or_insert_with(Vec::new);
+    if chunk_idx >= entry.len() {
+        entry.resize_with(chunk_idx + 1, || std::sync::atomic::AtomicU64::new(0));
+    }
+}
+
+/// Set a dirty bit atomically — lock-free, no RwLock, no String allocation.
+/// Called from the reactor write completion callback on every write.
+fn atomic_bitmap_set(volume_name: &str, chunk_idx: usize, sb_idx: usize) {
+    let bitmaps = atomic_bitmaps();
+    if let Some(entry) = bitmaps.get(volume_name) {
+        if chunk_idx < entry.len() {
+            entry[chunk_idx].fetch_or(1u64 << sb_idx, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+    }
+    // Slow path: grow the vec (rare — only on first write to a new chunk).
+    ensure_atomic_bitmap(volume_name, chunk_idx);
+    if let Some(entry) = bitmaps.get(volume_name) {
+        if chunk_idx < entry.len() {
+            entry[chunk_idx].fetch_or(1u64 << sb_idx, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// Read a dirty bit atomically — for the reactor read fast path.
+pub fn atomic_bitmap_is_set(volume_name: &str, chunk_idx: usize, sb_idx: usize) -> bool {
+    let bitmaps = atomic_bitmaps();
+    if let Some(entry) = bitmaps.get(volume_name) {
+        if chunk_idx < entry.len() {
+            return (entry[chunk_idx].load(std::sync::atomic::Ordering::Relaxed) >> sb_idx) & 1
+                == 1;
+        }
+    }
+    false
+}
+
+/// Snapshot all atomic bitmaps into the ChunkMapEntry structures for persistence.
+/// Called by the background sync task before persisting dirty chunks.
+pub fn sync_atomic_bitmaps_to_chunk_maps() {
+    let bitmaps = atomic_bitmaps();
+    let mut maps = volume_chunk_maps().write().unwrap();
+    for entry in bitmaps.iter() {
+        let vol_name = entry.key();
+        let atomic_vec = entry.value();
+        if let Some(chunk_map) = maps.get_mut(vol_name.as_str()) {
+            // Grow chunk map if needed.
+            if atomic_vec.len() > chunk_map.len() {
+                chunk_map.resize(atomic_vec.len(), None);
+            }
+            for (i, atomic_bm) in atomic_vec.iter().enumerate() {
+                let bm = atomic_bm.load(std::sync::atomic::Ordering::Relaxed);
+                if bm != 0 {
+                    let cm_entry = chunk_map[i].get_or_insert_with(|| ChunkMapEntry {
+                        chunk_index: i as u64,
+                        chunk_id: format!("{}:{}", vol_name, i),
+                        ec_params: None,
+                        dirty_bitmap: 0,
+                    });
+                    cm_entry.dirty_bitmap = bm;
+                }
+            }
+        }
+    }
+}
+
 /// Public accessor for volume chunk maps (used by delete_volume cleanup).
 pub fn volume_chunk_maps_ref(
 ) -> Option<&'static RwLock<HashMap<String, Vec<Option<ChunkMapEntry>>>>> {
@@ -510,28 +592,10 @@ fn find_next_hole(volume_name: &str, offset: u64) -> u64 {
     offset
 }
 
-/// Helper: set the dirty bit for a single sub-block and ensure the chunk map
-/// entry exists. Called after every successful write.
+/// Set the dirty bit for a single sub-block. Lock-free on the hot path
+/// via atomic bitmap. No RwLock, no String allocation, no tracing span.
 fn update_dirty_bitmap(volume_name: &str, chunk_idx: usize, sb_idx: usize) -> Result<()> {
-    let chunk_id = format!("{}:{}", volume_name, chunk_idx);
-    let _bm_span = info_span!("bitmap_update", chunk_idx, sb_idx).entered();
-    let mut maps = volume_chunk_maps().write().unwrap();
-    let chunk_map = maps.get_mut(volume_name).ok_or_else(|| {
-        DataPlaneError::BdevError(format!("no chunk map for volume '{}'", volume_name))
-    })?;
-
-    // Grow the chunk map if needed.
-    if chunk_idx >= chunk_map.len() {
-        chunk_map.resize(chunk_idx + 1, None);
-    }
-
-    let entry = chunk_map[chunk_idx].get_or_insert_with(|| ChunkMapEntry {
-        chunk_index: chunk_idx as u64,
-        chunk_id: chunk_id.clone(),
-        ec_params: None,
-        dirty_bitmap: 0,
-    });
-    bitmap_set(&mut entry.dirty_bitmap, sb_idx);
+    atomic_bitmap_set(volume_name, chunk_idx, sb_idx);
     Ok(())
 }
 
@@ -763,8 +827,8 @@ unsafe extern "C" fn bdev_event_cb_noop(
 struct ReactorWriteCtx {
     /// The original NVMe-oF bdev_io to complete.
     parent_io: *mut ffi::spdk_bdev_io,
-    /// Volume name for bitmap update.
-    volume_name: String,
+    /// Pointer to BdevCtx (lives as long as the bdev — safe on reactor).
+    bdev_ctx: *const BdevCtx,
     /// Chunk index for bitmap update.
     chunk_idx: usize,
     /// Sub-block index for bitmap update.
@@ -797,8 +861,9 @@ unsafe extern "C" fn reactor_write_done_cb(
     ffi::spdk_bdev_free_io(child_io);
 
     if success {
-        // Update dirty bitmap (fast — just a bit flip in a HashMap).
-        let _ = update_dirty_bitmap(&rctx.volume_name, rctx.chunk_idx, rctx.sb_idx);
+        // Update dirty bitmap — atomic fetch_or, no locks.
+        let vol_name = &(*rctx.bdev_ctx).volume_name;
+        let _ = update_dirty_bitmap(vol_name, rctx.chunk_idx, rctx.sb_idx);
         ffi::spdk_bdev_io_complete(
             rctx.parent_io,
             ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
@@ -887,6 +952,9 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
         maps.entry(volume_name.to_string())
             .or_insert_with(|| vec![None; num_chunks as usize]);
     }
+
+    // Pre-allocate the atomic bitmap so the hot path never resizes.
+    ensure_atomic_bitmap(volume_name, num_chunks as usize);
 
     // Persist the volume definition so chunk maps can be restored on restart.
     if let Some(store) = get_metadata_store() {
@@ -1372,7 +1440,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
 
                         let rctx = Box::new(ReactorWriteCtx {
                             parent_io: bdev_io,
-                            volume_name: volume_name.clone(),
+                            bdev_ctx: ctx,
                             chunk_idx,
                             sb_idx,
                         });

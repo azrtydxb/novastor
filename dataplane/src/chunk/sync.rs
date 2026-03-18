@@ -26,6 +26,9 @@ pub fn spawn_sync_task(bdev_name: String) {
 }
 
 async fn sync_all_volumes(bdev_name: &str) {
+    // Snapshot atomic bitmaps into ChunkMapEntry before scanning for dirty chunks.
+    crate::bdev::novastor_bdev::sync_atomic_bitmaps_to_chunk_maps();
+
     // Get list of volumes with dirty chunks.
     let volumes: Vec<String> = {
         let maps = volume_chunk_maps().read().unwrap();
@@ -140,6 +143,9 @@ async fn sync_one_chunk(
 /// Bulk-destage all dirty bitmaps to the metadata store (BlueStore V3 pattern).
 /// Called on clean shutdown to persist in-memory state in one batch.
 pub fn destage_all_bitmaps() {
+    // Flush atomic bitmaps to ChunkMapEntry before persisting.
+    crate::bdev::novastor_bdev::sync_atomic_bitmaps_to_chunk_maps();
+
     let store = match get_metadata_store() {
         Some(s) => s,
         None => {
