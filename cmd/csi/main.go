@@ -469,6 +469,11 @@ func main() {
 		if dpErr != nil {
 			log.Fatalf("Failed to connect to local dataplane at %s: %v", dpAddr, dpErr)
 		}
+		// Ensure /etc/nvme/hostnqn exists before any NVMe-oF connects.
+		// The kernel reads this file for the hostnqn on each nvme connect.
+		// Must be written before NewSPDKInitiator creates any connections.
+		novcsi.EnsureHostNQN()
+
 		initiator := novcsi.NewSPDKInitiator(dpClient, hostIP)
 		log.Printf("CSI node using SPDK NVMe-oF initiator (dataplane at %s)", dpAddr)
 

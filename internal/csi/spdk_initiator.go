@@ -173,6 +173,12 @@ func nvmeConnect(addr, port, nqn string) error {
 // getHostNQN returns a stable host NQN for this node. All nvme connect
 // calls must use the same hostnqn so the kernel groups them as paths
 // under a single multipath subsystem.
+// EnsureHostNQN writes a stable /etc/nvme/hostnqn if it doesn't exist.
+// Must be called once at CSI startup, before any nvme connect calls.
+func EnsureHostNQN() {
+	_ = getHostNQN()
+}
+
 func getHostNQN() string {
 	// Try the system hostnqn first.
 	if data, err := os.ReadFile("/etc/nvme/hostnqn"); err == nil {
