@@ -97,6 +97,11 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 	//
 	// Writes go to whichever path the kernel selects; the chunk engine
 	// on that node handles replication fan-out to other nodes.
+	// Ensure /etc/nvme/hostnqn exists BEFORE any connect call so the
+	// kernel uses the same hostnqn for all paths (required for multipath
+	// path grouping under a single subsystem).
+	_ = getHostNQN()
+
 	nqn := targets[0].NQN
 	connected := 0
 	for _, t := range targets {
@@ -162,18 +167,21 @@ func nvmeConnect(addr, port, nqn string) error {
 // calls must use the same hostnqn so the kernel groups them as paths
 // under a single multipath subsystem.
 func getHostNQN() string {
-	// Try the system hostnqn first (set by nvme-cli or kernel).
+	// Try the system hostnqn first.
 	if data, err := os.ReadFile("/etc/nvme/hostnqn"); err == nil {
 		if nqn := strings.TrimSpace(string(data)); nqn != "" {
 			return nqn
 		}
 	}
-	// Generate a deterministic UUID-format hostnqn from hostname.
-	// Must be nqn.2014-08.org.nvmexpress:uuid:<valid-uuid> format.
+	// Generate a deterministic UUID-format hostnqn from hostname and
+	// persist it so subsequent calls (and kernel) use the same value.
 	hostname, _ := os.Hostname()
 	h := md5.Sum([]byte("novastor-" + hostname))
-	return fmt.Sprintf("nqn.2014-08.org.nvmexpress:uuid:%x-%x-%x-%x-%x",
+	nqn := fmt.Sprintf("nqn.2014-08.org.nvmexpress:uuid:%x-%x-%x-%x-%x",
 		h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
+	_ = os.MkdirAll("/etc/nvme", 0755)
+	_ = os.WriteFile("/etc/nvme/hostnqn", []byte(nqn+"\n"), 0644)
+	return nqn
 }
 
 // nvmeDisconnect runs `nvme disconnect` by NQN.
