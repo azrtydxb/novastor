@@ -235,10 +235,14 @@ func getHostNQN() string {
 	// persist it so subsequent calls (and kernel) use the same value.
 	hostname, _ := os.Hostname()
 	h := md5.Sum([]byte("novastor-" + hostname))
-	nqn := fmt.Sprintf("nqn.2014-08.org.nvmexpress:uuid:%x-%x-%x-%x-%x",
-		h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
+	uuid := fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
+	nqn := "nqn.2014-08.org.nvmexpress:uuid:" + uuid
 	_ = os.MkdirAll("/etc/nvme", 0755)
 	_ = os.WriteFile("/etc/nvme/hostnqn", []byte(nqn+"\n"), 0644)
+	// Write stable hostid too — the kernel uses this to identify the host
+	// across multiple nvme connect calls. Without it, each connect generates
+	// a random hostid and multipath can't group paths.
+	_ = os.WriteFile("/etc/nvme/hostid", []byte(uuid+"\n"), 0644)
 	return nqn
 }
 
