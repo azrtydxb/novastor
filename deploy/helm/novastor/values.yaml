@@ -128,7 +128,10 @@ dataplane:
   enabled: true
   image:
     repository: novastor-dataplane
-  reactorMask: "0x1"
+  # Pin SPDK reactor to a fast core (CPU 4 = Cortex-A76 2.4GHz).
+  # ARM big.LITTLE: CPUs 0-3 are A55 (1.8GHz), CPUs 4-7 are A76 (2.4GHz).
+  # The A76's out-of-order pipeline gives ~2× IPC vs the in-order A55.
+  reactorMask: "0x10"
   memSize: 1800
   resources:
     limits:
