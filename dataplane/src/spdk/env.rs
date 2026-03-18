@@ -147,6 +147,12 @@ unsafe extern "C" fn spdk_startup_cb(arg: *mut std::os::raw::c_void) {
                 log::error!("failed to start gRPC server: {}", e);
             }
         }
+
+        // Start NDP server for frontend controller communication.
+        let ndp_config = crate::transport::ndp_server::NdpServerConfig::default();
+        if let Err(e) = crate::transport::ndp_server::start(ndp_config).await {
+            log::error!("failed to start NDP server: {}", e);
+        }
     });
 
     info!(

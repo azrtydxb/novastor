@@ -1085,6 +1085,9 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
         size_bytes,
     );
 
+    // Register volume hash for NDP lookups.
+    crate::transport::ndp_server::register_volume_hash(volume_name);
+
     Ok(format!("novastor_{}", volume_name))
 }
 
@@ -1650,4 +1653,14 @@ unsafe extern "C" fn bdev_submit_request_cb(
             );
         }
     }
+}
+
+/// Public wrapper for sub_block_write — used by NDP server.
+pub async fn sub_block_write_pub(volume_name: &str, offset: u64, data: &[u8]) -> Result<()> {
+    sub_block_write(volume_name, offset, data).await
+}
+
+/// Public wrapper for sub_block_read — used by NDP server.
+pub async fn sub_block_read_pub(volume_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+    sub_block_read(volume_name, offset, length).await
 }

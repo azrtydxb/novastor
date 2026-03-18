@@ -88,6 +88,7 @@ ENV SPDK_DIR=/usr/local
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY proto/ proto/
 COPY src/ src/
+COPY ndp/ ndp/
 
 RUN cargo build --release --features spdk-sys
 

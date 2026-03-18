@@ -80,7 +80,7 @@ impl NdpHeader {
         buf[40..48].fill(0); // reserved
         buf[52..56].copy_from_slice(&self.data_crc.to_le_bytes());
         buf[56..64].fill(0); // reserved
-        // Compute header CRC over bytes 0..48 (before CRC fields).
+                             // Compute header CRC over bytes 0..48 (before CRC fields).
         let crc = crc32c::crc32c(&buf[0..48]);
         buf[48..52].copy_from_slice(&crc.to_le_bytes());
     }
@@ -118,13 +118,7 @@ impl NdpHeader {
     }
 
     /// Create a new request header.
-    pub fn request(
-        op: NdpOp,
-        request_id: u64,
-        volume_hash: u64,
-        offset: u64,
-        length: u32,
-    ) -> Self {
+    pub fn request(op: NdpOp, request_id: u64, volume_hash: u64, offset: u64, length: u32) -> Self {
         Self {
             op,
             flags: 0,
@@ -161,7 +155,6 @@ impl NdpHeader {
 /// Compute a volume hash from a volume UUID string.
 pub fn volume_hash(uuid: &str) -> u64 {
     let crc1 = crc32c::crc32c(uuid.as_bytes()) as u64;
-    let crc2 =
-        crc32c::crc32c(&uuid.as_bytes().iter().rev().copied().collect::<Vec<u8>>()) as u64;
+    let crc2 = crc32c::crc32c(&uuid.as_bytes().iter().rev().copied().collect::<Vec<u8>>()) as u64;
     (crc1 << 32) | crc2
 }
