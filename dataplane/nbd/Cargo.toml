@@ -1,0 +1,14 @@
+[package]
+name = "nbd-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["net", "io-util", "sync", "rt", "macros"] }
+log = "0.4"
+thiserror = "2"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+env_logger = "0.11"
