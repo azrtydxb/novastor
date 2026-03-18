@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -103,6 +104,10 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 	// path grouping under a single subsystem).
 	_ = getHostNQN()
 
+	// Clean stale NVMe-oF subsystems from previous volumes that no longer
+	// have live controllers. These zombie entries can prevent new connects.
+	cleanStaleNVMeSubsystems()
+
 	nqn := targets[0].NQN
 	connected := 0
 	for _, t := range targets {
@@ -143,6 +148,46 @@ func (s *SPDKInitiator) DisconnectMultipath(_ context.Context, targets []TargetI
 	}
 	// All targets share the same NQN. One disconnect-by-NQN removes all paths.
 	return nvmeDisconnect(targets[0].NQN)
+}
+
+// cleanStaleNVMeSubsystems disconnects all NovaStor NVMe-oF subsystems
+// that have no live controllers. These zombie entries accumulate when
+// volumes are deleted or dataplanes restart, and can prevent new connects.
+func cleanStaleNVMeSubsystems() {
+	// Read all subsystems from sysfs
+	entries, err := os.ReadDir("/sys/class/nvme-subsystem")
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		subsysDir := "/sys/class/nvme-subsystem/" + entry.Name()
+
+		// Check if it's a NovaStor subsystem
+		nqnData, err := os.ReadFile(subsysDir + "/subsysnqn")
+		if err != nil {
+			continue
+		}
+		nqn := strings.TrimSpace(string(nqnData))
+		if !strings.Contains(nqn, "novastor") {
+			continue
+		}
+
+		// Check if any controllers are live
+		ctrls, _ := filepath.Glob(subsysDir + "/nvme*")
+		hasLive := false
+		for _, ctrl := range ctrls {
+			state, err := os.ReadFile(ctrl + "/state")
+			if err == nil && strings.TrimSpace(string(state)) == "live" {
+				hasLive = true
+				break
+			}
+		}
+
+		// Disconnect stale subsystems with no live controllers
+		if !hasLive {
+			_ = nvmeDisconnect(nqn)
+		}
+	}
 }
 
 // nvmeConnect runs `nvme connect` to attach the kernel to an existing
