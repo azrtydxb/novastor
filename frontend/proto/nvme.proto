@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package nvme;
+
+option go_package = "github.com/azrtydxb/novastor/api/proto/nvme";
+
+// NVMeTargetService manages NVMe-oF/TCP targets on storage agent nodes.
+// The CSI controller calls this service during CreateVolume/DeleteVolume
+// to create and tear down backing block devices exposed via nvmet configfs.
+//
+// Replication and erasure coding are handled by the Rust dataplane's chunk
+// engine — the presentation layer (NVMe-oF) is thin protocol translation only.
+service NVMeTargetService {
+  // CreateTarget creates a chunk-backed volume and exposes it as an
+  // NVMe-oF/TCP target via the data-plane. The volume's protection scheme
+  // (replication or EC) is configured in the chunk engine at creation time.
+  rpc CreateTarget(CreateTargetRequest) returns (CreateTargetResponse);
+
+  // DeleteTarget removes the NVMe-oF target, detaches the loop device,
+  // and deletes the sparse backing file.
+  rpc DeleteTarget(DeleteTargetRequest) returns (DeleteTargetResponse);
+
+  // SetANAState changes the ANA (Asymmetric Namespace Access) state for a
+  // volume's NVMe-oF target. Used during active-passive failover to transition
+  // a target between optimized (active) and inaccessible (passive) states.
+  rpc SetANAState(SetANAStateRequest) returns (SetANAStateResponse);
+}
+
+message CreateTargetRequest {
+  // volume_id is the unique volume identifier, used to derive the NQN and
+  // backing file name.
+  string volume_id = 1;
+
+  // size_bytes is the requested size for the backing sparse file.
+  int64 size_bytes = 2;
+
+  // ana_state is the initial ANA state for the target. Valid values are
+  // "optimized" (active path) and "inaccessible" (passive path).
+  // If empty, defaults to "optimized".
+  string ana_state = 3;
+
+  // ana_group_id is the ANA group identifier for this target. All targets
+  // sharing the same group ID transition state together during failover.
+  uint32 ana_group_id = 4;
+
+  // protection configures the data protection scheme for this volume.
+  // If not set, defaults to replication with factor 1.
+  VolumeProtection protection = 5;
+}
+
+// VolumeProtection describes the data protection scheme for a volume.
+// Replication and erasure coding are handled by the chunk engine in the
+// Rust dataplane — the presentation layer does not participate in replication.
+message VolumeProtection {
+  // "replication" or "erasure_coding"
+  string mode = 1;
+  // For replication: number of copies (e.g. 3).
+  uint32 replication_factor = 2;
+  // For erasure coding: number of data shards (e.g. 4).
+  uint32 data_shards = 3;
+  // For erasure coding: number of parity shards (e.g. 2).
+  uint32 parity_shards = 4;
+}
+
+message CreateTargetResponse {
+  // subsystem_nqn is the NVMe Qualified Name for the created subsystem,
+  // e.g. "nqn.2024-01.io.novastor:vol-<uuid>".
+  string subsystem_nqn = 1;
+
+  // target_address is the IP address the NVMe-oF port is bound to.
+  string target_address = 2;
+
+  // target_port is the TCP port the NVMe-oF target listens on (default "4420").
+  string target_port = 3;
+}
+
+message DeleteTargetRequest {
+  // volume_id identifies the target to tear down.
+  string volume_id = 1;
+}
+
+message DeleteTargetResponse {}
+
+message SetANAStateRequest {
+  // volume_id identifies the NVMe-oF target whose ANA state should change.
+  string volume_id = 1;
+
+  // ana_state is the desired ANA state. Valid values are "optimized"
+  // (active, accepting I/O) and "inaccessible" (passive, rejecting I/O).
+  string ana_state = 2;
+
+  // ana_group_id is the ANA group to apply the state change to.
+  uint32 ana_group_id = 3;
+}
+
+message SetANAStateResponse {}

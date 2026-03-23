@@ -53,6 +53,9 @@ spec:
             - name: nvmeof
               containerPort: 4430
               protocol: TCP
+            - name: ndp
+              containerPort: 4500
+              protocol: TCP
           securityContext:
             privileged: true
           volumeMounts:
@@ -72,6 +75,8 @@ spec:
               mountPath: /var/lib/novastor/metadata
             - name: policy-data
               mountPath: /var/lib/novastor/policy
+            - name: run-novastor
+              mountPath: /var/run/novastor
             {{- if include "novastor.tls.enabled" . }}
             - name: tls-certs
               mountPath: {{ include "novastor.tls.mountPath" . }}
@@ -108,6 +113,10 @@ spec:
         - name: policy-data
           hostPath:
             path: /var/lib/novastor/policy
+            type: DirectoryOrCreate
+        - name: run-novastor
+          hostPath:
+            path: /var/run/novastor
             type: DirectoryOrCreate
         {{- if include "novastor.tls.enabled" . }}
         - name: tls-certs

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -30,7 +31,12 @@ func NewNVMeTargetClient(addr string, opts ...grpc.DialOption) (*NVMeTargetClien
 	if len(opts) == 0 {
 		opts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	}
-	conn, err := grpc.NewClient(addr, opts...)
+	// Use passthrough resolver to connect to IP:port directly.
+	target := addr
+	if !strings.Contains(target, "://") {
+		target = "passthrough:///" + addr
+	}
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dialing nvme target service at %s: %w", addr, err)
 	}

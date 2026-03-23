@@ -38,6 +38,11 @@ pub fn bitmap_set(bitmap: &mut u64, sb_index: usize) {
     *bitmap |= 1u64 << sb_index;
 }
 
+/// Clear a single sub-block bit in the dirty bitmap.
+pub fn bitmap_clear(bitmap: &mut u64, sb_index: usize) {
+    *bitmap &= !(1u64 << sb_index);
+}
+
 /// Check if a bit is set in the dirty bitmap.
 pub fn bitmap_is_set(bitmap: u64, sb_index: usize) -> bool {
     (bitmap >> sb_index) & 1 == 1

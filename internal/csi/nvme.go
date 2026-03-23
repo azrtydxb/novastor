@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -55,12 +57,17 @@ const nvmeFabricsRoot = "/sys/class/nvme"
 // Connect runs `nvme connect` to attach an NVMe-oF target over TCP and
 // discovers the actual block device path by scanning sysfs.
 func (l *LinuxInitiator) Connect(ctx context.Context, addr, port, nqn string) (string, error) {
+	// Use as many I/O queues as online CPUs for maximum parallelism.
+	nrQueues := runtime.NumCPU()
+	if nrQueues < 1 {
+		nrQueues = 1
+	}
 	cmd := exec.CommandContext(ctx, "nvme", "connect",
 		"-t", "tcp",
 		"-a", addr,
 		"-s", port,
 		"-n", nqn,
-		"-i", "4", // 4 I/O queues for parallel I/O submission
+		"-i", strconv.Itoa(nrQueues),
 		"-k", "10", // 10-second keep-alive timeout
 	)
 	output, err := cmd.CombinedOutput()

@@ -1,0 +1,75 @@
+{{- if .Values.frontend.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "novastor.fullname" . }}-frontend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "novastor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "novastor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "novastor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      hostNetwork: true
+      containers:
+        - name: frontend
+          image: "{{ include "novastor.imageRegistry" . }}/{{ .Values.frontend.image.repository }}:{{ include "novastor.imageTag" . }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          args:
+            - --ndp-port
+            - {{ .Values.frontend.ndpPort | quote }}
+            - --nvmeof-port
+            - {{ .Values.frontend.nvmeofPort | quote }}
+            - --control-addr
+            - "0.0.0.0:{{ .Values.frontend.controlPort }}"
+            - --chunk-engines
+            - {{ .Values.frontend.chunkEngines | quote }}
+            - --advertise-addr
+            - "$(HOST_IP)"
+          env:
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.frontend.controlPort }}
+              protocol: TCP
+            - name: nvmeof
+              containerPort: {{ .Values.frontend.nvmeofPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: run-novastor
+              mountPath: /var/run/novastor
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+      volumes:
+        - name: run-novastor
+          hostPath:
+            path: /var/run/novastor
+            type: DirectoryOrCreate
+      {{- with .Values.frontend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

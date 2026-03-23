@@ -100,11 +100,12 @@ type AgentTargetClient interface {
 // ControllerServer implements the CSI Controller service.
 type ControllerServer struct {
 	csi.UnimplementedControllerServer
-	meta        MetadataStore
-	nodeMeta    NodeMetaStore
-	placer      PlacementEngine
-	agentTarget AgentTargetClient
-	quota       QuotaChecker
+	meta           MetadataStore
+	nodeMeta       NodeMetaStore
+	placer         PlacementEngine
+	agentTarget    AgentTargetClient
+	frontendTarget AgentTargetClient // Frontend controller for NVMe-oF target management (kernel nvmet + NBD).
+	quota          QuotaChecker
 
 	// nodeAddrToName maps agent network addresses (ip:port) to Kubernetes node
 	// names. CRUSH placement returns addresses, but PV topology must use K8s
@@ -124,6 +125,19 @@ func NewControllerServer(meta MetadataStore, placer PlacementEngine, agentTarget
 		placer:      placer,
 		agentTarget: agentTarget,
 		quota:       quota,
+	}
+}
+
+// NewControllerServerWithFrontend creates a ControllerServer that uses the
+// frontend controller for NVMe-oF target management (kernel nvmet + NBD).
+// The agent is still used for volume creation on the chunk engine.
+func NewControllerServerWithFrontend(meta MetadataStore, placer PlacementEngine, agentTarget AgentTargetClient, frontendTarget AgentTargetClient, quota QuotaChecker) *ControllerServer {
+	return &ControllerServer{
+		meta:           meta,
+		placer:         placer,
+		agentTarget:    agentTarget,
+		frontendTarget: frontendTarget,
+		quota:          quota,
 	}
 }
 
@@ -525,12 +539,35 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		var targets []targetInfo
 		var ownerAddr, ownerPort, ownerNQN string
 
+		// Determine which client handles NVMe-oF target creation.
+		// When a frontend controller is configured, the agent only creates the
+		// volume on the chunk engine, and the frontend creates the NVMe-oF target
+		// via kernel nvmet + NBD.
+		targetClient := cs.agentTarget
+		if cs.frontendTarget != nil {
+			targetClient = cs.frontendTarget
+		}
+
 		for i, node := range uniqueNodes {
-			// All nodes that hold chunk data get "optimized" — they can
-			// serve reads locally. The owner is first (preferred by the
-			// kernel NVMe multipath round-robin policy).
+			// Step 1: Create volume on chunk engine (agent creates the volume,
+			// skipping NVMe-oF when frontend handles it).
+			if cs.frontendTarget != nil {
+				_, _, _, createErr := cs.agentTarget.CreateTarget(
+					ctx, node, volumeID, int64(requiredBytes), "optimized", anaGroupID, protCfg,
+				)
+				if createErr != nil {
+					logging.L.Warn("failed to create volume on node (continuing with remaining nodes)",
+						zap.String("volumeID", volumeID),
+						zap.String("node", node),
+						zap.Error(createErr),
+					)
+					continue
+				}
+			}
+
+			// Step 2: Create NVMe-oF target (either via agent SPDK or frontend kernel nvmet).
 			anaState := "optimized"
-			nqn, addr, port, createErr := cs.agentTarget.CreateTarget(
+			nqn, addr, port, createErr := targetClient.CreateTarget(
 				ctx, node, volumeID, int64(requiredBytes), anaState, anaGroupID, protCfg,
 			)
 			if createErr != nil {
@@ -658,12 +695,11 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	// If the volume has a namespace annotation (stored in volume context), include it.
 	// For now, we only track pool-level quota in volume metadata.
 
-	// Tear down NVMe-oF targets on all agents that may have them (best-effort).
+	// Tear down NVMe-oF targets and volumes (best-effort).
 	// With multi-target provisioning, targets exist on all unique placement nodes.
-	// If target deletion fails (e.g., agent unreachable), we still proceed
+	// If deletion fails (e.g., agent/frontend unreachable), we still proceed
 	// with metadata cleanup to avoid blocking volume deletion on retries.
 	if cs.agentTarget != nil {
-		// Delete targets on all agents that may have them.
 		// Look up unique nodes from placement maps.
 		targetNodes := make(map[string]bool)
 		if vm.TargetNodeID != "" {
@@ -678,8 +714,18 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 			}
 		}
 		for nodeAddr := range targetNodes {
+			// Delete NVMe-oF target on frontend (kernel nvmet + NBD).
+			if cs.frontendTarget != nil {
+				if delErr := cs.frontendTarget.DeleteTarget(ctx, nodeAddr, volumeID); delErr != nil {
+					logging.L.Warn("failed to delete NVMe-oF target on frontend (best-effort cleanup)",
+						zap.String("volumeID", volumeID),
+						zap.String("nodeAddr", nodeAddr),
+						zap.Error(delErr))
+				}
+			}
+			// Delete volume on chunk engine (agent).
 			if delErr := cs.agentTarget.DeleteTarget(ctx, nodeAddr, volumeID); delErr != nil {
-				logging.L.Warn("failed to delete NVMe-oF target on agent (best-effort cleanup)",
+				logging.L.Warn("failed to delete volume on agent (best-effort cleanup)",
 					zap.String("volumeID", volumeID),
 					zap.String("agentAddr", nodeAddr),
 					zap.Error(delErr))

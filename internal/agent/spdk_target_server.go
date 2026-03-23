@@ -43,6 +43,10 @@ type SPDKTargetServer struct {
 	dpClient   *dataplane.Client
 	metaClient *metadata.GRPCClient
 
+	// skipNVMeF disables NVMe-oF target creation in the agent when a frontend
+	// controller handles NVMe-oF presentation via kernel nvmet + NBD.
+	skipNVMeF bool
+
 	// chunkInit tracks whether the chunk store has been initialised.
 	// Uses mutex+bool instead of sync.Once so transient failures can be retried.
 	initMu   sync.Mutex
@@ -70,6 +74,7 @@ func NewSPDKTargetServer(hostIP, baseBdev, nodeUUID string, testMode bool, dpCli
 		testMode:   testMode,
 		dpClient:   dpClient,
 		metaClient: metaClient,
+		skipNVMeF:  false, // Use SPDK reactor for NVMe-oF (burns 1 core, max performance).
 	}
 }
 
@@ -229,6 +234,21 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 				)
 			}
 		}
+	}
+
+	// When skipNVMeF is set, the frontend controller handles NVMe-oF target
+	// creation via kernel nvmet + NBD. The agent only creates the volume.
+	if s.skipNVMeF {
+		nqn := fmt.Sprintf("nqn.2024-01.io.novastor:volume-%s", volumeID)
+		logging.L.Info("spdk target: volume created (NVMe-oF handled by frontend)",
+			zap.String("volumeID", volumeID),
+			zap.String("bdevName", bdevName),
+		)
+		return &pb.CreateTargetResponse{
+			SubsystemNqn:  nqn,
+			TargetAddress: s.hostIP,
+			TargetPort:    fmt.Sprintf("%d", spdkTargetPort),
+		}, nil
 	}
 
 	// Expose the chunk bdev as an NVMe-oF/TCP target via gRPC.

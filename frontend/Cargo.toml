@@ -1,0 +1,25 @@
+[package]
+name = "novastor-frontend"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "novastor-frontend"
+path = "src/main.rs"
+
+[dependencies]
+ndp = { path = "../dataplane/ndp" }
+nvmeof-tcp = { path = "../dataplane/nvmeof-tcp" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "fs", "macros", "net", "signal", "io-util", "process"] }
+clap = { version = "4", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+async-trait = "0.1"
+crc32c = "0.6"
+tonic = { version = "0.13", features = ["transport"] }
+prost = "0.13"
+socket2 = "0.5"
+tokio-stream = "0.1"
+
+[build-dependencies]
+tonic-build = "0.13"

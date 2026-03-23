@@ -9,6 +9,7 @@ import (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Backend",type=string,JSONPath=`.spec.backendType`
 // +kubebuilder:printcolumn:name="Nodes",type=integer,JSONPath=`.status.nodeCount`
 // +kubebuilder:printcolumn:name="Capacity",type=string,JSONPath=`.status.totalCapacity`

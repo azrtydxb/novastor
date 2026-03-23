@@ -38,7 +38,7 @@ mod ffi {
 /// Registry of active NovaStor bdevs, keyed by volume name.
 static NOVASTOR_BDEVS: OnceLock<Mutex<HashMap<String, NovastorBdevEntry>>> = OnceLock::new();
 
-fn bdev_registry() -> &'static Mutex<HashMap<String, NovastorBdevEntry>> {
+pub(crate) fn bdev_registry() -> &'static Mutex<HashMap<String, NovastorBdevEntry>> {
     NOVASTOR_BDEVS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -474,6 +474,30 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
     Ok(())
 }
 
+/// Zero a byte range on a volume by writing actual zeros through the normal
+/// write path. We must write real zeros (not just clear the bitmap) because
+/// filesystems like ext4 may issue WRITE_ZEROES for ranges that still contain
+/// metadata — clearing the bitmap would lose that data.
+async fn sub_block_write_zeroes(volume_name: &str, offset: u64, length: u64) -> Result<()> {
+    if length == 0 {
+        return Ok(());
+    }
+
+    // Write zeros in SUB_BLOCK_SIZE chunks to avoid huge allocations.
+    let end_offset = offset + length;
+    let mut pos = offset;
+    let zero_buf = vec![0u8; SUB_BLOCK_SIZE];
+
+    while pos < end_offset {
+        let remaining = (end_offset - pos) as usize;
+        let write_len = remaining.min(SUB_BLOCK_SIZE);
+        sub_block_write(volume_name, pos, &zero_buf[..write_len]).await?;
+        pos += write_len as u64;
+    }
+
+    Ok(())
+}
+
 /// Find the byte offset of the next data (written) region at or after `offset`.
 /// Returns `u64::MAX` if no data exists after `offset`.
 fn find_next_data(volume_name: &str, offset: u64) -> u64 {
@@ -541,6 +565,22 @@ fn find_next_hole(volume_name: &str, offset: u64) -> u64 {
 
     // No entry for this chunk — it's a hole.
     offset
+}
+
+/// Load the dirty bitmap for a chunk from the BdevCtx atomic array.
+/// Returns 0 (all clean) if the chunk index is out of range.
+/// SAFETY: `ctx` must be a valid pointer to a BdevCtx. Must be called on
+/// the SPDK reactor thread.
+unsafe fn load_chunk_bitmap(ctx: *const BdevCtx, chunk_idx: usize) -> u64 {
+    if ctx.is_null() {
+        return 0;
+    }
+    let bdev_ctx = &*ctx;
+    if chunk_idx < bdev_ctx.dirty_bitmaps.len() {
+        bdev_ctx.dirty_bitmaps[chunk_idx].load(std::sync::atomic::Ordering::Relaxed)
+    } else {
+        0
+    }
 }
 
 /// Set the dirty bit for a single sub-block. Used by the tokio fallback path.
@@ -728,6 +768,374 @@ async fn sub_block_read(volume_name: &str, offset: u64, length: u64) -> Result<V
 }
 
 // ---------------------------------------------------------------------------
+// Sequential readahead state (reactor-local, no synchronization needed)
+// ---------------------------------------------------------------------------
+
+/// Per-volume sequential readahead state.
+/// SAFETY: only accessed on the SPDK reactor thread.
+struct ReadaheadState {
+    last_end_offset: u64,
+    sequential_count: u32,
+    window_sub_blocks: u32,
+    prefetch_offset: u64,
+    prefetch_len: u64,
+    prefetch_buf: *mut c_void,
+    prefetch_buf_size: usize,
+    prefetch_ready: bool,
+    generation: u64,
+}
+
+impl Default for ReadaheadState {
+    fn default() -> Self {
+        Self {
+            last_end_offset: u64::MAX,
+            sequential_count: 0,
+            window_sub_blocks: 0,
+            prefetch_offset: 0,
+            prefetch_len: 0,
+            prefetch_buf: std::ptr::null_mut(),
+            prefetch_buf_size: 0,
+            prefetch_ready: false,
+            generation: 0,
+        }
+    }
+}
+
+impl ReadaheadState {
+    fn reset(&mut self) {
+        if self.prefetch_ready && !self.prefetch_buf.is_null() {
+            unsafe {
+                reactor_dispatch::release_dma_buf_public(self.prefetch_buf, self.prefetch_buf_size);
+            }
+            self.prefetch_buf = std::ptr::null_mut();
+        } else if !self.prefetch_ready && !self.prefetch_buf.is_null() {
+            // In-flight I/O: don't free — let completion callback free via generation check.
+            self.prefetch_buf = std::ptr::null_mut();
+        }
+        self.generation += 1;
+        self.sequential_count = 0;
+        self.window_sub_blocks = 0;
+        self.prefetch_ready = false;
+        self.prefetch_len = 0;
+    }
+}
+
+static mut READAHEAD_STATES: Option<HashMap<String, ReadaheadState>> = None;
+
+/// Get or create readahead state for a volume.
+/// SAFETY: must be called on the SPDK reactor thread.
+unsafe fn readahead_state(volume_name: &str) -> &mut ReadaheadState {
+    let states = READAHEAD_STATES.get_or_insert_with(HashMap::new);
+    states.entry(volume_name.to_string()).or_default()
+}
+
+// ---------------------------------------------------------------------------
+// Write-back cache (reactor-local, no synchronization needed)
+// ---------------------------------------------------------------------------
+
+/// Number of sub-block slots in the write cache per volume.
+/// 128 slots × 64KB = 8MB cache per volume. Slots are addressed by
+/// sub-block index modulo CACHE_SLOTS (direct-mapped cache).
+const WRITE_CACHE_SLOTS: usize = 128;
+
+/// Per-volume write-back cache. Writes are absorbed into cache slots
+/// and acknowledged immediately. Dirty slots are flushed to the backend
+/// in batches, coalescing adjacent writes.
+///
+/// SAFETY: only accessed on the SPDK reactor thread.
+struct WriteCache {
+    /// Flat buffer: WRITE_CACHE_SLOTS × SUB_BLOCK_SIZE bytes.
+    /// Allocated from hugepages via spdk_dma_malloc.
+    buf: *mut u8,
+    /// Per-slot dirty flag + volume-relative sub-block index.
+    /// slot_tag[i] = Some(global_sb_index) if dirty, None if clean.
+    slot_tag: [Option<u64>; WRITE_CACHE_SLOTS],
+    /// Per-slot valid byte ranges (offset_in_sb, length) for partial writes.
+    /// A full sub-block write sets (0, SUB_BLOCK_SIZE).
+    slot_valid: [(usize, usize); WRITE_CACHE_SLOTS],
+    /// Number of dirty slots.
+    dirty_count: u32,
+    /// Flush threshold: trigger background flush when dirty_count >= this.
+    flush_threshold: u32,
+}
+
+impl WriteCache {
+    unsafe fn new() -> Self {
+        let buf_size = WRITE_CACHE_SLOTS * SUB_BLOCK_SIZE;
+        let buf = ffi::spdk_dma_malloc(buf_size, 0x1000, std::ptr::null_mut()) as *mut u8;
+        if !buf.is_null() {
+            std::ptr::write_bytes(buf, 0, buf_size);
+        }
+        Self {
+            buf,
+            slot_tag: [None; WRITE_CACHE_SLOTS],
+            slot_valid: [(0, 0); WRITE_CACHE_SLOTS],
+            dirty_count: 0,
+            flush_threshold: (WRITE_CACHE_SLOTS as u32 * 3) / 4, // 75%
+        }
+    }
+
+    /// Try to absorb a write into the cache. Returns true if cached
+    /// (caller should complete the bdev_io immediately). Returns false
+    /// if the cache is full and needs flushing first.
+    unsafe fn absorb(
+        &mut self,
+        global_sb_idx: u64,
+        off_in_sb: usize,
+        data: *const u8,
+        len: usize,
+    ) -> bool {
+        if self.buf.is_null() {
+            return false; // Cache not allocated.
+        }
+        let slot = (global_sb_idx as usize) % WRITE_CACHE_SLOTS;
+
+        // Evict if slot is occupied by a different sub-block.
+        if let Some(existing) = self.slot_tag[slot] {
+            if existing != global_sb_idx {
+                // Slot collision — can't cache without evicting.
+                // Return false to let the write go through the normal path.
+                return false;
+            }
+        }
+
+        // Copy data into cache slot.
+        let slot_buf = self.buf.add(slot * SUB_BLOCK_SIZE);
+        std::ptr::copy_nonoverlapping(data, slot_buf.add(off_in_sb), len);
+
+        // Update slot metadata.
+        if self.slot_tag[slot].is_none() {
+            self.dirty_count += 1;
+        }
+        self.slot_tag[slot] = Some(global_sb_idx);
+        // Extend valid range to cover this write.
+        let (prev_off, prev_len) = self.slot_valid[slot];
+        if prev_len == 0 {
+            self.slot_valid[slot] = (off_in_sb, len);
+        } else {
+            let new_start = prev_off.min(off_in_sb);
+            let new_end = (prev_off + prev_len).max(off_in_sb + len);
+            self.slot_valid[slot] = (new_start, new_end - new_start);
+        }
+
+        true
+    }
+
+    /// Check if a read can be served from the cache.
+    /// Returns a pointer to the cached data if the requested range
+    /// is fully covered by a cache slot.
+    unsafe fn lookup(&self, global_sb_idx: u64, off_in_sb: usize, len: usize) -> Option<*const u8> {
+        if self.buf.is_null() {
+            return None;
+        }
+        let slot = (global_sb_idx as usize) % WRITE_CACHE_SLOTS;
+        if self.slot_tag[slot] != Some(global_sb_idx) {
+            return None;
+        }
+        let (valid_off, valid_len) = self.slot_valid[slot];
+        if off_in_sb >= valid_off && off_in_sb + len <= valid_off + valid_len {
+            Some(self.buf.add(slot * SUB_BLOCK_SIZE).add(off_in_sb) as *const u8)
+        } else {
+            None
+        }
+    }
+
+    /// Check if flush is needed (dirty count exceeds threshold).
+    fn needs_flush(&self) -> bool {
+        self.dirty_count >= self.flush_threshold
+    }
+
+    /// Collect dirty slots for flushing. Returns (slot_index, global_sb_idx, off, len) tuples
+    /// sorted by global_sb_idx for write coalescing.
+    fn collect_dirty(&self) -> Vec<(usize, u64, usize, usize)> {
+        let mut dirty: Vec<(usize, u64, usize, usize)> = self
+            .slot_tag
+            .iter()
+            .enumerate()
+            .filter_map(|(i, tag)| {
+                tag.map(|sb_idx| {
+                    let (off, len) = self.slot_valid[i];
+                    (i, sb_idx, off, len)
+                })
+            })
+            .collect();
+        dirty.sort_by_key(|&(_, sb_idx, _, _)| sb_idx);
+        dirty
+    }
+
+    /// Mark a slot as clean after successful flush.
+    fn mark_clean(&mut self, slot: usize) {
+        if self.slot_tag[slot].is_some() {
+            self.slot_tag[slot] = None;
+            self.slot_valid[slot] = (0, 0);
+            self.dirty_count = self.dirty_count.saturating_sub(1);
+        }
+    }
+}
+
+static mut WRITE_CACHES: Option<HashMap<String, WriteCache>> = None;
+
+/// Get or create write cache for a volume.
+/// SAFETY: must be called on the SPDK reactor thread.
+unsafe fn write_cache(volume_name: &str) -> &mut WriteCache {
+    let caches = WRITE_CACHES.get_or_insert_with(HashMap::new);
+    caches
+        .entry(volume_name.to_string())
+        .or_insert_with(|| WriteCache::new())
+}
+
+/// Flush dirty cache slots to backend. Called from the reactor thread.
+/// Batches adjacent sub-blocks into single backend writes for coalescing.
+unsafe fn flush_write_cache(
+    volume_name: &str,
+    cache: &ReactorBdevCache,
+    bdev_ctx: *const BdevCtx,
+    vol_base: u64,
+) {
+    let wc = write_cache(volume_name);
+    if wc.dirty_count == 0 {
+        return;
+    }
+
+    let dirty = wc.collect_dirty();
+    if dirty.is_empty() {
+        return;
+    }
+
+    // Flush each dirty slot individually (coalescing of adjacent slots
+    // is a future optimization — for now, per-slot flush is correct and
+    // still much faster than per-I/O backend writes).
+    for &(slot, global_sb_idx, _off_in_sb, _len) in &dirty {
+        let chunk_idx = (global_sb_idx as usize) / sub_block::SUB_BLOCKS_PER_CHUNK;
+        let sb_idx = (global_sb_idx as usize) % sub_block::SUB_BLOCKS_PER_CHUNK;
+        let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
+        let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx);
+        let slot_buf = wc.buf.add(slot * SUB_BLOCK_SIZE) as *mut c_void;
+
+        // Write the full sub-block to backend.
+        let rc = ffi::spdk_bdev_write(
+            cache.desc,
+            cache.channel,
+            slot_buf,
+            bdev_offset,
+            SUB_BLOCK_SIZE as u64,
+            Some(flush_write_done_cb),
+            std::ptr::null_mut(),
+        );
+        if rc == 0 {
+            // Update dirty bitmap.
+            if !bdev_ctx.is_null() {
+                let ctx = &*bdev_ctx;
+                if chunk_idx < ctx.dirty_bitmaps.len() {
+                    ctx.dirty_bitmaps[chunk_idx]
+                        .fetch_or(1u64 << sb_idx, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            wc.mark_clean(slot);
+        } else {
+            warn!("write cache flush: spdk_bdev_write failed rc={}", rc);
+        }
+    }
+}
+
+/// Dummy completion callback for cache flush writes.
+unsafe extern "C" fn flush_write_done_cb(
+    child_io: *mut ffi::spdk_bdev_io,
+    _success: bool,
+    _ctx: *mut c_void,
+) {
+    ffi::spdk_bdev_free_io(child_io);
+}
+
+/// Context for an in-flight prefetch I/O.
+struct PrefetchCtx {
+    pub(crate) volume_name: String,
+    generation: u64,
+    buf: *mut c_void,
+    buf_size: usize,
+    offset: u64,
+    len: u64,
+}
+
+/// Prefetch completion callback. Runs on the SPDK reactor thread.
+unsafe extern "C" fn prefetch_done_cb(
+    child_io: *mut ffi::spdk_bdev_io,
+    success: bool,
+    ctx: *mut c_void,
+) {
+    let pctx = Box::from_raw(ctx as *mut PrefetchCtx);
+    ffi::spdk_bdev_free_io(child_io);
+
+    let ra = readahead_state(&pctx.volume_name);
+    if ra.generation != pctx.generation || !success {
+        // Stale or failed: free the buffer.
+        reactor_dispatch::release_dma_buf_public(pctx.buf, pctx.buf_size);
+        return;
+    }
+
+    ra.prefetch_buf = pctx.buf;
+    ra.prefetch_buf_size = pctx.buf_size;
+    ra.prefetch_offset = pctx.offset;
+    ra.prefetch_len = pctx.len;
+    ra.prefetch_ready = true;
+}
+
+/// Issue a prefetch read for the next `window_sub_blocks` sub-blocks.
+/// Only prefetches within the same chunk — does not cross chunk boundaries.
+/// SAFETY: must be called on the SPDK reactor thread.
+unsafe fn issue_prefetch(
+    ra: &mut ReadaheadState,
+    cache: &ReactorBdevCache,
+    volume_name: &str,
+    chunk_base: u64,
+    chunk_idx: usize,
+    next_offset: u64,
+) {
+    let pf_chunk_idx = sub_block::chunk_index(next_offset) as usize;
+    if pf_chunk_idx != chunk_idx {
+        return; // Don't cross chunk boundary.
+    }
+    let pf_sb_idx = sub_block::sub_block_index(next_offset);
+    let remaining = (sub_block::SUB_BLOCKS_PER_CHUNK - pf_sb_idx) as u32;
+    let pf_sbs = ra.window_sub_blocks.min(remaining);
+    if pf_sbs == 0 {
+        return;
+    }
+    let pf_len = pf_sbs as u64 * sub_block::SUB_BLOCK_SIZE as u64;
+    let pf_aligned = (pf_len + cache.block_size - 1) & !(cache.block_size - 1);
+    let pf_buf = reactor_dispatch::acquire_dma_buf_public(pf_aligned as usize);
+    if pf_buf.is_null() {
+        return;
+    }
+    let pf_bdev_offset = sub_block::backend_sub_block_offset(chunk_base, pf_sb_idx);
+    // The DMA read starts at the sub-block boundary, so prefetch_offset
+    // must be the volume-relative offset of that boundary — NOT next_offset,
+    // which may be mid-sub-block (e.g. 4KB reads within a 64KB sub-block).
+    let pf_volume_offset =
+        chunk_idx as u64 * CHUNK_SIZE as u64 + pf_sb_idx as u64 * SUB_BLOCK_SIZE as u64;
+    let pf_ctx = Box::new(PrefetchCtx {
+        volume_name: volume_name.to_string(),
+        generation: ra.generation,
+        buf: pf_buf,
+        buf_size: pf_aligned as usize,
+        offset: pf_volume_offset,
+        len: pf_len,
+    });
+    let rc = ffi::spdk_bdev_read(
+        cache.desc,
+        cache.channel,
+        pf_buf,
+        pf_bdev_offset,
+        pf_aligned,
+        Some(prefetch_done_cb),
+        Box::into_raw(pf_ctx) as *mut c_void,
+    );
+    if rc != 0 {
+        reactor_dispatch::release_dma_buf_public(pf_buf, pf_aligned as usize);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Reactor-native backend bdev cache (for zero-crossing I/O)
 // ---------------------------------------------------------------------------
 // Cached descriptor + channel for the backend bdev, used directly from
@@ -810,8 +1218,8 @@ struct ReactorWriteCtx {
     bdev_ctx: *const BdevCtx,
     /// Chunk index for bitmap update.
     chunk_idx: usize,
-    /// Sub-block index for bitmap update.
-    sb_idx: usize,
+    /// Bitmask of sub-blocks to mark dirty (supports multi-sub-block writes).
+    dirty_mask: u64,
 }
 
 /// Context passed to reactor-native read completion callback.
@@ -822,12 +1230,18 @@ struct ReactorReadCtx {
     dma_buf: *mut c_void,
     /// Size of dma_buf allocation.
     dma_len: usize,
-    /// Destination iov base pointer.
-    dst_base: *mut u8,
-    /// Bytes to copy to dst.
-    dst_len: usize,
+    /// Total bytes to copy.
+    total_len: usize,
+    /// Destination iov descriptors: (base_ptr, len) pairs.
+    iovs: Vec<(usize, usize)>,
     /// Offset within dma_buf where requested data starts.
     buf_offset: usize,
+    /// Dirty bitmap for the chunk (u64::MAX means all dirty, skip zero-fill).
+    bitmap: u64,
+    /// First sub-block index in this read.
+    sb_start: usize,
+    /// Offset within first sub-block.
+    off_in_first_sb: usize,
 }
 
 /// Reactor-native write completion. Runs on reactor thread.
@@ -842,10 +1256,9 @@ unsafe extern "C" fn reactor_write_done_cb(
     let bdev_ctx = &*rctx.bdev_ctx;
     if success {
         // Update dirty bitmap — direct array index, atomic fetch_or.
-        // No DashMap lookup, no String hash, no pointer chasing.
         if rctx.chunk_idx < bdev_ctx.dirty_bitmaps.len() {
             bdev_ctx.dirty_bitmaps[rctx.chunk_idx]
-                .fetch_or(1u64 << rctx.sb_idx, std::sync::atomic::Ordering::Relaxed);
+                .fetch_or(rctx.dirty_mask, std::sync::atomic::Ordering::Relaxed);
         }
         ffi::spdk_bdev_io_complete(
             rctx.parent_io,
@@ -866,7 +1279,26 @@ unsafe extern "C" fn reactor_write_done_cb(
     }
 }
 
-/// Reactor-native read completion. Runs on reactor thread.
+/// Direct read completion — data is already in the iov buffer (no DMA copy needed).
+unsafe extern "C" fn reactor_read_done_direct_cb(
+    child_io: *mut ffi::spdk_bdev_io,
+    success: bool,
+    ctx: *mut c_void,
+) {
+    let rctx = Box::from_raw(ctx as *mut ReactorReadCtx);
+    ffi::spdk_bdev_free_io(child_io);
+
+    let status = if success {
+        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS
+    } else {
+        error!("reactor_read_done_direct_cb: backend read failed");
+        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+    };
+    ffi::spdk_bdev_io_complete(rctx.parent_io, status);
+    // No DMA buffer to free — data was read directly into iov.
+}
+
+/// Reactor-native read completion with DMA scatter. Runs on reactor thread.
 unsafe extern "C" fn reactor_read_done_cb(
     child_io: *mut ffi::spdk_bdev_io,
     success: bool,
@@ -876,10 +1308,23 @@ unsafe extern "C" fn reactor_read_done_cb(
     ffi::spdk_bdev_free_io(child_io);
 
     if success {
-        // Copy from DMA buffer to the NVMe-oF iov buffer.
-        let src = (rctx.dma_buf as *const u8).add(rctx.buf_offset);
-        let to_copy = rctx.dst_len;
-        std::ptr::copy_nonoverlapping(src, rctx.dst_base, to_copy);
+        // Scatter from DMA buffer into iov entries.
+        let src_base = (rctx.dma_buf as *const u8).add(rctx.buf_offset);
+        let mut src_off = 0usize;
+        for &(dst_ptr, dst_len) in &rctx.iovs {
+            let to_copy = dst_len.min(rctx.total_len.saturating_sub(src_off));
+            if to_copy > 0 {
+                std::ptr::copy_nonoverlapping(src_base.add(src_off), dst_ptr as *mut u8, to_copy);
+            }
+            src_off += to_copy;
+            if src_off >= rctx.total_len {
+                break;
+            }
+        }
+
+        // Note: bitmap-based zero-fill is disabled (bitmap always u64::MAX)
+        // due to race between tokio writes and reactor reads.
+
         ffi::spdk_bdev_io_complete(
             rctx.parent_io,
             ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
@@ -897,21 +1342,21 @@ unsafe extern "C" fn reactor_read_done_cb(
 }
 
 /// Per-bdev tracking entry.
-struct NovastorBdevEntry {
-    volume_name: String,
+pub(crate) struct NovastorBdevEntry {
+    pub(crate) volume_name: String,
     /// The SPDK bdev pointer, needed for unregister.
     bdev_ptr: usize,
     /// The BdevCtx pointer, used as the io_device key for unregister.
-    ctx_ptr: usize,
+    pub(crate) ctx_ptr: usize,
 }
 
 /// Bdev context stored in `bdev->ctxt`. Points back to the volume name
 /// and holds the per-volume atomic dirty bitmap (flat array, no HashMap).
-struct BdevCtx {
-    volume_name: String,
+pub(crate) struct BdevCtx {
+    pub(crate) volume_name: String,
     /// Flat array of AtomicU64, one per chunk. Direct index by chunk_idx —
     /// no DashMap lookup, no hashing, no pointer chasing.
-    dirty_bitmaps: Box<[std::sync::atomic::AtomicU64]>,
+    pub(crate) dirty_bitmaps: Box<[std::sync::atomic::AtomicU64]>,
     /// Pre-allocated pool of write completion contexts to avoid per-I/O
     /// Box::new allocation. The reactor is single-threaded so no contention.
     write_ctx_pool: Mutex<Vec<Box<ReactorWriteCtx>>>,
@@ -998,7 +1443,7 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
                 parent_io: std::ptr::null_mut(),
                 bdev_ctx: std::ptr::null(),
                 chunk_idx: 0,
-                sb_idx: 0,
+                dirty_mask: 0,
             })
         })
         .collect();
@@ -1282,7 +1727,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
             }
 
             // Check if we can use the reactor-native fast path:
-            // single sub-block, 512-byte aligned offset and length.
+            // same chunk, 512-byte aligned offset and length, single iov.
             let chunk_idx = sub_block::chunk_index(offset) as usize;
             let sb_idx = sub_block::sub_block_index(offset);
             let off_in_sb = sub_block::offset_in_sub_block(offset);
@@ -1290,64 +1735,247 @@ unsafe extern "C" fn bdev_submit_request_cb(
             let end_chunk_idx = sub_block::chunk_index(offset + length - 1) as usize;
             let aligned = (off_in_sb as u64) % 512 == 0 && length % 512 == 0;
 
-            if aligned && chunk_idx == end_chunk_idx && sb_idx == end_sb_idx && iovcnt == 1 {
-                // ---- REACTOR FAST PATH: single sub-block read ----
-                if let (Ok(backend), Ok(vol_base)) = (
-                    get_backend_bdev_name(),
-                    get_volume_base_offset(&volume_name),
-                ) {
+            if aligned && chunk_idx == end_chunk_idx {
+                // ---- REACTOR FAST PATH: single-chunk read (any iovcnt) ----
+                let backend_res = get_backend_bdev_name();
+                let vol_base_res = get_volume_base_offset(&volume_name);
+                if let (Ok(backend), Ok(vol_base)) = (backend_res, vol_base_res) {
                     if let Some(cache) = reactor_cache_open(backend) {
                         let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
                         let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx)
                             + off_in_sb as u64;
 
-                        // Align length up to block_size.
-                        let aligned_len = (length + cache.block_size - 1) & !(cache.block_size - 1);
+                        // --- Write cache lookup: serve reads from cached writes ---
+                        if sb_idx == end_sb_idx && length as usize <= SUB_BLOCK_SIZE {
+                            let global_sb_idx = chunk_idx as u64
+                                * sub_block::SUB_BLOCKS_PER_CHUNK as u64
+                                + sb_idx as u64;
+                            let wc = write_cache(&volume_name);
+                            if let Some(cached) =
+                                wc.lookup(global_sb_idx, off_in_sb, length as usize)
+                            {
+                                // Serve read from write cache — zero backend I/O.
+                                let mut dst_off = 0usize;
+                                for i in 0..iovcnt {
+                                    let iov = &*iovs.add(i);
+                                    let to_copy = iov.iov_len.min(length as usize - dst_off);
+                                    if to_copy > 0 {
+                                        std::ptr::copy_nonoverlapping(
+                                            cached.add(dst_off),
+                                            iov.iov_base as *mut u8,
+                                            to_copy,
+                                        );
+                                    }
+                                    dst_off += to_copy;
+                                }
+                                ffi::spdk_bdev_io_complete(
+                                    bdev_io,
+                                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                                );
+                                return;
+                            }
+                        }
 
-                        let dma_buf =
-                            reactor_dispatch::acquire_dma_buf_public(aligned_len as usize);
-                        if dma_buf.is_null() {
+                        // --- Readahead: update state and check for prefetch hit ---
+                        let ra = readahead_state(&volume_name);
+                        if offset == ra.last_end_offset {
+                            ra.sequential_count = ra.sequential_count.saturating_add(1);
+                            if ra.window_sub_blocks == 0 {
+                                ra.window_sub_blocks = 2;
+                            }
+                        } else {
+                            ra.reset();
+                            ra.sequential_count = 1;
+                        }
+                        ra.last_end_offset = offset + length;
+
+                        // Prefetch HIT: serve from prefetch buffer.
+                        if ra.prefetch_ready
+                            && offset >= ra.prefetch_offset
+                            && offset + length <= ra.prefetch_offset + ra.prefetch_len
+                        {
+                            // Scatter from prefetch buffer into iovs.
+                            let pf_off = (offset - ra.prefetch_offset) as usize;
+                            let src = (ra.prefetch_buf as *const u8).add(pf_off);
+                            let mut src_off = 0usize;
+                            for i in 0..iovcnt {
+                                let iov = &*iovs.add(i);
+                                let to_copy = iov.iov_len.min(length as usize - src_off);
+                                if to_copy > 0 {
+                                    std::ptr::copy_nonoverlapping(
+                                        src.add(src_off),
+                                        iov.iov_base as *mut u8,
+                                        to_copy,
+                                    );
+                                }
+                                src_off += to_copy;
+                                if src_off >= length as usize {
+                                    break;
+                                }
+                            }
+
+                            // Free consumed prefetch buffer.
+                            reactor_dispatch::release_dma_buf_public(
+                                ra.prefetch_buf,
+                                ra.prefetch_buf_size,
+                            );
+                            ra.prefetch_buf = std::ptr::null_mut();
+                            ra.prefetch_ready = false;
+                            ra.window_sub_blocks = (ra.window_sub_blocks * 2).min(32);
+
+                            // Issue NEXT prefetch BEFORE completing parent I/O.
+                            let next_off = offset + length;
+                            issue_prefetch(
+                                ra,
+                                cache,
+                                &volume_name,
+                                chunk_base,
+                                chunk_idx,
+                                next_off,
+                            );
+
+                            // NOW complete the parent I/O.
                             ffi::spdk_bdev_io_complete(
                                 bdev_io,
-                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
+                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
                             );
                             return;
                         }
 
-                        let iov = &*iovs;
-                        let rctx = Box::new(ReactorReadCtx {
-                            parent_io: bdev_io,
-                            dma_buf,
-                            dma_len: aligned_len as usize,
-                            dst_base: iov.iov_base as *mut u8,
-                            dst_len: length as usize,
-                            buf_offset: 0,
-                        });
-                        let rctx_ptr = Box::into_raw(rctx) as *mut c_void;
+                        // If prefetch was ready but didn't cover, discard it.
+                        if ra.prefetch_ready {
+                            reactor_dispatch::release_dma_buf_public(
+                                ra.prefetch_buf,
+                                ra.prefetch_buf_size,
+                            );
+                            ra.prefetch_buf = std::ptr::null_mut();
+                            ra.prefetch_ready = false;
+                        }
 
-                        let rc = ffi::spdk_bdev_read(
-                            cache.desc,
-                            cache.channel,
-                            dma_buf,
-                            bdev_offset,
-                            aligned_len,
-                            Some(reactor_read_done_cb),
-                            rctx_ptr,
-                        );
-                        if rc != 0 {
-                            let _ = Box::from_raw(rctx_ptr as *mut ReactorReadCtx);
-                            reactor_dispatch::release_dma_buf_public(dma_buf, aligned_len as usize);
-                            ffi::spdk_bdev_io_complete(
-                                bdev_io,
-                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
+                        // --- Normal read path ---
+                        let aligned_len = (length + cache.block_size - 1) & !(cache.block_size - 1);
+
+                        if iovcnt == 1 && length == aligned_len {
+                            // Single iov, exactly aligned: read directly into
+                            // the NVMe-oF transport's buffer — zero DMA alloc.
+                            let iov = &*iovs;
+                            let rctx = Box::new(ReactorReadCtx {
+                                parent_io: bdev_io,
+                                dma_buf: std::ptr::null_mut(),
+                                dma_len: 0,
+                                total_len: length as usize,
+                                iovs: vec![(iov.iov_base as usize, iov.iov_len)],
+                                buf_offset: 0,
+                                bitmap: u64::MAX,
+                                sb_start: sb_idx,
+                                off_in_first_sb: off_in_sb,
+                            });
+                            let rctx_ptr = Box::into_raw(rctx) as *mut c_void;
+
+                            let rc = ffi::spdk_bdev_read(
+                                cache.desc,
+                                cache.channel,
+                                iov.iov_base,
+                                bdev_offset,
+                                aligned_len,
+                                Some(reactor_read_done_direct_cb),
+                                rctx_ptr,
+                            );
+                            if rc != 0 {
+                                let _ = Box::from_raw(rctx_ptr as *mut ReactorReadCtx);
+                                ffi::spdk_bdev_io_complete(
+                                    bdev_io,
+                                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
+                                );
+                            }
+                        } else {
+                            // Multi-iov or unaligned: allocate DMA buffer,
+                            // read into it, scatter to iovs in callback.
+                            let dma_buf =
+                                reactor_dispatch::acquire_dma_buf_public(aligned_len as usize);
+                            if dma_buf.is_null() {
+                                error!(
+                                    "reactor read: DMA alloc failed (size={}), falling back to tokio",
+                                    aligned_len
+                                );
+                                // Fall through to tokio fallback below.
+                            } else {
+                                let mut iov_descs = Vec::with_capacity(iovcnt);
+                                for i in 0..iovcnt {
+                                    let iov = &*iovs.add(i);
+                                    iov_descs.push((iov.iov_base as usize, iov.iov_len));
+                                }
+                                let rctx = Box::new(ReactorReadCtx {
+                                    parent_io: bdev_io,
+                                    dma_buf,
+                                    dma_len: aligned_len as usize,
+                                    total_len: length as usize,
+                                    iovs: iov_descs,
+                                    buf_offset: 0,
+                                    bitmap: u64::MAX,
+                                    sb_start: sb_idx,
+                                    off_in_first_sb: off_in_sb,
+                                });
+                                let rctx_ptr = Box::into_raw(rctx) as *mut c_void;
+
+                                let rc = ffi::spdk_bdev_read(
+                                    cache.desc,
+                                    cache.channel,
+                                    dma_buf,
+                                    bdev_offset,
+                                    aligned_len,
+                                    Some(reactor_read_done_cb),
+                                    rctx_ptr,
+                                );
+                                if rc != 0 {
+                                    let _ = Box::from_raw(rctx_ptr as *mut ReactorReadCtx);
+                                    reactor_dispatch::release_dma_buf_public(
+                                        dma_buf,
+                                        aligned_len as usize,
+                                    );
+                                    ffi::spdk_bdev_io_complete(
+                                        bdev_io,
+                                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
+                                    );
+                                }
+                                // Issue prefetch after normal read if sequential.
+                                if ra.sequential_count >= 2 {
+                                    let next_off = offset + length;
+                                    issue_prefetch(
+                                        ra,
+                                        cache,
+                                        &volume_name,
+                                        chunk_base,
+                                        chunk_idx,
+                                        next_off,
+                                    );
+                                }
+                                return; // Fast path handled.
+                            }
+                        }
+
+                        // Single-iov direct path: issue prefetch after read.
+                        if ra.sequential_count >= 2 {
+                            let next_off = offset + length;
+                            issue_prefetch(
+                                ra,
+                                cache,
+                                &volume_name,
+                                chunk_base,
+                                chunk_idx,
+                                next_off,
                             );
                         }
-                        return; // Fast path handled.
+                        return; // Fast path handled (single-iov direct or DMA fallback to tokio).
                     }
                 }
             }
 
-            // ---- TOKIO FALLBACK: multi-sub-block or complex reads ----
+            // ---- TOKIO FALLBACK: cross-chunk or unaligned reads ----
+            warn!(
+                "read tokio fallback: offset={} len={} iovcnt={} chunk={}->{} aligned={}",
+                offset, length, iovcnt, chunk_idx, end_chunk_idx, aligned
+            );
             let bdev_io_addr = bdev_io as usize;
             let mut iov_descs: Vec<(usize, usize)> = Vec::with_capacity(iovcnt);
             for i in 0..iovcnt {
@@ -1418,8 +2046,8 @@ unsafe extern "C" fn bdev_submit_request_cb(
             let end_chunk_idx = sub_block::chunk_index(offset + length - 1) as usize;
             let aligned = (off_in_sb as u64) % 512 == 0 && length % 512 == 0;
 
-            if aligned && chunk_idx == end_chunk_idx && sb_idx == end_sb_idx && iovcnt == 1 {
-                // ---- REACTOR FAST PATH: single sub-block write ----
+            if aligned && chunk_idx == end_chunk_idx {
+                // ---- REACTOR FAST PATH: single-chunk write (any iovcnt) ----
                 if let (Ok(backend), Ok(vol_base)) = (
                     get_backend_bdev_name(),
                     get_volume_base_offset(&volume_name),
@@ -1429,15 +2057,79 @@ unsafe extern "C" fn bdev_submit_request_cb(
                         let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx)
                             + off_in_sb as u64;
 
-                        // Write the iov data directly to backend.
-                        // NVMe-oF target provides DMA-safe buffers in iovs.
-                        let iov = &*iovs;
+                        // Invalidate readahead if write overlaps prefetch range.
+                        {
+                            let ra = readahead_state(&volume_name);
+                            let write_end = offset + length;
+                            if ra.prefetch_ready
+                                && offset < ra.prefetch_offset + ra.prefetch_len
+                                && write_end > ra.prefetch_offset
+                            {
+                                ra.reset();
+                            }
+                        }
+
+                        // Try write-back cache for single sub-block writes.
+                        if sb_idx == end_sb_idx && length as usize <= SUB_BLOCK_SIZE {
+                            let global_sb_idx = chunk_idx as u64
+                                * sub_block::SUB_BLOCKS_PER_CHUNK as u64
+                                + sb_idx as u64;
+                            // Gather iov data into a contiguous buffer for cache.
+                            let mut write_data = [0u8; 65536]; // stack buffer for <= 64KB
+                            let mut dst_off = 0usize;
+                            for i in 0..iovcnt {
+                                let iov = &*iovs.add(i);
+                                let to_copy = iov.iov_len.min(length as usize - dst_off);
+                                if to_copy > 0 {
+                                    std::ptr::copy_nonoverlapping(
+                                        iov.iov_base as *const u8,
+                                        write_data[dst_off..].as_mut_ptr(),
+                                        to_copy,
+                                    );
+                                }
+                                dst_off += to_copy;
+                            }
+
+                            let wc = write_cache(&volume_name);
+                            if false
+                                && wc.absorb(
+                                    global_sb_idx,
+                                    off_in_sb,
+                                    write_data.as_ptr(),
+                                    length as usize,
+                                )
+                            {
+                                // Write absorbed into cache — complete immediately.
+                                // Update dirty bitmap.
+                                let bdev_ctx = &*ctx;
+                                if chunk_idx < bdev_ctx.dirty_bitmaps.len() {
+                                    bdev_ctx.dirty_bitmaps[chunk_idx].fetch_or(
+                                        1u64 << sb_idx,
+                                        std::sync::atomic::Ordering::Relaxed,
+                                    );
+                                }
+
+                                ffi::spdk_bdev_io_complete(
+                                    bdev_io,
+                                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                                );
+
+                                // Flush if cache is getting full.
+                                if wc.needs_flush() {
+                                    flush_write_cache(&volume_name, cache, ctx, vol_base);
+                                }
+                                return;
+                            }
+                            // Cache miss (slot collision) — fall through to direct write.
+                        }
+
+                        // Gather iov data into a DMA buffer for backend write.
                         let aligned_len = (length + cache.block_size - 1) & !(cache.block_size - 1);
 
-                        // We can use the iov buffer directly if it's
-                        // exactly aligned. Otherwise copy to DMA buf.
-                        let (write_buf, needs_free) = if length == aligned_len {
-                            (iov.iov_base, false)
+                        // Single iov with exact alignment: use directly.
+                        // Otherwise: allocate DMA buffer and gather.
+                        let (write_buf, needs_free) = if iovcnt == 1 && length == aligned_len {
+                            ((&*iovs).iov_base, false)
                         } else {
                             let dma_buf =
                                 reactor_dispatch::acquire_dma_buf_public(aligned_len as usize);
@@ -1449,11 +2141,22 @@ unsafe extern "C" fn bdev_submit_request_cb(
                                 return;
                             }
                             std::ptr::write_bytes(dma_buf as *mut u8, 0, aligned_len as usize);
-                            std::ptr::copy_nonoverlapping(
-                                iov.iov_base as *const u8,
-                                dma_buf as *mut u8,
-                                length as usize,
-                            );
+                            let mut dst_off = 0usize;
+                            for i in 0..iovcnt {
+                                let iov = &*iovs.add(i);
+                                let to_copy = iov.iov_len.min(length as usize - dst_off);
+                                if to_copy > 0 {
+                                    std::ptr::copy_nonoverlapping(
+                                        iov.iov_base as *const u8,
+                                        (dma_buf as *mut u8).add(dst_off),
+                                        to_copy,
+                                    );
+                                }
+                                dst_off += to_copy;
+                                if dst_off >= length as usize {
+                                    break;
+                                }
+                            }
                             (dma_buf, true)
                         };
 
@@ -1470,13 +2173,19 @@ unsafe extern "C" fn bdev_submit_request_cb(
                                     parent_io: std::ptr::null_mut(),
                                     bdev_ctx: std::ptr::null(),
                                     chunk_idx: 0,
-                                    sb_idx: 0,
+                                    dirty_mask: 0,
                                 })
                             });
                         rctx.parent_io = bdev_io;
                         rctx.bdev_ctx = ctx;
                         rctx.chunk_idx = chunk_idx;
-                        rctx.sb_idx = sb_idx;
+                        // Compute dirty mask for all sub-blocks in this write.
+                        rctx.dirty_mask = if sb_idx == end_sb_idx {
+                            1u64 << sb_idx
+                        } else {
+                            let width = end_sb_idx - sb_idx + 1;
+                            ((1u64 << width) - 1) << sb_idx
+                        };
                         let rctx_ptr = Box::into_raw(rctx) as *mut c_void;
 
                         let rc = ffi::spdk_bdev_write(
@@ -1539,23 +2248,69 @@ unsafe extern "C" fn bdev_submit_request_cb(
             });
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_FLUSH => {
-            // Flush is a no-op — chunk writes are durable once acknowledged.
+            // Flush write-back cache to backend before acknowledging.
+            if let (Ok(backend), Ok(vol_base)) = (
+                get_backend_bdev_name(),
+                get_volume_base_offset(&volume_name),
+            ) {
+                if let Some(cache) = reactor_cache_open(backend) {
+                    flush_write_cache(&volume_name, cache, ctx, vol_base);
+                }
+            }
             ffi::spdk_bdev_io_complete(
                 bdev_io,
                 ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
             );
         }
-        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES
-        | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_UNMAP => {
-            // Thin provisioning: unwritten blocks already return zeros on
-            // read, so WRITE_ZEROES is a no-op. UNMAP (trim/discard)
-            // deallocates blocks — also a no-op since we don't pre-allocate.
-            // This makes mkfs.ext4 near-instant instead of writing GBs of
-            // zeros through the I/O path.
-            ffi::spdk_bdev_io_complete(
-                bdev_io,
-                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-            );
+        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES => {
+            let bdev_params = (*bdev_io).u.bdev.as_ref();
+            let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
+            let length = bdev_params.num_blocks * (*bdev).blocklen as u64;
+            let bdev_io_addr = bdev_io as usize;
+
+            let handle = get_tokio_handle().expect("tokio handle");
+            handle.spawn(async move {
+                let status = match sub_block_write_zeroes(&volume_name, offset, length).await {
+                    Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                    Err(e) => {
+                        error!("novastor_bdev: write_zeroes failed: {}", e);
+                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                    }
+                };
+                let vol_name_for_ra = volume_name.clone();
+                reactor_dispatch::send_to_reactor(move || unsafe {
+                    // Invalidate readahead if write_zeroes overlaps prefetch range.
+                    let ra = readahead_state(&vol_name_for_ra);
+                    let write_end = offset + length;
+                    if ra.prefetch_ready
+                        && offset < ra.prefetch_offset + ra.prefetch_len
+                        && write_end > ra.prefetch_offset
+                    {
+                        ra.reset();
+                    }
+                    ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
+                });
+            });
+        }
+        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_UNMAP => {
+            let bdev_params = (*bdev_io).u.bdev.as_ref();
+            let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
+            let length = bdev_params.num_blocks * (*bdev).blocklen as u64;
+            let bdev_io_addr = bdev_io as usize;
+
+            let handle = get_tokio_handle().expect("tokio handle");
+            handle.spawn(async move {
+                let status = match sub_block_write_zeroes(&volume_name, offset, length).await {
+                    Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                    Err(e) => {
+                        error!("novastor_bdev: unmap failed: {}", e);
+                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                    }
+                };
+                reactor_dispatch::send_to_reactor(move || unsafe {
+                    ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
+                });
+            });
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_RESET => {
             // Reset: gracefully accept — no state to reset.
@@ -1656,11 +2411,39 @@ unsafe extern "C" fn bdev_submit_request_cb(
 }
 
 /// Public wrapper for sub_block_write — used by NDP server.
+/// Public wrapper for sub_block_write — used by NDP server.
+/// Uses a fast path for aligned writes that fit within a single sub-block.
 pub async fn sub_block_write_pub(volume_name: &str, offset: u64, data: &[u8]) -> Result<()> {
+    let length = data.len() as u64;
+    let offset_in_sb = sub_block::offset_in_sub_block(offset) as u64;
+    let sb_end = (offset - offset_in_sb) + SUB_BLOCK_SIZE as u64;
+    if offset + length <= sb_end && offset % 512 == 0 && length % 512 == 0 {
+        let backend_bdev = get_backend_bdev_name()?;
+        let vol_base = get_volume_base_offset(volume_name)?;
+        let chunk_idx = sub_block::chunk_index(offset) as usize;
+        let sb_idx = sub_block::sub_block_index(offset);
+        let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
+        let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx)
+            + sub_block::offset_in_sub_block(offset) as u64;
+        return reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, data).await;
+    }
     sub_block_write(volume_name, offset, data).await
 }
 
 /// Public wrapper for sub_block_read — used by NDP server.
+/// Uses a fast path for aligned reads that fit within a single sub-block.
 pub async fn sub_block_read_pub(volume_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+    let offset_in_sb = sub_block::offset_in_sub_block(offset) as u64;
+    let sb_end = (offset - offset_in_sb) + SUB_BLOCK_SIZE as u64;
+    if offset + length <= sb_end && offset % 512 == 0 && length % 512 == 0 {
+        let backend_bdev = get_backend_bdev_name()?;
+        let vol_base = get_volume_base_offset(volume_name)?;
+        let chunk_idx = sub_block::chunk_index(offset) as usize;
+        let sb_idx = sub_block::sub_block_index(offset);
+        let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
+        let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx)
+            + sub_block::offset_in_sub_block(offset) as u64;
+        return reactor_dispatch::bdev_read_async(backend_bdev, bdev_offset, length).await;
+    }
     sub_block_read(volume_name, offset, length).await
 }

@@ -48,7 +48,10 @@ impl NdpMessage {
 
         let header = NdpHeader::decode(&hdr_buf)?;
 
-        let data = if header.data_length > 0 {
+        // Only read inline data for ops that carry a payload (Write, Replicate, EcShard,
+        // ReadResp). For Read requests, data_length is the requested read SIZE, not payload.
+        let has_payload = header.op.has_request_data() || header.op.has_response_data();
+        let data = if header.data_length > 0 && has_payload {
             let mut buf = vec![0u8; header.data_length as usize];
             reader.read_exact(&mut buf).await?;
 

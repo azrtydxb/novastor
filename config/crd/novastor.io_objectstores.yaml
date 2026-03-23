@@ -51,9 +51,41 @@ spec:
             type: object
           spec:
             properties:
-              dataProtection:
-                description: DataProtection configures how this volume's data is protected.
+              bucketPolicy:
                 properties:
+                  maxBucketSize:
+                    description: |-
+                      MaxBucketSize is the per-bucket storage quota in bytes.
+                      When set, individual buckets cannot exceed this size.
+                    format: int64
+                    type: integer
+                  maxBuckets:
+                    type: integer
+                  versioning:
+                    enum:
+                    - enabled
+                    - disabled
+                    - suspended
+                    type: string
+                type: object
+              dataProtection:
+                description: DataProtection configures how this object store's data
+                  is protected.
+                properties:
+                  erasureCoding:
+                    properties:
+                      dataShards:
+                        default: 4
+                        minimum: 2
+                        type: integer
+                      parityShards:
+                        default: 2
+                        minimum: 1
+                        type: integer
+                    required:
+                    - dataShards
+                    - parityShards
+                    type: object
                   mode:
                     enum:
                     - replication
@@ -71,39 +103,8 @@ spec:
                     required:
                     - factor
                     type: object
-                  erasureCoding:
-                    properties:
-                      dataShards:
-                        default: 4
-                        minimum: 2
-                        type: integer
-                      parityShards:
-                        default: 2
-                        minimum: 1
-                        type: integer
-                    required:
-                    - dataShards
-                    - parityShards
-                    type: object
                 required:
                 - mode
-                type: object
-              bucketPolicy:
-                properties:
-                  maxBucketSize:
-                    description: |-
-                      MaxBucketSize is the per-bucket storage quota in bytes.
-                      When set, individual buckets cannot exceed this size.
-                    format: int64
-                    type: integer
-                  maxBuckets:
-                    type: integer
-                  versioning:
-                    enum:
-                    - enabled
-                    - disabled
-                    - suspended
-                    type: string
                 type: object
               endpoint:
                 properties:

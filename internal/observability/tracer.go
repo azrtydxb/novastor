@@ -22,7 +22,8 @@ import (
 func InitTracer(serviceName string, logger *zap.Logger) func() {
 	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	if endpoint == "" {
-		endpoint = "tempo.novastor-system.svc:4317"
+		logger.Info("OpenTelemetry disabled (OTEL_EXPORTER_OTLP_ENDPOINT not set)")
+		return func() {}
 	}
 
 	ctx := context.Background()

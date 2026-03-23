@@ -41,10 +41,12 @@ rules:
 - apiGroups:
   - novastor.io
   resources:
+  - backendassignments
   - blockvolumes
   - objectstores
   - sharedfilesystems
   - storagepools
+  - storagequotas
   verbs:
   - create
   - delete
@@ -56,20 +58,22 @@ rules:
 - apiGroups:
   - novastor.io
   resources:
+  - backendassignments/status
+  - blockvolumes/status
+  - objectstores/status
+  - sharedfilesystems/status
+  - storagepools/status
+  - storagequotas/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - novastor.io
+  resources:
   - blockvolumes/finalizers
   - objectstores/finalizers
   - sharedfilesystems/finalizers
   - storagepools/finalizers
   verbs:
-  - update
-- apiGroups:
-  - novastor.io
-  resources:
-  - blockvolumes/status
-  - objectstores/status
-  - sharedfilesystems/status
-  - storagepools/status
-  verbs:
-  - get
-  - patch
   - update

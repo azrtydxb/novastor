@@ -1,0 +1,18 @@
+============================================================
+NovaStor Storage Benchmark
+============================================================
+Date:           Thu Mar 19 17:43:58 +04 2026
+Pod:            bench-pod-rep1
+PVC:            bench-rep1
+StorageClass:   novastor-rep1
+Node:           worker-24
+NVMe-oF Paths:  1
+Write size:     64 MB
+Label:          frontend-nvmeof rep1
+------------------------------------------------------------
+[17:43:58] 
+[17:43:58] Phase 1: WRITE tests
+[17:43:58] 
+[17:43:58]   Sequential write (bs=1M, iodepth=4, 30s)...
+[17:47:09]     -> parse error
+[17:47:09]   Random write 4K (iodepth=4, 30s)...

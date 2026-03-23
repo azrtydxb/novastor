@@ -3,6 +3,7 @@ package csi
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -12,10 +13,14 @@ import (
 
 // NodeTargetClient implements AgentTargetClient by managing gRPC connections
 // to agent nodes keyed by agent address. It is safe for concurrent use.
+//
+// When frontendPort is set, target creation is routed to the frontend controller
+// on the same node (replacing the agent's port with the frontend's port).
 type NodeTargetClient struct {
-	mu       sync.Mutex
-	clients  map[string]*agent.NVMeTargetClient
-	dialOpts []grpc.DialOption
+	mu           sync.Mutex
+	clients      map[string]*agent.NVMeTargetClient
+	dialOpts     []grpc.DialOption
+	frontendPort string // If set, replace agent port with this for target operations.
 }
 
 // NewNodeTargetClient creates a NodeTargetClient that will dial agents using
@@ -27,18 +32,54 @@ func NewNodeTargetClient(opts ...grpc.DialOption) *NodeTargetClient {
 	}
 }
 
+// NewFrontendTargetClient creates a NodeTargetClient that routes target
+// creation to the frontend controller (port 9600) instead of the agent.
+func NewFrontendTargetClient(frontendPort string, opts ...grpc.DialOption) *NodeTargetClient {
+	return &NodeTargetClient{
+		clients:      make(map[string]*agent.NVMeTargetClient),
+		dialOpts:     opts,
+		frontendPort: frontendPort,
+	}
+}
+
+// resolveAddr returns the address to dial. If frontendPort is set, it replaces
+// the port in the given address with the frontend port.
+func (n *NodeTargetClient) resolveAddr(agentAddr string) string {
+	if n.frontendPort == "" {
+		return agentAddr
+	}
+	host, _, err := net.SplitHostPort(agentAddr)
+	if err != nil {
+		// Not a host:port — just use the address with the frontend port.
+		return net.JoinHostPort(agentAddr, n.frontendPort)
+	}
+	return net.JoinHostPort(host, n.frontendPort)
+}
+
 // clientFor returns (and caches) an NVMeTargetClient for the given agent address.
 func (n *NodeTargetClient) clientFor(agentAddr string) (*agent.NVMeTargetClient, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if c, ok := n.clients[agentAddr]; ok {
+	dialAddr := n.resolveAddr(agentAddr)
+
+	// Frontend connections are not cached — the frontend may restart and
+	// cached connections become stale. Agent connections are long-lived.
+	if n.frontendPort != "" {
+		c, err := agent.NewNVMeTargetClient(dialAddr, n.dialOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("dialing NVMe target service at %s: %w", dialAddr, err)
+		}
 		return c, nil
 	}
-	c, err := agent.NewNVMeTargetClient(agentAddr, n.dialOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("dialing NVMe target service at %s: %w", agentAddr, err)
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if c, ok := n.clients[dialAddr]; ok {
+		return c, nil
 	}
-	n.clients[agentAddr] = c
+	c, err := agent.NewNVMeTargetClient(dialAddr, n.dialOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("dialing NVMe target service at %s: %w", dialAddr, err)
+	}
+	n.clients[dialAddr] = c
 	return c, nil
 }
 

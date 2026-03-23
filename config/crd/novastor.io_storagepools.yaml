@@ -30,8 +30,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: StoragePool defines a set of storage nodes and their data protection
-          policy.
+        description: StoragePool defines a set of storage nodes and their backend
+          configuration.
         properties:
           apiVersion:
             description: |-
@@ -52,9 +52,24 @@ spec:
             type: object
           spec:
             properties:
+              backendType:
+                default: lvm
+                description: |-
+                  BackendType selects the storage backend for this pool.
+                  - "file": File on existing mounted filesystem → SPDK AIO bdev
+                  - "lvm": SPDK lvol store on unbound NVMe device (thin provisioning, snapshots)
+                  - "raw": Direct SPDK NVMe bdev on unbound NVMe device (highest performance)
+                  All backends produce SPDK bdevs consumed by the chunk engine.
+                enum:
+                - file
+                - lvm
+                - raw
+                type: string
               deviceFilter:
-                description: DeviceFilter specifies which devices on selected nodes
-                  to use.
+                description: |-
+                  DeviceFilter specifies which devices on selected nodes to use.
+                  For "raw" and "lvm" backends, this selects NVMe devices to unbind and use.
+                  For "file" backend, this is ignored (use FileBackend instead).
                 properties:
                   minSize:
                     type: string
@@ -64,6 +79,25 @@ spec:
                     - ssd
                     - hdd
                     type: string
+                type: object
+              fileBackend:
+                description: FileBackend configures the file backend. Only used when
+                  backendType is "file".
+                properties:
+                  maxCapacityBytes:
+                    description: |-
+                      MaxCapacityBytes is the maximum size of the backing file per node.
+                      Defaults to 80% of available filesystem space if not set.
+                    format: int64
+                    type: integer
+                  path:
+                    default: /var/lib/novastor/file
+                    description: |-
+                      Path is the directory on each node where backing files are stored.
+                      The directory must exist and be on a mounted filesystem.
+                    type: string
+                required:
+                - path
                 type: object
               nodeSelector:
                 description: NodeSelector selects which nodes belong to this pool.
@@ -111,33 +145,6 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
-              backendType:
-                description: |-
-                  BackendType selects the storage backend for this pool.
-                  - "file": File on existing mounted filesystem → SPDK AIO bdev
-                  - "lvm": SPDK lvol store on unbound NVMe device (thin provisioning, snapshots)
-                  - "raw": Direct SPDK NVMe bdev on unbound NVMe device (highest performance)
-                default: lvm
-                enum:
-                - file
-                - lvm
-                - raw
-                type: string
-              fileBackend:
-                description: FileBackend configures the file backend. Only used when backendType
-                  is "file".
-                properties:
-                  maxCapacityBytes:
-                    description: MaxCapacityBytes limits the total capacity of the file backend.
-                    format: int64
-                    type: integer
-                  path:
-                    default: /var/lib/novastor/file
-                    description: Path is the directory path for the file backend.
-                    type: string
-                required:
-                - path
-                type: object
             required:
             - backendType
             type: object

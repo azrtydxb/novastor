@@ -62,8 +62,23 @@ spec:
               capacity:
                 type: string
               dataProtection:
-                description: DataProtection configures how this volume's data is protected.
+                description: DataProtection configures how this filesystem's data
+                  is protected.
                 properties:
+                  erasureCoding:
+                    properties:
+                      dataShards:
+                        default: 4
+                        minimum: 2
+                        type: integer
+                      parityShards:
+                        default: 2
+                        minimum: 1
+                        type: integer
+                    required:
+                    - dataShards
+                    - parityShards
+                    type: object
                   mode:
                     enum:
                     - replication
@@ -80,20 +95,6 @@ spec:
                         type: integer
                     required:
                     - factor
-                    type: object
-                  erasureCoding:
-                    properties:
-                      dataShards:
-                        default: 4
-                        minimum: 2
-                        type: integer
-                      parityShards:
-                        default: 2
-                        minimum: 1
-                        type: integer
-                    required:
-                    - dataShards
-                    - parityShards
                     type: object
                 required:
                 - mode

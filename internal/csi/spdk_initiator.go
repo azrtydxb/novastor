@@ -7,10 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/azrtydxb/novastor/internal/dataplane"
+	"github.com/azrtydxb/novastor/internal/logging"
 )
 
 // SPDKInitiator implements NVMeInitiator using the SPDK user-space data-plane.
@@ -93,7 +97,7 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 	// Clean stale NVMe-oF subsystems from previous volumes.
 	cleanStaleNVMeSubsystems()
 
-	// Connect to the owner target (single path).
+	// Connect to the owner first, then add replica paths for multipath.
 	owner := targets[0]
 	for _, t := range targets {
 		if t.IsOwner {
@@ -106,6 +110,24 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 	}
 	if err := nvmeConnect(owner.Addr, owner.Port, owner.NQN); err != nil {
 		return "", fmt.Errorf("connect to owner target %s: %w", owner.Addr, err)
+	}
+
+	// Connect remaining replica paths — NVMe multipath groups them
+	// under the same subsystem NQN automatically.
+	for _, t := range targets {
+		if t.Addr == owner.Addr {
+			continue // Already connected.
+		}
+		port := t.Port
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			port = "4430"
+		}
+		if err := nvmeConnect(t.Addr, port, t.NQN); err != nil {
+			// Non-fatal — multipath works with fewer paths.
+			logging.L.Warn("multipath: failed to connect replica path",
+				zap.String("addr", t.Addr),
+				zap.Error(err))
+		}
 	}
 
 	devicePath, err := discoverNVMeDevice(context.Background(), owner.NQN)
@@ -173,7 +195,7 @@ func nvmeConnect(addr, port, nqn string) error {
 		"-a", addr,
 		"-s", port,
 		"-n", nqn,
-		"-i", "4",
+		"-i", fmt.Sprintf("%d", runtime.NumCPU()),
 		"-k", "10",
 	}
 	// Use a stable hostnqn so the kernel groups all paths to the same

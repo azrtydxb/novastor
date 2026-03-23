@@ -1,0 +1,16 @@
+============================================================
+NovaStor Storage Benchmark
+============================================================
+Date:           Sat Mar 21 11:50:11 +04 2026
+Pod:            bench-pod-rep1
+PVC:            bench-rep1
+StorageClass:   novastor-rep1
+Node:           worker-23
+NVMe-oF Paths:  1
+Write size:     256 MB
+Label:          post-optimization SPDK reactor
+------------------------------------------------------------
+[11:50:11] 
+[11:50:11] Phase 1: WRITE tests
+[11:50:11] 
+[11:50:11]   Sequential write (bs=1M, iodepth=4, 30s)...

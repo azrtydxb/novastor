@@ -7,58 +7,96 @@
 use log::{error, info, warn};
 use ndp::{NdpHeader, NdpMessage, NdpOp};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
 use crate::bdev::novastor_bdev;
 use crate::bdev::sub_block;
 use crate::error::Result;
 
+/// Default Unix socket path for local NDP connections.
+pub const NDP_UNIX_SOCKET: &str = "/var/run/novastor/ndp.sock";
+
 /// Configuration for the NDP server.
 pub struct NdpServerConfig {
     pub listen_address: String,
     pub port: u16,
+    pub unix_socket: Option<String>,
 }
 
 impl Default for NdpServerConfig {
     fn default() -> Self {
         Self {
-            listen_address: "0.0.0.0".to_string(),
+            listen_address: "::".to_string(),
             port: 4500,
+            unix_socket: Some(NDP_UNIX_SOCKET.to_string()),
         }
     }
 }
 
-/// Start the NDP server. Listens for incoming connections and spawns
-/// a handler task per connection.
+/// Start the NDP server. Listens on both TCP (for remote) and Unix socket (for local).
 pub async fn start(config: NdpServerConfig) -> Result<()> {
+    let handle = crate::tokio_handle().clone();
+
+    // Start TCP listener
     let addr = format!("{}:{}", config.listen_address, config.port);
-    let listener = TcpListener::bind(&addr).await.map_err(|e| {
+    let tcp_listener = TcpListener::bind(&addr).await.map_err(|e| {
         crate::error::DataPlaneError::TransportError(format!("NDP bind {}: {}", addr, e))
     })?;
+    info!("NDP server listening on {} (TCP)", addr);
 
-    info!("NDP server listening on {}", addr);
-
-    tokio::spawn(async move {
+    handle.spawn(async move {
         loop {
-            match listener.accept().await {
+            match tcp_listener.accept().await {
                 Ok((stream, peer)) => {
-                    info!("NDP: new connection from {}", peer);
+                    info!("NDP: TCP connection from {}", peer);
                     stream.set_nodelay(true).ok();
-                    tokio::spawn(handle_connection(stream));
+                    crate::tokio_handle().spawn(handle_connection_generic(stream));
                 }
                 Err(e) => {
-                    error!("NDP accept error: {}", e);
+                    error!("NDP TCP accept error: {}", e);
                 }
             }
         }
     });
 
+    // Start Unix socket listener (for low-latency local connections)
+    if let Some(socket_path) = config.unix_socket {
+        let _ = std::fs::create_dir_all("/var/run/novastor");
+        let _ = std::fs::remove_file(&socket_path);
+        let unix_listener = tokio::net::UnixListener::bind(&socket_path).map_err(|e| {
+            crate::error::DataPlaneError::TransportError(format!(
+                "NDP unix bind {}: {}",
+                socket_path, e
+            ))
+        })?;
+        info!("NDP server listening on {} (Unix)", socket_path);
+
+        crate::tokio_handle().spawn(async move {
+            loop {
+                match unix_listener.accept().await {
+                    Ok((stream, _)) => {
+                        info!("NDP: Unix connection");
+                        crate::tokio_handle().spawn(handle_connection_generic(stream));
+                    }
+                    Err(e) => {
+                        error!("NDP Unix accept error: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
     Ok(())
 }
 
-async fn handle_connection(stream: tokio::net::TcpStream) {
-    let (mut reader, mut writer) = tokio::io::split(stream);
+async fn handle_connection_generic<
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
+>(
+    stream: S,
+) {
+    let (mut reader, writer) = tokio::io::split(stream);
+    let writer = Arc::new(tokio::sync::Mutex::new(writer));
 
     loop {
         let msg = match NdpMessage::read_from(&mut reader).await {
@@ -70,12 +108,18 @@ async fn handle_connection(stream: tokio::net::TcpStream) {
             }
         };
 
-        let response = handle_request(msg).await;
-
-        if let Err(e) = response.write_to(&mut writer).await {
-            warn!("NDP write error: {}", e);
-            break;
-        }
+        // Process each request concurrently — don't block the reader.
+        let w = writer.clone();
+        crate::tokio_handle().spawn(async move {
+            let response = handle_request(msg).await;
+            let mut writer = w.lock().await;
+            if let Err(e) = response.write_to(&mut *writer).await {
+                warn!("NDP write error: {}", e);
+            }
+            if let Err(e) = writer.flush().await {
+                warn!("NDP flush error: {}", e);
+            }
+        });
     }
 }
 
@@ -108,8 +152,6 @@ async fn handle_request(msg: NdpMessage) -> NdpMessage {
 }
 
 async fn handle_read(header: &NdpHeader) -> NdpMessage {
-    // Look up volume name from volume_hash.
-    // For now, we use a reverse lookup from the bdev registry.
     let volume_name = match lookup_volume(header.volume_hash) {
         Some(name) => name,
         None => {

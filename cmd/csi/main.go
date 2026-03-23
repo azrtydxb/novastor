@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	_ "google.golang.org/grpc/credentials/insecure"
 
 	"github.com/azrtydxb/novastor/internal/agent"
 	novcsi "github.com/azrtydxb/novastor/internal/csi"
@@ -488,17 +489,16 @@ func main() {
 		csi.RegisterNodeServer(srv, node)
 	}
 
-	// Build NVMe target client for controller → agent communication.
-	// Use agentDialOpts which has ServerName override for pod IP connections.
+	// Build NVMe target client — agent handles both volume creation AND NVMe-oF
+	// target via SPDK reactor (burns 1 core but zero thread crossings).
 	targetDialOpts := agentDialOpts
 	if len(targetDialOpts) == 0 {
 		targetDialOpts = dialOpts
 	}
-	nvmeTargetClient := novcsi.NewNodeTargetClient(targetDialOpts...)
+	agentTargetClient := novcsi.NewNodeTargetClient(targetDialOpts...)
 
 	// Build sub-controllers.
-	// Chunk replication/EC is handled by the Rust dataplane's chunk engine.
-	controller := novcsi.NewControllerServer(metaClient, placer, nvmeTargetClient, nil)
+	controller := novcsi.NewControllerServer(metaClient, placer, agentTargetClient, nil)
 	controllerRef = controller // Enable syncNodes to update the node name mapping.
 	syncNodes()                // Re-run to populate the mapping now that controllerRef is set.
 	snapAdapter := &snapshotStoreAdapter{client: metaClient}

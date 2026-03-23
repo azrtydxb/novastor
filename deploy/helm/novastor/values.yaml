@@ -48,8 +48,8 @@ nameOverride: ""
 fullnameOverride: ""
 
 namespace:
-  create: false
-  name: ""
+  create: true
+  name: novastor-system
 
 controller:
   replicas: 1
@@ -142,6 +142,26 @@ dataplane:
       cpu: "1"
       memory: 1Gi
       hugepages-2Mi: 2Gi
+  nodeSelector: {}
+  tolerations: []
+
+frontend:
+  enabled: true
+  image:
+    repository: novastor-frontend
+  ndpPort: 4500
+  nvmeofPort: 4431
+  controlPort: 9601
+  # Comma-separated list of chunk engine NDP addresses.
+  # Use Unix socket for local connections (lower latency than TCP).
+  chunkEngines: "/var/run/novastor/ndp.sock"
+  resources:
+    limits:
+      cpu: "1"
+      memory: 256Mi
+    requests:
+      cpu: "100m"
+      memory: 64Mi
   nodeSelector: {}
   tolerations: []
 

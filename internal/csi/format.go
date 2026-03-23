@@ -31,7 +31,12 @@ func formatDevice(ctx context.Context, devicePath, fsType string) error {
 	var cmd *exec.Cmd
 	switch fsType {
 	case "ext4":
-		cmd = exec.CommandContext(ctx, "mkfs.ext4", devicePath)
+		// -E nodiscard: skip full-volume discard during format.
+		// Our NVMe-oF target advertises WRITE_ZEROES/TRIM support,
+		// which causes mkfs to issue a full-volume discard that is
+		// extremely slow over NVMe-oF (writes real zeros).
+		// Unwritten blocks already return zeros, so discard is unnecessary.
+		cmd = exec.CommandContext(ctx, "mkfs.ext4", "-E", "nodiscard", devicePath)
 	default:
 		return fmt.Errorf("unsupported filesystem type: %s", fsType)
 	}

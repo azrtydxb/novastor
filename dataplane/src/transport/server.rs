@@ -27,7 +27,7 @@ pub struct GrpcServerConfig {
 impl Default for GrpcServerConfig {
     fn default() -> Self {
         Self {
-            listen_address: "0.0.0.0".to_string(),
+            listen_address: "::".to_string(),
             port: 9500,
             tls_ca_cert: String::new(),
             tls_server_cert: String::new(),
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn default_grpc_config() {
         let config = GrpcServerConfig::default();
-        assert_eq!(config.listen_address, "0.0.0.0");
+        assert_eq!(config.listen_address, "::");
         assert_eq!(config.port, 9500);
     }
 
