@@ -54,6 +54,13 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
+// GetConnection returns the underlying gRPC client connection. This is useful
+// for monitoring connection state changes (e.g. reconnection after dataplane
+// restart).
+func (c *Client) GetConnection() *grpc.ClientConn {
+	return c.conn
+}
+
 // ctx returns a context with the default call timeout.
 func (c *Client) ctx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), callTimeout)

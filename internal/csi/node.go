@@ -86,6 +86,9 @@ type NodeService struct {
 // NewNodeService creates a new NodeService with the given node ID, chunk client,
 // and mounter implementation.
 func NewNodeService(nodeID string, chunkClient ChunkClient, mounter Mounter) *NodeService {
+	// Clean stale NVMe connections from previous CSI pod or node reboot.
+	cleanStaleNVMeSubsystems()
+
 	return &NodeService{
 		nodeID:      nodeID,
 		chunkClient: chunkClient,
@@ -96,6 +99,9 @@ func NewNodeService(nodeID string, chunkClient ChunkClient, mounter Mounter) *No
 
 // NewNodeServiceWithTopology creates a new NodeService with topology information.
 func NewNodeServiceWithTopology(nodeID, zone, region string, chunkClient ChunkClient, mounter Mounter) *NodeService {
+	// Clean stale NVMe connections from previous CSI pod or node reboot.
+	cleanStaleNVMeSubsystems()
+
 	return &NodeService{
 		nodeID:      nodeID,
 		zone:        zone,
@@ -108,6 +114,9 @@ func NewNodeServiceWithTopology(nodeID, zone, region string, chunkClient ChunkCl
 
 // NewNodeServiceWithInitiator creates a new NodeService with an NVMe-oF initiator.
 func NewNodeServiceWithInitiator(nodeID string, chunkClient ChunkClient, mounter Mounter, initiator NVMeInitiator) *NodeService {
+	// Clean stale NVMe connections from previous CSI pod or node reboot.
+	cleanStaleNVMeSubsystems()
+
 	return &NodeService{
 		nodeID:      nodeID,
 		chunkClient: chunkClient,
@@ -119,6 +128,9 @@ func NewNodeServiceWithInitiator(nodeID string, chunkClient ChunkClient, mounter
 
 // NewNodeServiceWithInitiatorAndTopology creates a new NodeService with NVMe-oF initiator and topology.
 func NewNodeServiceWithInitiatorAndTopology(nodeID, zone, region string, chunkClient ChunkClient, mounter Mounter, initiator NVMeInitiator) *NodeService {
+	// Clean stale NVMe connections from previous CSI pod or node reboot.
+	cleanStaleNVMeSubsystems()
+
 	return &NodeService{
 		nodeID:      nodeID,
 		zone:        zone,

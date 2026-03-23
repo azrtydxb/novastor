@@ -57,6 +57,9 @@ const nvmeFabricsRoot = "/sys/class/nvme"
 // Connect runs `nvme connect` to attach an NVMe-oF target over TCP and
 // discovers the actual block device path by scanning sysfs.
 func (l *LinuxInitiator) Connect(ctx context.Context, addr, port, nqn string) (string, error) {
+	// Clean stale NVMe-oF subsystems before connecting.
+	cleanStaleNVMeSubsystems()
+
 	// Use as many I/O queues as online CPUs for maximum parallelism.
 	nrQueues := runtime.NumCPU()
 	if nrQueues < 1 {

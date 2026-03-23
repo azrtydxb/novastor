@@ -52,6 +52,10 @@ type SPDKTargetServer struct {
 	initMu   sync.Mutex
 	initDone bool
 	initErr  error
+
+	// volumes tracks active NVMe-oF targets by volume ID for reconciliation.
+	volumesMu sync.RWMutex
+	volumes   map[string]*pb.CreateTargetResponse // volumeID → response
 }
 
 // NewSPDKTargetServer creates an SPDKTargetServer that exposes NVMe-oF targets
@@ -75,6 +79,7 @@ func NewSPDKTargetServer(hostIP, baseBdev, nodeUUID string, testMode bool, dpCli
 		dpClient:   dpClient,
 		metaClient: metaClient,
 		skipNVMeF:  false, // Use SPDK reactor for NVMe-oF (burns 1 core, max performance).
+		volumes:    make(map[string]*pb.CreateTargetResponse),
 	}
 }
 
@@ -244,11 +249,15 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 			zap.String("volumeID", volumeID),
 			zap.String("bdevName", bdevName),
 		)
-		return &pb.CreateTargetResponse{
+		resp := &pb.CreateTargetResponse{
 			SubsystemNqn:  nqn,
 			TargetAddress: s.hostIP,
 			TargetPort:    fmt.Sprintf("%d", spdkTargetPort),
-		}, nil
+		}
+		s.volumesMu.Lock()
+		s.volumes[volumeID] = resp
+		s.volumesMu.Unlock()
+		return resp, nil
 	}
 
 	// Expose the chunk bdev as an NVMe-oF/TCP target via gRPC.
@@ -281,11 +290,15 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 		zap.String("bdevName", bdevName),
 	)
 
-	return &pb.CreateTargetResponse{
+	resp := &pb.CreateTargetResponse{
 		SubsystemNqn:  nqn,
 		TargetAddress: s.hostIP,
 		TargetPort:    fmt.Sprintf("%d", spdkTargetPort),
-	}, nil
+	}
+	s.volumesMu.Lock()
+	s.volumes[volumeID] = resp
+	s.volumesMu.Unlock()
+	return resp, nil
 }
 
 // DeleteTarget removes the NVMe-oF target and the volume via the data-plane.
@@ -312,6 +325,10 @@ func (s *SPDKTargetServer) DeleteTarget(ctx context.Context, req *pb.DeleteTarge
 		)
 	}
 
+	s.volumesMu.Lock()
+	delete(s.volumes, volumeID)
+	s.volumesMu.Unlock()
+
 	logging.L.Info("spdk target: target deleted", zap.String("volumeID", volumeID))
 	return &pb.DeleteTargetResponse{}, nil
 }
@@ -335,4 +352,36 @@ func (s *SPDKTargetServer) SetANAState(ctx context.Context, req *pb.SetANAStateR
 	)
 
 	return &pb.SetANAStateResponse{}, nil
+}
+
+// ListTargets returns all currently active NVMe-oF targets on this node.
+// Used by the reconciliation loop to compare desired vs actual state.
+func (s *SPDKTargetServer) ListTargets(ctx context.Context, req *pb.ListTargetsRequest) (*pb.ListTargetsResponse, error) {
+	s.volumesMu.RLock()
+	defer s.volumesMu.RUnlock()
+
+	entries := make([]*pb.TargetEntry, 0, len(s.volumes))
+	for volID, resp := range s.volumes {
+		entries = append(entries, &pb.TargetEntry{
+			VolumeId:      volID,
+			SubsystemNqn:  resp.GetSubsystemNqn(),
+			TargetAddress: resp.GetTargetAddress(),
+			TargetPort:    resp.GetTargetPort(),
+		})
+	}
+	return &pb.ListTargetsResponse{Targets: entries}, nil
+}
+
+// ResetInit clears the init state so ensureChunkStore will retry.
+// Called after dataplane restart when all SPDK state is lost.
+func (s *SPDKTargetServer) ResetInit() {
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	s.initDone = false
+	s.initErr = nil
+}
+
+// EnsureChunkStore is the public wrapper for ensureChunkStore.
+func (s *SPDKTargetServer) EnsureChunkStore() error {
+	return s.ensureChunkStore()
 }

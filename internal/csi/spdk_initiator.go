@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -108,7 +109,7 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 	if _, err := strconv.ParseUint(owner.Port, 10, 16); err != nil {
 		owner.Port = "4430"
 	}
-	if err := nvmeConnect(owner.Addr, owner.Port, owner.NQN); err != nil {
+	if err := nvmeConnectIdempotent(owner.Addr, owner.Port, owner.NQN); err != nil {
 		return "", fmt.Errorf("connect to owner target %s: %w", owner.Addr, err)
 	}
 
@@ -122,7 +123,7 @@ func (s *SPDKInitiator) ConnectMultipath(_ context.Context, targets []TargetInfo
 		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
 			port = "4430"
 		}
-		if err := nvmeConnect(t.Addr, port, t.NQN); err != nil {
+		if err := nvmeConnectIdempotent(t.Addr, port, t.NQN); err != nil {
 			// Non-fatal — multipath works with fewer paths.
 			logging.L.Warn("multipath: failed to connect replica path",
 				zap.String("addr", t.Addr),
@@ -173,9 +174,24 @@ func cleanStaleNVMeSubsystems() {
 		hasLive := false
 		for _, ctrl := range ctrls {
 			state, err := os.ReadFile(ctrl + "/state")
-			if err == nil && strings.TrimSpace(string(state)) == "live" {
+			if err != nil {
+				continue
+			}
+			s := strings.TrimSpace(string(state))
+			if s == "live" {
 				hasLive = true
 				break
+			}
+			// Disconnect controllers stuck in connecting/reconnecting > 30s.
+			if s == "connecting" || s == "reconnecting" {
+				info, statErr := os.Stat(ctrl)
+				if statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
+					logging.L.Warn("disconnecting stuck NVMe controller",
+						zap.String("nqn", nqn),
+						zap.String("state", s))
+					_ = nvmeDisconnect(nqn)
+					break
+				}
 			}
 		}
 
@@ -184,6 +200,37 @@ func cleanStaleNVMeSubsystems() {
 			_ = nvmeDisconnect(nqn)
 		}
 	}
+}
+
+// isNVMeConnected checks sysfs for a live controller to the given NQN.
+func isNVMeConnected(nqn string) bool {
+	entries, err := os.ReadDir("/sys/class/nvme-subsystem")
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		subsysDir := "/sys/class/nvme-subsystem/" + entry.Name()
+		nqnData, _ := os.ReadFile(subsysDir + "/subsysnqn")
+		if strings.TrimSpace(string(nqnData)) != nqn {
+			continue
+		}
+		ctrls, _ := filepath.Glob(subsysDir + "/nvme*")
+		for _, ctrl := range ctrls {
+			state, _ := os.ReadFile(ctrl + "/state")
+			if strings.TrimSpace(string(state)) == "live" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// nvmeConnectIdempotent connects only if no live controller exists for this NQN.
+func nvmeConnectIdempotent(addr, port, nqn string) error {
+	if isNVMeConnected(nqn) {
+		return nil
+	}
+	return nvmeConnect(addr, port, nqn)
 }
 
 // nvmeConnect runs `nvme connect` to attach the kernel to an existing

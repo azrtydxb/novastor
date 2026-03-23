@@ -24,6 +24,10 @@ service NVMeTargetService {
   // volume's NVMe-oF target. Used during active-passive failover to transition
   // a target between optimized (active) and inaccessible (passive) states.
   rpc SetANAState(SetANAStateRequest) returns (SetANAStateResponse);
+
+  // ListTargets returns all currently active NVMe-oF targets on this node.
+  // Used by the reconciliation loop to compare desired vs actual state.
+  rpc ListTargets(ListTargetsRequest) returns (ListTargetsResponse);
 }
 
 message CreateTargetRequest {
@@ -94,3 +98,16 @@ message SetANAStateRequest {
 }
 
 message SetANAStateResponse {}
+
+message ListTargetsRequest {}
+
+message ListTargetsResponse {
+  repeated TargetEntry targets = 1;
+}
+
+message TargetEntry {
+  string volume_id = 1;
+  string subsystem_nqn = 2;
+  string target_address = 3;
+  string target_port = 4;
+}

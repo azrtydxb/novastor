@@ -24,8 +24,12 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -89,6 +93,8 @@ func refreshCapacity(dpClient *dataplane.Client, bdevName string) {
 	stats, err := dpClient.ChunkStoreStats(bdevName)
 	if err != nil {
 		logging.L.Debug("capacity refresh: ChunkStoreStats failed", zap.Error(err))
+		localCapacity.Store(-1)
+		localUsedBytes.Store(0)
 		return
 	}
 	totalBytes := int64(stats.GetTotalSlots()) * int64(stats.GetChunkSize())
@@ -356,6 +362,21 @@ func main() {
 
 	// Connect to the Rust data-plane via gRPC with mTLS.
 	dpDialOpts := []grpc.DialOption{grpc.WithStatsHandler(otelgrpc.NewClientHandler())}
+	dpDialOpts = append(dpDialOpts,
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                10 * time.Second,
+			Timeout:             5 * time.Second,
+			PermitWithoutStream: true,
+		}),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: backoff.Config{
+				BaseDelay:  1 * time.Second,
+				Multiplier: 1.6,
+				MaxDelay:   30 * time.Second,
+			},
+			MinConnectTimeout: 5 * time.Second,
+		}),
+	)
 	if len(dialOpts) > 0 {
 		dpDialOpts = append(dpDialOpts, dialOpts...)
 	} else {
@@ -385,38 +406,50 @@ func main() {
 	// in-memory SPDK state is lost but the CRDs still say "Ready").
 	// InitChunkStore is idempotent; if it already exists, the error
 	// contains "already" and we move on.
+	// Uses exponential backoff to handle slow dataplane startup.
+	var chunkStoreReady atomic.Bool
 	go func() {
-		// Small delay to let the dataplane finish SPDK init.
-		time.Sleep(3 * time.Second)
-		// Use K8s hostname as node ID for the dataplane too, so it matches
-		// the topology pushed from metadata (which uses hostnames).
-		// The persistent UUID is stored but used for future multi-cluster identity.
-		if _, err := dpClient.InitChunkStore(*spdkBaseBdev, *nodeID); err != nil {
-			if !strings.Contains(err.Error(), "already") {
-				logging.L.Warn("startup: chunk store init failed (will be retried by reconciler)",
-					zap.String("bdev", *spdkBaseBdev), zap.Error(err))
-			} else {
-				logging.L.Info("startup: chunk store already initialized",
-					zap.String("bdev", *spdkBaseBdev))
-			}
-		} else {
-			logging.L.Info("startup: chunk store initialized",
-				zap.String("bdev", *spdkBaseBdev))
+		delays := []time.Duration{
+			2 * time.Second,
+			4 * time.Second,
+			8 * time.Second,
+			16 * time.Second,
+			30 * time.Second,
 		}
+		attempt := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 
-		// Query real capacity from the dataplane so that buildNodeMeta
-		// and syncTopology use actual values instead of zeros.
-		if stats, err := dpClient.ChunkStoreStats(*spdkBaseBdev); err == nil {
-			totalBytes := int64(stats.GetTotalSlots()) * int64(stats.GetChunkSize())
-			usedBytes := int64(stats.GetUsedSlots()) * int64(stats.GetChunkSize())
-			localCapacity.Store(totalBytes)
-			localUsedBytes.Store(usedBytes)
-			logging.L.Info("startup: chunk store capacity",
-				zap.Int64("totalBytes", totalBytes),
-				zap.Int64("usedBytes", usedBytes),
-			)
-		} else {
-			logging.L.Warn("startup: failed to query chunk store stats", zap.Error(err))
+			delay := 30 * time.Second
+			if attempt < len(delays) {
+				delay = delays[attempt]
+			}
+			time.Sleep(delay)
+
+			if _, err := dpClient.InitChunkStore(*spdkBaseBdev, *nodeID); err != nil {
+				if strings.Contains(err.Error(), "already") {
+					logging.L.Info("chunk store already initialized")
+				} else {
+					logging.L.Warn("chunk store init failed, retrying",
+						zap.Int("attempt", attempt+1),
+						zap.Duration("nextRetry", delay),
+						zap.Error(err))
+					attempt++
+					continue
+				}
+			}
+
+			// Query capacity after successful init.
+			refreshCapacity(dpClient, *spdkBaseBdev)
+			chunkStoreReady.Store(true)
+			logging.L.Info("chunk store ready",
+				zap.Int64("capacity", localCapacity.Load()),
+				zap.Int64("used", localUsedBytes.Load()))
+			return
 		}
 	}()
 
@@ -491,6 +524,59 @@ func main() {
 		defer fc.Stop()
 	}
 
+	// Wire the VolumeReconciler to detect and repair missing NVMe-oF
+	// targets after dataplane restarts. Only enabled when both the SPDK
+	// target server and metadata client are available.
+	var reconciler *agent.VolumeReconciler
+	if spdkServer != nil && metaClient != nil {
+		reconciler = agent.NewVolumeReconciler(*nodeID, spdkServer, metaClient)
+		go reconciler.Run(ctx)
+		logging.L.Info("volume reconciler started", zap.String("nodeID", *nodeID))
+	}
+
+	// Watch dataplane connection state. When the connection recovers
+	// after a drop (e.g. dataplane restart), re-initialise the chunk
+	// store and trigger a reconciliation pass.
+	go func() {
+		conn := dpClient.GetConnection()
+		if conn == nil {
+			return
+		}
+		var wasReady bool
+		for {
+			state := conn.GetState()
+			isReady := state == connectivity.Ready
+
+			if isReady && !wasReady {
+				logging.L.Info("dataplane connection recovered, waiting for chunk store re-init")
+				// The BackendAssignment reconciler will re-create the bdev
+				// and chunk store when its periodic resync fires (every 10min
+				// by default). To speed this up, we poll ChunkStoreStats
+				// waiting for it to become available.
+				go func() {
+					for attempt := 0; attempt < 60; attempt++ {
+						time.Sleep(5 * time.Second)
+						if _, err := dpClient.ChunkStoreStats(*spdkBaseBdev); err == nil {
+							refreshCapacity(dpClient, *spdkBaseBdev)
+							chunkStoreReady.Store(true)
+							logging.L.Info("chunk store recovered after dataplane restart")
+							if reconciler != nil {
+								reconciler.Trigger()
+							}
+							return
+						}
+					}
+					logging.L.Error("chunk store did not recover within 5 minutes")
+				}()
+			}
+			wasReady = isReady
+
+			if !conn.WaitForStateChange(ctx, state) {
+				return
+			}
+		}
+	}()
+
 	// Register ChunkService server — bridges S3/Filer gRPC chunk I/O
 	// to the Rust SPDK data-plane via gRPC.
 	chunkServer := agent.NewChunkServer(dpClient, *spdkBaseBdev)
@@ -555,6 +641,12 @@ func main() {
 		// Disable metrics/health servers — we already run our own.
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "",
+		// Resync every 30s to detect dataplane restarts quickly.
+		// The BackendAssignment reconciler re-creates bdevs + chunk stores
+		// when it runs on a "Ready" CR after a dataplane restart.
+		Cache: cache.Options{
+			SyncPeriod: &[]time.Duration{30 * time.Second}[0],
+		},
 	})
 	if mgrErr != nil {
 		logging.L.Fatal("failed to create controller-runtime manager", zap.Error(mgrErr))
