@@ -52,7 +52,11 @@ func mountDevice(ctx context.Context, devicePath, targetPath, fsType string) err
 	if err := os.MkdirAll(targetPath, 0o750); err != nil {
 		return fmt.Errorf("creating mount target %s: %w", targetPath, err)
 	}
-	cmd := exec.CommandContext(ctx, "mount", "-t", fsType, devicePath, targetPath)
+	// Mount with errors=continue so ext4 doesn't remount read-only on
+	// transient I/O errors during NVMe multipath failover. The ~10s window
+	// while the dead path is being removed can produce I/O errors that
+	// would otherwise make the filesystem permanently read-only.
+	cmd := exec.CommandContext(ctx, "mount", "-t", fsType, "-o", "errors=continue", devicePath, targetPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("mount -t %s %s %s: %w: %s", fsType, devicePath, targetPath, err, string(out))

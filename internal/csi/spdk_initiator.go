@@ -202,8 +202,18 @@ func cleanStaleNVMeSubsystems() {
 	}
 }
 
-// isNVMeConnected checks sysfs for a live controller to the given NQN.
-func isNVMeConnected(nqn string) bool {
+// nvmeConnectIdempotent connects only if no live controller exists for this
+// NQN at this specific address. For multipath, the same NQN has multiple
+// controllers at different addresses — each needs a separate connect.
+func nvmeConnectIdempotent(addr, port, nqn string) error {
+	if isNVMeConnectedAt(nqn, addr) {
+		return nil
+	}
+	return nvmeConnect(addr, port, nqn)
+}
+
+// isNVMeConnectedAt checks sysfs for a live controller matching both NQN and address.
+func isNVMeConnectedAt(nqn, addr string) bool {
 	entries, err := os.ReadDir("/sys/class/nvme-subsystem")
 	if err != nil {
 		return false
@@ -214,23 +224,19 @@ func isNVMeConnected(nqn string) bool {
 		if strings.TrimSpace(string(nqnData)) != nqn {
 			continue
 		}
-		ctrls, _ := filepath.Glob(subsysDir + "/nvme*")
+		ctrls, _ := filepath.Glob(subsysDir + "/nvme[0-9]*")
 		for _, ctrl := range ctrls {
 			state, _ := os.ReadFile(ctrl + "/state")
-			if strings.TrimSpace(string(state)) == "live" {
+			if strings.TrimSpace(string(state)) != "live" {
+				continue
+			}
+			address, _ := os.ReadFile(ctrl + "/address")
+			if strings.Contains(string(address), "traddr="+addr) {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// nvmeConnectIdempotent connects only if no live controller exists for this NQN.
-func nvmeConnectIdempotent(addr, port, nqn string) error {
-	if isNVMeConnected(nqn) {
-		return nil
-	}
-	return nvmeConnect(addr, port, nqn)
 }
 
 // nvmeConnect runs `nvme connect` to attach the kernel to an existing
@@ -243,7 +249,9 @@ func nvmeConnect(addr, port, nqn string) error {
 		"-s", port,
 		"-n", nqn,
 		"-i", fmt.Sprintf("%d", runtime.NumCPU()),
-		"-k", "10",
+		"-k", "10", // keep-alive timeout: detect dead target in 10s
+		"-l", "10", // ctrl-loss-tmo: give up on path after 10s of reconnect failures
+		"--reconnect-delay", "1", // retry reconnect every 1s (not default 10s)
 	}
 	// Use a stable hostnqn so the kernel groups all paths to the same
 	// NQN under a single multipath subsystem.
