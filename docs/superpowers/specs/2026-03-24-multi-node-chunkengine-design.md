@@ -8,11 +8,13 @@ Enable the ChunkEngine to operate as a fully distributed storage system where al
 
 All I/O flows through the ChunkEngine (no bypass). CRUSH placement is deterministic and stable (straw2). Topology changes are accepted freely — CRUSH stability ensures minimal data movement, the PolicyEngine migrates misplaced chunks in the background, and reads fall back through replicas during the migration window. A write-back cache at the ChunkEngine level absorbs writes and flushes on host FLUSH commands.
 
+**Protocol clarification:** gRPC is used for management/control (Go↔Rust). NDP is the Rust-to-Rust data transport protocol for sub-block I/O between dataplanes. This supersedes the earlier "gRPC only" invariant — NDP was adopted for its lower overhead on the hot path.
+
 ## Components
 
 ### 1. CRUSH Map with Volume Definitions
 
-**Problem:** Currently, `register_volume_hash` is only called during `bdev::create()` on the creating node. Remote nodes can't serve NDP I/O for volumes they don't know about.
+**Problem:** Currently, `register_volume_hash` is only called during `bdev::create()` on the creating node. Remote nodes can't serve NDP I/O for volumes they don't know about. All backends should know all volumes — they all work as one system.
 
 **Solution:** The `UpdateTopologyRequest` proto gains a `repeated VolumeInfo` field. The Go agent includes all active volumes in every topology push (every 30s).
 
@@ -40,10 +42,12 @@ message UpdateTopologyRequest {
 2. Iterate the volume list:
    - Register `volume_hash` for any new volumes not yet known
    - Unregister hashes for volumes no longer in the list
+   - Cancel any in-flight migration tasks for volumes with `status: "deleting"`
 3. Accept the topology update unconditionally (no guard)
 
 **Rust changes:**
 - `ClusterMap` gains `volumes: Vec<VolumeDefinition>` field
+- `ClusterMap` uses a bulk `set_nodes` method when constructing from proto (does NOT call `add_node` per node, which would increment generation per call). The generation is set once from the proto's `generation` field.
 - `ChunkEngine::update_topology` processes volume changes alongside node changes
 - Remove the topology guard from `dataplane_service.rs`
 
@@ -69,6 +73,8 @@ message UpdateTopologyRequest {
 
 **Problem:** All I/O crosses reactor→tokio→reactor boundaries. A write-back cache can absorb writes and acknowledge immediately, improving latency.
 
+**Relationship to existing bdev-layer cache:** The existing `WriteCache` struct in `novastor_bdev.rs` (128 slots × 64KB, SPDK DMA hugepage memory, reactor-local) is **removed**. It was designed for the old reactor fast path which no longer exists — all I/O goes through ChunkEngine in tokio. The new cache replaces it entirely at the ChunkEngine level, using heap-allocated `Vec<u8>` buffers (not DMA). DMA alignment is handled at the bdev layer when data is eventually flushed through `sub_block_write_local` → `reactor_dispatch::bdev_write_async`, which allocates DMA buffers for the actual SPDK I/O.
+
 **Design:**
 
 The write-back cache sits inside the ChunkEngine, between the bdev dispatch and the CRUSH fan-out. It operates in tokio.
@@ -90,8 +96,8 @@ The write-back cache sits inside the ChunkEngine, between the bdev dispatch and 
 3. Cache miss → proceed to CRUSH-routed read as normal
 
 **Flush triggers:**
-- **FLUSH command from host** — drains all cached writes for that volume through CRUSH fan-out. Completes the FLUSH I/O only after all writes are persisted to backends. This matches NVMe write-back cache semantics.
-- **High-water threshold (75%)** — triggers background async flush of oldest entries to prevent cache exhaustion under sustained write load.
+- **FLUSH command from host** — drains all cached writes for that volume through CRUSH fan-out, with a **persist flag** on each write. For local writes, `sub_block_write_local` writes directly to the backend bdev (no caching at backend). For remote writes via NDP, a `FLUSH_WRITE` flag on the NDP header tells the remote node to write directly to its backend (bypassing any future local cache on the remote side). The FLUSH I/O completes only after ALL fan-out writes are confirmed persisted on their respective backends. This is a single-phase flush — the fan-out writes themselves are persistence barriers.
+- **High-water threshold (75%)** — triggers background async flush of oldest entries to prevent cache exhaustion under sustained write load. These background flushes also use the persist flag.
 - **Volume delete** — flush all + discard.
 
 **Crash semantics:**
@@ -106,7 +112,7 @@ The write-back cache sits inside the ChunkEngine, between the bdev dispatch and 
 
 **Problem:** When topology changes cause CRUSH to remap chunks, data needs to move from old locations to new ones.
 
-**Solution:** The PolicyEngine reconciliation loop (already runs every 30s on each node) handles migration.
+**Solution:** The PolicyEngine reconciliation loop (already runs every 30s on each node) handles migration. The PolicyEngine drives migration through the ChunkEngine abstraction — it does NOT call raw `sub_block_read_local` / `ndp_pool.sub_block_write` directly, preserving the layer boundary.
 
 **Detection of misplaced chunks:**
 1. On topology change (generation bump), the PolicyEngine compares old vs new topology
@@ -116,27 +122,37 @@ The write-back cache sits inside the ChunkEngine, between the bdev dispatch and 
 
 **Migration flow:**
 1. PolicyEngine identifies chunks that should now be on a different node
-2. Reads chunk data from local backend via `sub_block_read_local`
-3. Writes to the new CRUSH-selected node via NDP (`ndp_pool.sub_block_write`)
-4. After successful copy, the local copy is marked as reclaimable (not deleted immediately — kept as a fallback until confirmed)
+2. Calls `ChunkEngine::migrate_chunk(volume_id, chunk_index, target_node)` — the ChunkEngine reads from local backend and writes to the target node via NDP
+3. Migration writes carry a **generation counter** per sub-block. The target node only accepts the write if its local generation for that sub-block is lower (prevents stale migration data from overwriting fresh host writes). This solves the race between host writes and concurrent migration.
+4. After successful copy, the local copy is marked as reclaimable
 5. Updates the distributed chunk map (Section 5) with new placement
+
+**Garbage collection of reclaimable chunks:**
+- A background GC pass runs every 60s on each node
+- For each reclaimable chunk: verify the target node has the data (via NDP read probe or chunk map confirmation)
+- Once confirmed durable on the target, reclaim the local space (clear the volume offset region, update dirty bitmap)
+- If target is unreachable, keep the local copy as fallback
 
 **Coordination:**
 - Each node only migrates chunks it currently holds that CRUSH says should move elsewhere
 - Since each chunk is on exactly one node (rep1) or a defined set (rep3/EC), and each node only looks at its own local chunks, there is no overlap or duplicate work
 - Rate limiting: max N concurrent migrations to avoid saturating NDP connections (configurable, default 16)
-- Migration is idempotent — writing a chunk that already exists on the target is a no-op
+- Migration is suspended for chunks with active host writes (detected via dirty bitmap changes within the last flush cycle)
 
 **Node removal:**
 - Node goes offline → CRUSH selects replacements from remaining nodes
 - Remaining nodes that held replicas detect they need to copy to the new placement
 - For rep1 with a dead node: data is lost (expected — rep1 is not production-grade, always rep3 or EC in production)
 
+**Volume deletion during migration:**
+- When a volume's status changes to "deleting" (received via topology push), all migration tasks for that volume are cancelled immediately
+- The PolicyEngine checks volume status before starting each migration task
+
 **New additions to PolicyEngine:**
 - `detect_misplaced_chunks(old_topo, new_topo) -> Vec<MigrationTask>`
-- `execute_migration(task: MigrationTask) -> Result<()>`
+- `execute_migration(task: MigrationTask) -> Result<()>` — calls ChunkEngine, not raw I/O
 - Migration task queue with concurrency limit
-- Metrics: chunks_migrated, chunks_pending, migration_bytes
+- Metrics: `chunks_migrated` (counter), `chunks_pending` (gauge), `migration_bytes_total` (counter), `migration_errors_total` (counter) — all Prometheus metrics with `volume` and `source_node` labels
 
 ### 5. Distributed Chunk Maps
 
@@ -152,12 +168,23 @@ pub struct ChunkMapEntry {
     pub ec_params: Option<ErasureParams>,
     pub dirty_bitmap: u64,
     pub placements: Vec<String>,  // NEW: node IDs where chunk actually lives
+    pub generation: u64,          // NEW: monotonic counter for conflict resolution
 }
 ```
 
-**Distribution mechanism:**
-- When a node writes a chunk (via `sub_block_write`), it updates its local chunk map with actual placements (the nodes that acknowledged the write)
-- Chunk map updates are included in the topology sync — `UpdateTopologyRequest` gains a `repeated ChunkMapUpdate` field for incremental updates:
+**Distribution mechanism — direct Rust-to-Rust via NDP:**
+
+Chunk map updates propagate directly between dataplanes via NDP, NOT through the Go agent. This eliminates the 30-60s latency window that would result from routing through the Go agent's topology push cycle.
+
+- A new `NdpOp::ChunkMapSync` message carries a batch of `ChunkMapUpdate` entries
+- When a node writes a chunk (via FLUSH — not on cache absorb), it broadcasts a `ChunkMapSync` to all peers in the topology via the NDP pool
+- Each peer merges the update into its local chunk map (highest generation wins)
+- The NDP pool maintains connections to all topology nodes, so broadcast is cheap
+
+**Fallback distribution via Go agent:**
+- The Go agent does a periodic full chunk map sync (every 5 minutes) as a consistency safety net
+- Uses a new `GetChunkMapUpdates(since_generation)` RPC on the dataplane to collect incremental updates
+- Redistributes via `UpdateTopologyRequest.chunk_map_updates` for nodes that missed NDP broadcasts (e.g., after restart)
 
 ```protobuf
 message ChunkMapUpdate {
@@ -168,39 +195,41 @@ message ChunkMapUpdate {
   uint64 generation = 5;  // for conflict resolution (highest generation wins)
 }
 
-message UpdateTopologyRequest {
-  uint64 generation = 1;
-  repeated TopologyNode nodes = 2;
-  repeated VolumeInfo volumes = 3;
-  repeated ChunkMapUpdate chunk_map_updates = 4;  // NEW
+// Separate from topology — chunk maps use their own sync
+message SyncChunkMapsRequest {
+  uint64 since_generation = 1;
+}
+message SyncChunkMapsResponse {
+  repeated ChunkMapUpdate updates = 1;
 }
 ```
-
-- The Go agent collects chunk map updates from all dataplanes and redistributes them in the next topology push
-- On startup, a node loads its local redb chunk map. The Go agent's periodic sync fills in any gaps
 
 **Consistency:**
 - Chunk maps are eventually consistent — a node may briefly have stale placement info
 - Reads use chunk map placement first; fall back through CRUSH if recorded placement is unreachable
-- Writes always go to CRUSH-selected nodes (authoritative), then update the chunk map
-- Conflict resolution: highest generation wins when the same chunk has different placements on different nodes
+- Writes always go to CRUSH-selected nodes (authoritative), then update the chunk map on FLUSH
+- Conflict resolution: highest generation wins when the same chunk has different placements on different nodes. If tied, the node in CRUSH position 0 (primary owner) wins.
 
 **Persistence:**
 - Each node persists the full chunk map in its local redb (existing `put_chunk_map` / `list_chunk_map` API)
 - Chunk maps are restored on startup from local redb
-- The Go agent's topology push fills in any chunks the node doesn't know about
+- The Go agent's periodic sync fills in any gaps from missed NDP broadcasts
+
+**Scaling:**
+- Memory per node: each `ChunkMapEntry` is ~120 bytes. For 100 volumes × 1TB / 4MB = 25.6M entries = ~3GB. For typical deployments (10-50 volumes, 1-10TB each), this is 25K-1.3M entries = 3-150MB, well within bounds.
+- NDP broadcast batching: chunk map updates are batched and sent every 100ms or when batch reaches 1000 entries, whichever comes first. This bounds both latency and bandwidth.
 
 ### 6. Removing the Topology Guard
 
 With all the above in place, the topology guard in `dataplane_service.rs::update_topology` is removed entirely.
 
 **Complete flow:**
-1. Go agent pushes `UpdateTopology` with nodes + volumes + chunk map updates every 30s
-2. Dataplane accepts unconditionally — updates CRUSH topology, registers/unregisters volume hashes, merges chunk map updates
-3. Writes go through write-back cache → CRUSH fan-out on FLUSH
-4. Reads check cache → check chunk map placements → fall back through CRUSH replicas
-5. PolicyEngine detects misplaced chunks on each 30s reconciliation, migrates via NDP
-6. Chunk map updates flow back through the Go agent to all nodes
+1. Go agent pushes `UpdateTopology` with nodes + volumes every 30s
+2. Dataplane accepts unconditionally — updates CRUSH topology, registers/unregisters volume hashes
+3. Chunk map updates flow directly between dataplanes via NDP (real-time), with Go agent periodic full-sync as safety net
+4. Writes go through write-back cache → CRUSH fan-out on FLUSH → chunk map broadcast to peers
+5. Reads check cache → check chunk map placements → fall back through CRUSH replicas
+6. PolicyEngine detects misplaced chunks on each 30s reconciliation, migrates via ChunkEngine
 
 No guard, no pinning, no special cases.
 
@@ -222,9 +251,11 @@ NVMe-oF host FLUSH
     → ChunkEngine::flush(volume_id)
       → for each cached entry:
         → CRUSH select placement nodes
-        → fan-out write to all replicas via NDP / local
-        → update chunk map with actual placements
-      → all writes complete → bdev I/O complete
+        → fan-out write (with persist flag) to all replicas via NDP / local
+        → wait for ALL replicas to confirm persistence
+        → update local chunk map with actual placements
+        → broadcast ChunkMapSync to peers via NDP
+      → all writes confirmed persistent → bdev I/O complete
 ```
 
 ### Read
@@ -245,10 +276,9 @@ Go agent push (every 30s)
   → UpdateTopology RPC to each dataplane
     → update CRUSH map (nodes, backends, weights)
     → register/unregister volume hashes
-    → merge chunk map updates into local redb
     → PolicyEngine detects misplaced chunks
-      → background migration via NDP
-      → chunk map updates sent back to Go agent
+      → background migration via ChunkEngine
+      → chunk map updates broadcast to peers via NDP
 ```
 
 ## Error Handling
@@ -257,20 +287,22 @@ Go agent push (every 30s)
 - **Cache flush failure:** Retry the individual sub-block write. If persistent failure, mark the cache entry as "flush_failed" and report via metrics. The FLUSH command returns an error to the host, which triggers filesystem-level recovery.
 - **Volume hash collision:** The `volume_hash` function uses CRC32C forward + backward (64-bit). Collision probability is negligible for practical volume counts (<2^32). If a collision is detected (two volumes mapping to the same hash), log an error and reject the second volume.
 - **Split-brain chunk maps:** Two nodes claim different placements for the same chunk. Resolved by generation counter — highest generation wins. If tied, the node in CRUSH position 0 (primary owner) wins.
+- **NDP broadcast failure:** If a chunk map broadcast to a peer fails, the update is queued for retry. The Go agent's periodic full-sync acts as the ultimate consistency guarantee.
+- **Migration-write race:** Migration writes carry a generation counter per sub-block. The target node rejects writes with a generation lower than what it already has, preventing stale migration data from overwriting fresh host writes.
 
 ## Testing
 
-- **Unit tests:** WriteCache absorb/lookup/flush logic, CRUSH stability across topology changes, chunk map merge with conflict resolution
-- **Integration tests:** Multi-node write + topology change + read (verify data accessible during and after migration), FLUSH semantics (cached writes not visible until FLUSH on remote node), volume registration via topology push
+- **Unit tests:** WriteCache absorb/lookup/flush logic, CRUSH stability across topology changes, chunk map merge with conflict resolution, migration detection logic
+- **Integration tests:** Multi-node write + topology change + read (verify data accessible during and after migration), FLUSH semantics (data persisted on all replicas after FLUSH), volume registration via topology push, chunk map NDP broadcast
 - **E2E tests:** Create volume → write data → add node → verify data still readable → verify migration completes → remove node → verify replicas rebuilt
 
-## Migration Order
+## Implementation Order
 
 Implementation should proceed in this order (each step builds on the previous):
 
-1. **CRUSH map with volumes** — proto change, Go agent includes volumes, dataplane registers hashes
+1. **CRUSH map with volumes** — proto change, Go agent includes volumes, dataplane registers hashes, fix ClusterMap generation handling
 2. **Remove topology guard** — accept all topology updates
-3. **Distributed chunk maps** — proto change, chunk map distribution via topology push, placements field
+3. **Distributed chunk maps** — ChunkMapEntry gains placements + generation, NDP ChunkMapSync, Go agent periodic full-sync RPC
 4. **Stable CRUSH reads with fallback** — reads try chunk map placements, fall back to CRUSH
-5. **PolicyEngine migration** — detect misplaced chunks, migrate via NDP
-6. **Write-back cache** — cache at ChunkEngine level, FLUSH semantics
+5. **PolicyEngine migration** — detect misplaced chunks, migrate via ChunkEngine, GC reclaimable chunks
+6. **Write-back cache** — cache at ChunkEngine level, FLUSH semantics, remove old bdev-layer cache
