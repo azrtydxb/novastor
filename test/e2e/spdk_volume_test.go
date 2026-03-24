@@ -75,7 +75,7 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 
 	// Step 3: Create a volume (returns the bdev name and size).
 	t.Log("creating volume")
-	bdevName, sizeBytes, err := client.CreateVolume("raw", testVolumeID, 128*1024*1024)
+	bdevName, sizeBytes, err := client.CreateVolume("raw", testVolumeID, 128*1024*1024, false)
 	if err != nil {
 		t.Fatalf("CreateVolume failed: %v", err)
 	}

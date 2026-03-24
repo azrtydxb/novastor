@@ -423,14 +423,17 @@ func (c *Client) InitBackend(backendType, configJSON string) error {
 	return err
 }
 
-// CreateVolume creates a volume on a backend.
-func (c *Client) CreateVolume(backendType, name string, sizeBytes uint64) (string, uint64, error) {
+// CreateVolume creates a volume on a backend. When frontendOnly is true, the
+// dataplane skips local chunk store allocation and routes all I/O to remote
+// backends via NDP — used for nodes without local storage.
+func (c *Client) CreateVolume(backendType, name string, sizeBytes uint64, frontendOnly bool) (string, uint64, error) {
 	ctx, cancel := c.ctx()
 	defer cancel()
 	resp, err := c.svc.CreateVolume(ctx, &pb.CreateVolumeRequest{
-		BackendType: backendType,
-		Name:        name,
-		SizeBytes:   sizeBytes,
+		BackendType:  backendType,
+		Name:         name,
+		SizeBytes:    sizeBytes,
+		FrontendOnly: frontendOnly,
 	})
 	if err != nil {
 		return "", 0, err

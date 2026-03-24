@@ -187,9 +187,20 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 		return nil, status.Error(codes.InvalidArgument, "size_bytes must be positive")
 	}
 
-	// Ensure chunk store is ready.
-	if err := s.ensureChunkStore(); err != nil {
-		return nil, status.Errorf(codes.Internal, "chunk store init: %v", err)
+	// Determine whether this node operates in frontend-only mode (no local
+	// chunk store). A node is frontend-only when no base bdev is configured.
+	frontendOnly := s.baseBdev == ""
+
+	// Ensure chunk store is ready — skip on frontend-only nodes that have
+	// no local backend bdev.
+	if !frontendOnly {
+		if err := s.ensureChunkStore(); err != nil {
+			return nil, status.Errorf(codes.Internal, "chunk store init: %v", err)
+		}
+	} else {
+		logging.L.Info("spdk target: frontend-only mode — skipping chunk store init",
+			zap.String("volumeID", volumeID),
+		)
 	}
 
 	// Create volume via Rust data-plane gRPC. This registers an SPDK bdev
@@ -197,7 +208,9 @@ func (s *SPDKTargetServer) CreateTarget(ctx context.Context, req *pb.CreateTarge
 	// The volume is a virtual bdev backed by content-addressed 4MB chunks —
 	// it does NOT map to a physical device. The backend type is irrelevant
 	// at volume creation time; only the chunk engine matters.
-	bdevName, _, err := s.dpClient.CreateVolume("", volumeID, uint64(sizeBytes))
+	// On frontend-only nodes, the dataplane creates a remote-only ChunkEngine
+	// that routes all I/O to backends on other nodes via NDP.
+	bdevName, _, err := s.dpClient.CreateVolume("", volumeID, uint64(sizeBytes), frontendOnly)
 	if err != nil {
 		logging.L.Error("spdk target: failed to create volume",
 			zap.String("volumeID", volumeID),

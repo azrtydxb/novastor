@@ -161,6 +161,19 @@ func (cs *ControllerServer) UpdateNodeMapping(addrToName map[string]string) {
 	cs.nodeAddrToName = addrToName
 }
 
+// resolveNodeAddr returns the agent address (ip:port) for a Kubernetes node name.
+// Used to convert topology node IDs back to agent addresses for CreateTarget.
+func (cs *ControllerServer) resolveNodeAddr(nodeName string) string {
+	cs.nodeAddrToNameMu.RLock()
+	defer cs.nodeAddrToNameMu.RUnlock()
+	for addr, name := range cs.nodeAddrToName {
+		if name == nodeName {
+			return addr
+		}
+	}
+	return nodeName // Fallback: return as-is (may already be addr)
+}
+
 // resolveNodeName returns the Kubernetes node name for a CRUSH node address.
 // Falls back to stripping the port if no mapping exists.
 func (cs *ControllerServer) resolveNodeName(addr string) string {
@@ -510,6 +523,14 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		// determines path preference for multipath.
 		var anaGroupID uint32 = 1
 
+		// Build a set of CRUSH-placed node IDs. Nodes in this set have
+		// local chunk affinity (storage backends) and get ANA "optimized".
+		// Nodes NOT in this set are frontend-only and get "non_optimized".
+		crushNodeSet := make(map[string]bool, len(allNodeIDs))
+		for _, n := range allNodeIDs {
+			crushNodeSet[n] = true
+		}
+
 		// Deduplicate nodeIDs to get unique agents for target creation.
 		// CRUSH placement may assign multiple chunks to the same node.
 		seen := make(map[string]bool)
@@ -521,14 +542,30 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			}
 		}
 
-		// Create NVMe-oF targets on ALL replica nodes for ANA multipath.
+		// Add topology-required nodes that are NOT in CRUSH placement.
+		// These are frontend-only nodes where the pod may be scheduled;
+		// they need an NVMe-oF target with ANA "non_optimized" so the
+		// kernel multipath driver can use them as failover paths.
+		for _, topo := range topologyReq {
+			if segments := topo.GetSegments(); segments != nil {
+				if nodeID, ok := segments[TopologyDomain]; ok {
+					// Resolve hostname to agent address (ip:port).
+					nodeAddr := cs.resolveNodeAddr(nodeID)
+					if !seen[nodeAddr] {
+						seen[nodeAddr] = true
+						uniqueNodes = append(uniqueNodes, nodeAddr)
+					}
+				}
+			}
+		}
+
+		// Create NVMe-oF targets on ALL selected nodes for ANA multipath.
 		// Every node with chunk data can serve I/O via its local ChunkEngine.
 		// Reads for non-local chunks are fetched transparently via the
 		// inter-dataplane PutChunk/GetChunk gRPC (CRUSH-aware placement).
 		//
-		// Owner node: ANA "optimized" (preferred I/O path).
-		// Other nodes with chunks: ANA "optimized" (they have local data).
-		// Nodes without chunks: not targeted (no point routing I/O there).
+		// CRUSH-placed nodes: ANA "optimized" (local chunk data).
+		// Frontend-only nodes: ANA "non_optimized" (failover, remote I/O).
 		ownerNode := uniqueNodes[0]
 		type targetInfo struct {
 			Addr    string `json:"addr"`
@@ -549,11 +586,19 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 
 		for i, node := range uniqueNodes {
+			// Determine ANA state from CRUSH affinity.
+			// Nodes in the CRUSH placement have local chunk data → optimized.
+			// Frontend-only nodes (not in CRUSH placement) → non_optimized (failover).
+			anaState := "non_optimized"
+			if crushNodeSet[node] {
+				anaState = "optimized"
+			}
+
 			// Step 1: Create volume on chunk engine (agent creates the volume,
 			// skipping NVMe-oF when frontend handles it).
 			if cs.frontendTarget != nil {
 				_, _, _, createErr := cs.agentTarget.CreateTarget(
-					ctx, node, volumeID, int64(requiredBytes), "optimized", anaGroupID, protCfg,
+					ctx, node, volumeID, int64(requiredBytes), anaState, anaGroupID, protCfg,
 				)
 				if createErr != nil {
 					logging.L.Warn("failed to create volume on node (continuing with remaining nodes)",
@@ -566,7 +611,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			}
 
 			// Step 2: Create NVMe-oF target (either via agent SPDK or frontend kernel nvmet).
-			anaState := "optimized"
 			nqn, addr, port, createErr := targetClient.CreateTarget(
 				ctx, node, volumeID, int64(requiredBytes), anaState, anaGroupID, protCfg,
 			)
@@ -594,6 +638,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 				zap.String("node", node),
 				zap.String("anaState", anaState),
 				zap.Bool("isOwner", i == 0),
+				zap.Bool("crushAffinity", crushNodeSet[node]),
 			)
 		}
 

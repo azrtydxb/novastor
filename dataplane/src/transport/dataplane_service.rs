@@ -1156,15 +1156,42 @@ impl DataplaneService for DataplaneServiceImpl {
         }
         let req = request.into_inner();
         log::info!(
-            "gRPC create_volume: backend={}, name={}, size={}",
+            "gRPC create_volume: backend={}, name={}, size={}, frontend_only={}",
             req.backend_type,
             req.name,
-            req.size_bytes
+            req.size_bytes,
+            req.frontend_only,
         );
+
+        // If frontend_only and no chunk engine is initialised yet, create a
+        // remote-only ChunkEngine backed by a NullChunkStore. This allows the
+        // node to present NVMe-oF targets without local storage — all I/O
+        // routes to remote backends via NDP/CRUSH placement.
+        if req.frontend_only {
+            if crate::bdev::novastor_bdev::get_chunk_engine().is_err() {
+                log::info!(
+                    "create_volume: frontend-only mode — initialising remote-only ChunkEngine"
+                );
+                use crate::backend::chunk_store::NullChunkStore;
+                use crate::chunk::engine::ChunkEngine;
+                use crate::metadata::topology::ClusterMap;
+
+                let null_store = std::sync::Arc::new(NullChunkStore);
+                // Empty topology — CRUSH placement will use remote nodes once
+                // topology is updated via UpdateTopology RPCs from the controller.
+                let topology = ClusterMap::new(0);
+                let node_id = format!("frontend-{}", uuid::Uuid::new_v4());
+                let engine = std::sync::Arc::new(ChunkEngine::new(node_id, null_store, topology));
+                let handle = tokio::runtime::Handle::current();
+                crate::bdev::novastor_bdev::set_chunk_engine(engine, handle);
+            }
+        }
+
         // ALL volumes go through novastor_bdev → ChunkEngine → Backend.
         // The backend type (raw/lvm/file) only matters at init_backend time.
         // By create_volume, the ChunkEngine is already wired to the underlying
-        // BdevChunkStore. The novastor_bdev creates a virtual SPDK bdev.
+        // BdevChunkStore (or NullChunkStore on frontend-only nodes).
+        // The novastor_bdev creates a virtual SPDK bdev.
         let bdev = crate::bdev::novastor_bdev::create(&req.name, req.size_bytes)
             .map_err(|e| Status::internal(format!("create novastor bdev: {e}")))?;
         Ok(Response::new(CreateVolumeResponse {
@@ -1294,6 +1321,20 @@ impl DataplaneService for DataplaneServiceImpl {
 
         let engine = crate::bdev::novastor_bdev::get_chunk_engine()
             .map_err(|e| Status::internal(format!("chunk engine not ready: {e}")))?;
+
+        // Guard: reject topology updates when a backend bdev is configured.
+        // Until NDP auto-registration and data migration are implemented,
+        // changing CRUSH topology reroutes reads/writes to remote nodes that
+        // don't have the volume registered, causing silent data corruption.
+        // The init_chunk_store single-node topology ensures all I/O stays local.
+        if crate::bdev::novastor_bdev::get_backend_bdev_name().is_ok() {
+            log::info!(
+                "update_topology: skipping — backend bdev active, keeping local-only \
+                 topology to prevent CRUSH rerouting (proposed {} nodes)",
+                req.nodes.len(),
+            );
+            return Ok(Response::new(UpdateTopologyResponse { accepted: true }));
+        }
 
         let mut topology = ClusterMap::new(req.generation);
         for proto_node in &req.nodes {

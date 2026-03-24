@@ -12,12 +12,16 @@ use ring::digest;
 use tokio::sync::Mutex;
 
 use crate::backend::chunk_store::{ChunkHeader, ChunkStore, CHUNK_SIZE};
+use crate::chunk::ndp_pool::NdpPool;
 use crate::error::{DataPlaneError, Result};
 use crate::metadata::crush;
 use crate::metadata::topology::ClusterMap;
 use crate::metadata::types::{ChunkMapEntry, ErasureParams, Protection};
 use crate::policy::engine::PolicyEngine;
 use crate::transport::chunk_client::ChunkClient;
+
+/// Default NDP listen port (must match `NdpServerConfig::default().port`).
+const NDP_PORT: u16 = 4500;
 
 pub struct ChunkEngine {
     node_id: String,
@@ -30,6 +34,8 @@ pub struct ChunkEngine {
     connections: Mutex<HashMap<String, ChunkClient>>,
     /// Optional policy engine for tracking chunk locations and references.
     policy: Option<Arc<PolicyEngine>>,
+    /// NDP connection pool for sub-block I/O to remote backend nodes.
+    ndp_pool: Arc<NdpPool>,
 }
 
 impl ChunkEngine {
@@ -42,6 +48,7 @@ impl ChunkEngine {
             protection: RwLock::new(Protection::Replication { factor: 1 }),
             connections: Mutex::new(HashMap::new()),
             policy: None,
+            ndp_pool: Arc::new(NdpPool::new()),
         }
     }
 
@@ -59,6 +66,7 @@ impl ChunkEngine {
             protection: RwLock::new(Protection::Replication { factor: 1 }),
             connections: Mutex::new(HashMap::new()),
             policy: Some(policy),
+            ndp_pool: Arc::new(NdpPool::new()),
         }
     }
 
@@ -76,6 +84,7 @@ impl ChunkEngine {
             protection: RwLock::new(protection),
             connections: Mutex::new(HashMap::new()),
             policy: None,
+            ndp_pool: Arc::new(NdpPool::new()),
         }
     }
 
@@ -94,6 +103,7 @@ impl ChunkEngine {
             protection: RwLock::new(protection),
             connections: Mutex::new(HashMap::new()),
             policy: Some(policy),
+            ndp_pool: Arc::new(NdpPool::new()),
         }
     }
 
@@ -683,6 +693,278 @@ impl ChunkEngine {
                 chunk_id
             ))
         }))
+    }
+
+    // -----------------------------------------------------------------------
+    // Sub-block I/O path (NDP-based, CRUSH-routed)
+    // -----------------------------------------------------------------------
+
+    /// Compute a u64 hash from a volume_id string.
+    ///
+    /// Uses the same algorithm as `ndp::header::volume_hash` so that remote
+    /// NDP servers can reverse-lookup the volume name from the hash.
+    fn volume_hash(volume_id: &str) -> u64 {
+        ndp::header::volume_hash(volume_id)
+    }
+
+    /// Read a sub-block range from the volume, routing through CRUSH.
+    ///
+    /// Computes which chunk the offset falls in, uses CRUSH to find replica
+    /// nodes, then tries each placement in order (local first when possible).
+    /// Local reads go through the bdev sub_block_read_local path; remote reads
+    /// go through the NDP connection pool.
+    pub async fn sub_block_read(
+        &self,
+        volume_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> Result<Vec<u8>> {
+        let chunk_index = offset / CHUNK_SIZE as u64;
+        let chunk_key = format!("{}:{}", volume_id, chunk_index);
+
+        let placements = {
+            let prot = self.protection.read().unwrap().clone();
+            let factor = match &prot {
+                Protection::Replication { factor } => *factor as usize,
+                Protection::ErasureCoding {
+                    data_shards,
+                    parity_shards,
+                } => (*data_shards + *parity_shards) as usize,
+            };
+            let topo = self.topology.read().unwrap();
+            crush::select(&chunk_key, factor, &topo)
+        }; // guards dropped
+
+        if placements.is_empty() {
+            return Err(DataPlaneError::ChunkEngineError(format!(
+                "CRUSH returned no placement for sub-block read: vol={} offset={}",
+                volume_id, offset
+            )));
+        }
+
+        log::trace!(
+            "sub_block_read: vol={} offset={} len={} chunk={} placements={:?} self={}",
+            volume_id,
+            offset,
+            length,
+            chunk_index,
+            placements
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            self.node_id,
+        );
+
+        let vol_hash = Self::volume_hash(volume_id);
+        let mut last_err = None;
+
+        for (target_node, _backend) in &placements {
+            let result = if target_node == &self.node_id {
+                // Local sub-block read via bdev layer.
+                #[cfg(feature = "spdk-sys")]
+                {
+                    crate::bdev::novastor_bdev::sub_block_read_local(volume_id, offset, length)
+                        .await
+                }
+                #[cfg(not(feature = "spdk-sys"))]
+                {
+                    // Without SPDK, local sub-block I/O is not available.
+                    Err(DataPlaneError::ChunkEngineError(
+                        "local sub-block read requires spdk-sys feature".into(),
+                    ))
+                }
+            } else {
+                // Remote sub-block read via NDP pool.
+                let addr = {
+                    let topo = self.topology.read().unwrap();
+                    match topo.get_node(target_node) {
+                        Some(n) => format!("{}:{}", n.address, NDP_PORT),
+                        None => {
+                            warn!(
+                                "sub_block_read: node {} not found in topology, skipping",
+                                target_node
+                            );
+                            last_err = Some(DataPlaneError::ChunkEngineError(format!(
+                                "node {} not found in topology",
+                                target_node
+                            )));
+                            continue;
+                        }
+                    }
+                }; // topo guard dropped
+                self.ndp_pool
+                    .sub_block_read(&addr, vol_hash, offset, length as u32)
+                    .await
+            };
+
+            match result {
+                Ok(data) => return Ok(data),
+                Err(e) => {
+                    warn!(
+                        "sub_block_read: vol={} offset={} node={} failed: {}",
+                        volume_id, offset, target_node, e
+                    );
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        log::error!(
+            "sub_block_read: all replicas failed for vol={} offset={} length={}",
+            volume_id,
+            offset,
+            length
+        );
+        Err(last_err.unwrap_or_else(|| {
+            DataPlaneError::ChunkEngineError(format!(
+                "all replica reads failed for vol={} offset={}",
+                volume_id, offset
+            ))
+        }))
+    }
+
+    /// Write a sub-block range to the volume, routing through CRUSH.
+    ///
+    /// Computes which chunk the offset falls in, uses CRUSH to find all
+    /// replica nodes, then fans out writes to ALL replicas concurrently.
+    /// Returns Ok when a majority quorum of writes succeed.
+    pub async fn sub_block_write(&self, volume_id: &str, offset: u64, data: &[u8]) -> Result<()> {
+        let chunk_index = offset / CHUNK_SIZE as u64;
+        let chunk_key = format!("{}:{}", volume_id, chunk_index);
+
+        let placements = {
+            let prot = self.protection.read().unwrap().clone();
+            let factor = match &prot {
+                Protection::Replication { factor } => *factor as usize,
+                Protection::ErasureCoding {
+                    data_shards,
+                    parity_shards,
+                } => (*data_shards + *parity_shards) as usize,
+            };
+            let topo = self.topology.read().unwrap();
+            crush::select(&chunk_key, factor, &topo)
+        }; // guards dropped
+
+        if placements.is_empty() {
+            return Err(DataPlaneError::ChunkEngineError(format!(
+                "CRUSH returned no placement for sub-block write: vol={} offset={}",
+                volume_id, offset
+            )));
+        }
+
+        log::trace!(
+            "sub_block_write: vol={} offset={} len={} chunk={} placements={:?} self={}",
+            volume_id,
+            offset,
+            data.len(),
+            chunk_index,
+            placements
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            self.node_id,
+        );
+
+        let quorum = (placements.len() / 2) + 1;
+        let vol_hash = Self::volume_hash(volume_id);
+
+        // Fan out writes to all replicas concurrently.
+        let mut join_set = tokio::task::JoinSet::new();
+
+        for (target_node, _backend) in &placements {
+            let target_owned = target_node.clone();
+            let node_id = self.node_id.clone();
+            let data_owned = data.to_vec();
+            let ndp_pool = self.ndp_pool.clone();
+            let write_offset = offset;
+
+            // Resolve remote address before spawning (topology guard is sync).
+            let remote_addr = if target_node != &self.node_id {
+                let topo = self.topology.read().unwrap();
+                topo.get_node(target_node)
+                    .map(|n| format!("{}:{}", n.address, NDP_PORT))
+            } else {
+                None
+            };
+
+            #[cfg(feature = "spdk-sys")]
+            let volume_id_owned = volume_id.to_string();
+
+            join_set.spawn(async move {
+                if target_owned == node_id {
+                    // Local sub-block write via bdev layer.
+                    #[cfg(feature = "spdk-sys")]
+                    {
+                        crate::bdev::novastor_bdev::sub_block_write_local(
+                            &volume_id_owned,
+                            write_offset,
+                            &data_owned,
+                        )
+                        .await
+                        .map(|()| target_owned)
+                    }
+                    #[cfg(not(feature = "spdk-sys"))]
+                    {
+                        Err::<String, DataPlaneError>(DataPlaneError::ChunkEngineError(
+                            "local sub-block write requires spdk-sys feature".into(),
+                        ))
+                    }
+                } else if let Some(addr) = remote_addr {
+                    ndp_pool
+                        .sub_block_write(&addr, vol_hash, write_offset, &data_owned)
+                        .await?;
+                    Ok(target_owned)
+                } else {
+                    Err(DataPlaneError::ChunkEngineError(format!(
+                        "node {} not found in topology",
+                        target_owned
+                    )))
+                }
+            });
+        }
+
+        let mut successes = 0usize;
+        let mut last_err = None;
+
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(Ok(_target)) => {
+                    successes += 1;
+                }
+                Ok(Err(e)) => {
+                    warn!("sub_block_write replica failed: {}", e);
+                    last_err = Some(e);
+                }
+                Err(e) => {
+                    warn!("sub_block_write replica task panicked: {}", e);
+                    last_err = Some(DataPlaneError::ChunkEngineError(format!(
+                        "sub_block_write task panicked: {}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        if successes < quorum {
+            log::error!(
+                "sub_block_write: quorum not met for vol={} offset={}: {}/{} succeeded, need {}",
+                volume_id,
+                offset,
+                successes,
+                placements.len(),
+                quorum
+            );
+            return Err(last_err.unwrap_or_else(|| {
+                DataPlaneError::ChunkEngineError(format!(
+                    "sub_block_write quorum not met: {}/{} succeeded, need {}",
+                    successes,
+                    placements.len(),
+                    quorum
+                ))
+            }));
+        }
+
+        Ok(())
     }
 
     /// Read an erasure-coded chunk by fetching shards and reconstructing.

@@ -303,6 +303,9 @@ message CreateVolumeRequest {
   // Protection scheme for the volume. If not set, defaults to replication
   // with factor 1 (no redundancy).
   ProtectionScheme protection = 4;
+  // When true, no local chunk store is required. The node acts as a
+  // frontend-only presenter — all I/O routes to remote backends via NDP.
+  bool frontend_only = 5;
 }
 message CreateVolumeResponse {
   string name = 1;

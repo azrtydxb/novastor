@@ -163,7 +163,7 @@ async fn handle_read(header: &NdpHeader) -> NdpMessage {
     };
 
     // Use the existing sub_block_read path.
-    match crate::bdev::novastor_bdev::sub_block_read_pub(
+    match crate::bdev::novastor_bdev::sub_block_read_local(
         &volume_name,
         header.offset,
         header.data_length as u64,
@@ -202,8 +202,12 @@ async fn handle_write(header: &NdpHeader, data: Option<Vec<u8>>) -> NdpMessage {
         }
     };
 
-    match crate::bdev::novastor_bdev::sub_block_write_pub(&volume_name, header.offset, &write_data)
-        .await
+    match crate::bdev::novastor_bdev::sub_block_write_local(
+        &volume_name,
+        header.offset,
+        &write_data,
+    )
+    .await
     {
         Ok(()) => NdpMessage::new(NdpHeader::response(header, NdpOp::WriteResp, 0, 0), None),
         Err(e) => {

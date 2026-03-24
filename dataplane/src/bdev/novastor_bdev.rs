@@ -2,14 +2,13 @@
 //!
 //! Each volume is registered as an SPDK bdev named `novastor_<volume_id>`.
 //! When SPDK's NVMe-oF subsystem submits I/O to this bdev, the module
-//! performs direct reads and writes against the backend SPDK bdev, bypassing
-//! the ChunkEngine on the hot I/O path.
+//! routes all reads and writes through the ChunkEngine, which uses CRUSH
+//! placement to determine the target backend (local bdev or remote NDP node).
 //!
-//! Volume data is laid out contiguously on the backend bdev. Partial writes
-//! go directly to the exact byte offset on the backend — no read-modify-write
-//! — so a 4K random write produces a single 4K backend write. Dirty sub-blocks
-//! are tracked via a per-chunk bitmap; SHA-256 hashing and content-addressing
-//! happen only during periodic background sync (not on the hot path).
+//! All I/O is dispatched via tokio to the ChunkEngine's async sub_block_read
+//! and sub_block_write methods. The ChunkEngine handles local vs remote routing
+//! transparently. A reactor fast path for local-only chunks can be re-added
+//! as a future optimization.
 
 use crate::bdev::sub_block::{self, bitmap_is_set, bitmap_set, CHUNK_SIZE, SUB_BLOCK_SIZE};
 use crate::chunk::engine::ChunkEngine;
@@ -158,12 +157,27 @@ pub fn allocate_volume_offset(volume_name: &str, size_bytes: u64) -> u64 {
     base
 }
 
-/// Get the base offset for an existing volume.
+/// Get the base offset for a volume, lazily allocating if needed.
+/// This enables lazy per-chunk allocation: the first sub-block write
+/// to a volume on this backend automatically allocates a 4MB chunk slot.
 fn get_volume_base_offset(volume_name: &str) -> Result<u64> {
-    let offsets = volume_offsets().read().unwrap();
-    offsets.get(volume_name).copied().ok_or_else(|| {
-        DataPlaneError::BdevError(format!("no base offset for volume '{}'", volume_name))
-    })
+    // Fast path: already allocated.
+    {
+        let offsets = volume_offsets().read().unwrap();
+        if let Some(&offset) = offsets.get(volume_name) {
+            return Ok(offset);
+        }
+    }
+    // Lazy allocation: first I/O to this volume on this backend.
+    // Allocate a generous default (10GB). The actual used space is
+    // tracked by dirty bitmaps at sub-block granularity.
+    let default_size = 10 * 1024 * 1024 * 1024u64; // 10GB
+    let offset = allocate_volume_offset(volume_name, default_size);
+    info!(
+        "novastor_bdev: lazy-allocated volume '{}' at offset {}",
+        volume_name, offset
+    );
+    Ok(offset)
 }
 
 /// Set the backend bdev name used for direct sub-block I/O.
@@ -318,8 +332,11 @@ fn cleanup_volume_locks(volume_name: &str) {
 ///
 /// No SHA-256 hashing — content-addressing happens during background sync.
 /// Volume data is laid out contiguously on the backend bdev: offset maps directly.
+/// Direct backend bdev write — bypasses ChunkEngine. Kept for future use
+/// when reactor fast path is re-added for local-only chunks.
+
 #[tracing::instrument(skip_all, fields(volume = %volume_name, offset, len = data.len()))]
-async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<()> {
+pub async fn sub_block_write_local(volume_name: &str, offset: u64, data: &[u8]) -> Result<()> {
     let backend_bdev = get_backend_bdev_name()?;
     let vol_base = get_volume_base_offset(volume_name)?;
     let total_len = data.len() as u64;
@@ -474,16 +491,20 @@ async fn sub_block_write(volume_name: &str, offset: u64, data: &[u8]) -> Result<
     Ok(())
 }
 
-/// Zero a byte range on a volume by writing actual zeros through the normal
-/// write path. We must write real zeros (not just clear the bitmap) because
-/// filesystems like ext4 may issue WRITE_ZEROES for ranges that still contain
-/// metadata — clearing the bitmap would lose that data.
+/// Zero a byte range on a volume by writing actual zeros through the
+/// ChunkEngine write path. We must write real zeros (not just clear the
+/// bitmap) because filesystems like ext4 may issue WRITE_ZEROES for ranges
+/// that still contain metadata — clearing the bitmap would lose that data.
 async fn sub_block_write_zeroes(volume_name: &str, offset: u64, length: u64) -> Result<()> {
     if length == 0 {
         return Ok(());
     }
 
+    let engine = get_chunk_engine()?;
+
     // Write zeros in SUB_BLOCK_SIZE chunks to avoid huge allocations.
+    // Route through ChunkEngine so CRUSH placement is consistent with
+    // regular writes and reads.
     let end_offset = offset + length;
     let mut pos = offset;
     let zero_buf = vec![0u8; SUB_BLOCK_SIZE];
@@ -491,7 +512,9 @@ async fn sub_block_write_zeroes(volume_name: &str, offset: u64, length: u64) -> 
     while pos < end_offset {
         let remaining = (end_offset - pos) as usize;
         let write_len = remaining.min(SUB_BLOCK_SIZE);
-        sub_block_write(volume_name, pos, &zero_buf[..write_len]).await?;
+        engine
+            .sub_block_write(volume_name, pos, &zero_buf[..write_len])
+            .await?;
         pos += write_len as u64;
     }
 
@@ -583,8 +606,9 @@ unsafe fn load_chunk_bitmap(ctx: *const BdevCtx, chunk_idx: usize) -> u64 {
     }
 }
 
-/// Set the dirty bit for a single sub-block. Used by the tokio fallback path.
-/// The reactor fast path uses BdevCtx.dirty_bitmaps directly (no function call).
+/// Set the dirty bit for a single sub-block. Used by the direct bdev write path.
+/// Kept for future use when reactor fast path is re-added.
+
 fn update_dirty_bitmap(volume_name: &str, chunk_idx: usize, sb_idx: usize) -> Result<()> {
     // Update via the bdev registry's BdevCtx if available (flat array, fast).
     if let Ok(registry) = bdev_registry().lock() {
@@ -627,8 +651,11 @@ fn update_dirty_bitmap(volume_name: &str, chunk_idx: usize, sb_idx: usize) -> Re
 /// - **Read exact size**: when only a portion of a sub-block is needed, reads
 ///   only the required bytes (aligned to BDEV_BLOCK_SIZE) instead of the full
 ///   64KB. A 4K read becomes ~4KB bdev I/O, not 64KB.
+/// Direct backend bdev read — bypasses ChunkEngine. Kept for future use
+/// when reactor fast path is re-added for local-only chunks.
+
 #[tracing::instrument(skip_all, fields(volume = %volume_name, offset, length))]
-async fn sub_block_read(volume_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+pub async fn sub_block_read_local(volume_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
     /// SPDK bdev block alignment (bytes). Reads must be aligned to this.
     const BDEV_BLOCK_SIZE: u64 = 512;
 
@@ -1383,8 +1410,8 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
     let _engine = get_chunk_engine()?;
     let bdev_name = format!("novastor_{}", volume_name);
 
-    // Allocate a contiguous region on the backend bdev for this volume.
-    let _base_offset = allocate_volume_offset(volume_name, size_bytes);
+    // No upfront allocation — ChunkEngine routes I/O to CRUSH-selected
+    // backends which lazy-allocate on first write via get_volume_base_offset.
 
     // Initialise an empty chunk map for this volume.
     let num_chunks = (size_bytes + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64;
@@ -1694,9 +1721,10 @@ unsafe extern "C" fn bdev_get_io_channel_cb(ctx: *mut c_void) -> *mut ffi::spdk_
 
 /// The main I/O submission callback. Called on the SPDK reactor thread.
 ///
-/// For aligned I/O that fits within a single sub-block, we handle it
-/// entirely on the reactor thread (zero thread crossings) — like Mayastor.
-/// For complex I/O (multi-sub-block, unaligned), we fall back to tokio.
+/// All reads and writes are dispatched to tokio and routed through the
+/// ChunkEngine, which uses CRUSH to select the correct backend (local
+/// bdev or remote NDP node). A reactor fast path for local-only chunks
+/// can be re-added as a future optimization.
 unsafe extern "C" fn bdev_submit_request_cb(
     _channel: *mut ffi::spdk_io_channel,
     bdev_io: *mut ffi::spdk_bdev_io,
@@ -1726,256 +1754,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 return;
             }
 
-            // Check if we can use the reactor-native fast path:
-            // same chunk, 512-byte aligned offset and length, single iov.
-            let chunk_idx = sub_block::chunk_index(offset) as usize;
-            let sb_idx = sub_block::sub_block_index(offset);
-            let off_in_sb = sub_block::offset_in_sub_block(offset);
-            let end_sb_idx = sub_block::sub_block_index(offset + length - 1);
-            let end_chunk_idx = sub_block::chunk_index(offset + length - 1) as usize;
-            let aligned = (off_in_sb as u64) % 512 == 0 && length % 512 == 0;
-
-            if aligned && chunk_idx == end_chunk_idx {
-                // ---- REACTOR FAST PATH: single-chunk read (any iovcnt) ----
-                let backend_res = get_backend_bdev_name();
-                let vol_base_res = get_volume_base_offset(&volume_name);
-                if let (Ok(backend), Ok(vol_base)) = (backend_res, vol_base_res) {
-                    if let Some(cache) = reactor_cache_open(backend) {
-                        let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
-                        let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx)
-                            + off_in_sb as u64;
-
-                        // --- Write cache lookup: serve reads from cached writes ---
-                        if sb_idx == end_sb_idx && length as usize <= SUB_BLOCK_SIZE {
-                            let global_sb_idx = chunk_idx as u64
-                                * sub_block::SUB_BLOCKS_PER_CHUNK as u64
-                                + sb_idx as u64;
-                            let wc = write_cache(&volume_name);
-                            if let Some(cached) =
-                                wc.lookup(global_sb_idx, off_in_sb, length as usize)
-                            {
-                                // Serve read from write cache — zero backend I/O.
-                                let mut dst_off = 0usize;
-                                for i in 0..iovcnt {
-                                    let iov = &*iovs.add(i);
-                                    let to_copy = iov.iov_len.min(length as usize - dst_off);
-                                    if to_copy > 0 {
-                                        std::ptr::copy_nonoverlapping(
-                                            cached.add(dst_off),
-                                            iov.iov_base as *mut u8,
-                                            to_copy,
-                                        );
-                                    }
-                                    dst_off += to_copy;
-                                }
-                                ffi::spdk_bdev_io_complete(
-                                    bdev_io,
-                                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                                );
-                                return;
-                            }
-                        }
-
-                        // --- Readahead: update state and check for prefetch hit ---
-                        let ra = readahead_state(&volume_name);
-                        if offset == ra.last_end_offset {
-                            ra.sequential_count = ra.sequential_count.saturating_add(1);
-                            if ra.window_sub_blocks == 0 {
-                                ra.window_sub_blocks = 2;
-                            }
-                        } else {
-                            ra.reset();
-                            ra.sequential_count = 1;
-                        }
-                        ra.last_end_offset = offset + length;
-
-                        // Prefetch HIT: serve from prefetch buffer.
-                        if ra.prefetch_ready
-                            && offset >= ra.prefetch_offset
-                            && offset + length <= ra.prefetch_offset + ra.prefetch_len
-                        {
-                            // Scatter from prefetch buffer into iovs.
-                            let pf_off = (offset - ra.prefetch_offset) as usize;
-                            let src = (ra.prefetch_buf as *const u8).add(pf_off);
-                            let mut src_off = 0usize;
-                            for i in 0..iovcnt {
-                                let iov = &*iovs.add(i);
-                                let to_copy = iov.iov_len.min(length as usize - src_off);
-                                if to_copy > 0 {
-                                    std::ptr::copy_nonoverlapping(
-                                        src.add(src_off),
-                                        iov.iov_base as *mut u8,
-                                        to_copy,
-                                    );
-                                }
-                                src_off += to_copy;
-                                if src_off >= length as usize {
-                                    break;
-                                }
-                            }
-
-                            // Free consumed prefetch buffer.
-                            reactor_dispatch::release_dma_buf_public(
-                                ra.prefetch_buf,
-                                ra.prefetch_buf_size,
-                            );
-                            ra.prefetch_buf = std::ptr::null_mut();
-                            ra.prefetch_ready = false;
-                            ra.window_sub_blocks = (ra.window_sub_blocks * 2).min(32);
-
-                            // Issue NEXT prefetch BEFORE completing parent I/O.
-                            let next_off = offset + length;
-                            issue_prefetch(
-                                ra,
-                                cache,
-                                &volume_name,
-                                chunk_base,
-                                chunk_idx,
-                                next_off,
-                            );
-
-                            // NOW complete the parent I/O.
-                            ffi::spdk_bdev_io_complete(
-                                bdev_io,
-                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                            );
-                            return;
-                        }
-
-                        // If prefetch was ready but didn't cover, discard it.
-                        if ra.prefetch_ready {
-                            reactor_dispatch::release_dma_buf_public(
-                                ra.prefetch_buf,
-                                ra.prefetch_buf_size,
-                            );
-                            ra.prefetch_buf = std::ptr::null_mut();
-                            ra.prefetch_ready = false;
-                        }
-
-                        // --- Normal read path ---
-                        let aligned_len = (length + cache.block_size - 1) & !(cache.block_size - 1);
-
-                        if iovcnt == 1 && length == aligned_len {
-                            // Single iov, exactly aligned: read directly into
-                            // the NVMe-oF transport's buffer — zero DMA alloc.
-                            let iov = &*iovs;
-                            let rctx = Box::new(ReactorReadCtx {
-                                parent_io: bdev_io,
-                                dma_buf: std::ptr::null_mut(),
-                                dma_len: 0,
-                                total_len: length as usize,
-                                iovs: vec![(iov.iov_base as usize, iov.iov_len)],
-                                buf_offset: 0,
-                                bitmap: u64::MAX,
-                                sb_start: sb_idx,
-                                off_in_first_sb: off_in_sb,
-                            });
-                            let rctx_ptr = Box::into_raw(rctx) as *mut c_void;
-
-                            let rc = ffi::spdk_bdev_read(
-                                cache.desc,
-                                cache.channel,
-                                iov.iov_base,
-                                bdev_offset,
-                                aligned_len,
-                                Some(reactor_read_done_direct_cb),
-                                rctx_ptr,
-                            );
-                            if rc != 0 {
-                                let _ = Box::from_raw(rctx_ptr as *mut ReactorReadCtx);
-                                ffi::spdk_bdev_io_complete(
-                                    bdev_io,
-                                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
-                                );
-                            }
-                        } else {
-                            // Multi-iov or unaligned: allocate DMA buffer,
-                            // read into it, scatter to iovs in callback.
-                            let dma_buf =
-                                reactor_dispatch::acquire_dma_buf_public(aligned_len as usize);
-                            if dma_buf.is_null() {
-                                error!(
-                                    "reactor read: DMA alloc failed (size={}), falling back to tokio",
-                                    aligned_len
-                                );
-                                // Fall through to tokio fallback below.
-                            } else {
-                                let mut iov_descs = Vec::with_capacity(iovcnt);
-                                for i in 0..iovcnt {
-                                    let iov = &*iovs.add(i);
-                                    iov_descs.push((iov.iov_base as usize, iov.iov_len));
-                                }
-                                let rctx = Box::new(ReactorReadCtx {
-                                    parent_io: bdev_io,
-                                    dma_buf,
-                                    dma_len: aligned_len as usize,
-                                    total_len: length as usize,
-                                    iovs: iov_descs,
-                                    buf_offset: 0,
-                                    bitmap: u64::MAX,
-                                    sb_start: sb_idx,
-                                    off_in_first_sb: off_in_sb,
-                                });
-                                let rctx_ptr = Box::into_raw(rctx) as *mut c_void;
-
-                                let rc = ffi::spdk_bdev_read(
-                                    cache.desc,
-                                    cache.channel,
-                                    dma_buf,
-                                    bdev_offset,
-                                    aligned_len,
-                                    Some(reactor_read_done_cb),
-                                    rctx_ptr,
-                                );
-                                if rc != 0 {
-                                    let _ = Box::from_raw(rctx_ptr as *mut ReactorReadCtx);
-                                    reactor_dispatch::release_dma_buf_public(
-                                        dma_buf,
-                                        aligned_len as usize,
-                                    );
-                                    ffi::spdk_bdev_io_complete(
-                                        bdev_io,
-                                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
-                                    );
-                                }
-                                // Issue prefetch after normal read if sequential.
-                                if ra.sequential_count >= 2 {
-                                    let next_off = offset + length;
-                                    issue_prefetch(
-                                        ra,
-                                        cache,
-                                        &volume_name,
-                                        chunk_base,
-                                        chunk_idx,
-                                        next_off,
-                                    );
-                                }
-                                return; // Fast path handled.
-                            }
-                        }
-
-                        // Single-iov direct path: issue prefetch after read.
-                        if ra.sequential_count >= 2 {
-                            let next_off = offset + length;
-                            issue_prefetch(
-                                ra,
-                                cache,
-                                &volume_name,
-                                chunk_base,
-                                chunk_idx,
-                                next_off,
-                            );
-                        }
-                        return; // Fast path handled (single-iov direct or DMA fallback to tokio).
-                    }
-                }
-            }
-
-            // ---- TOKIO FALLBACK: cross-chunk or unaligned reads ----
-            warn!(
-                "read tokio fallback: offset={} len={} iovcnt={} chunk={}->{} aligned={}",
-                offset, length, iovcnt, chunk_idx, end_chunk_idx, aligned
-            );
+            // ---- ALL reads go through ChunkEngine via tokio ----
             let bdev_io_addr = bdev_io as usize;
             let mut iov_descs: Vec<(usize, usize)> = Vec::with_capacity(iovcnt);
             for i in 0..iovcnt {
@@ -1984,7 +1763,8 @@ unsafe extern "C" fn bdev_submit_request_cb(
             }
             let handle = get_tokio_handle().expect("tokio handle");
             handle.spawn(async move {
-                let result = sub_block_read(&volume_name, offset, length).await;
+                let engine = get_chunk_engine().expect("chunk engine");
+                let result = engine.sub_block_read(&volume_name, offset, length).await;
                 match result {
                     Ok(data) => {
                         reactor_dispatch::send_to_reactor(move || unsafe {
@@ -2037,185 +1817,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 return;
             }
 
-            // Check if we can use the reactor-native fast path:
-            // single sub-block, 512-byte aligned, single iov.
-            let chunk_idx = sub_block::chunk_index(offset) as usize;
-            let sb_idx = sub_block::sub_block_index(offset);
-            let off_in_sb = sub_block::offset_in_sub_block(offset);
-            let end_sb_idx = sub_block::sub_block_index(offset + length - 1);
-            let end_chunk_idx = sub_block::chunk_index(offset + length - 1) as usize;
-            let aligned = (off_in_sb as u64) % 512 == 0 && length % 512 == 0;
-
-            if aligned && chunk_idx == end_chunk_idx {
-                // ---- REACTOR FAST PATH: single-chunk write (any iovcnt) ----
-                if let (Ok(backend), Ok(vol_base)) = (
-                    get_backend_bdev_name(),
-                    get_volume_base_offset(&volume_name),
-                ) {
-                    if let Some(cache) = reactor_cache_open(backend) {
-                        let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
-                        let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx)
-                            + off_in_sb as u64;
-
-                        // Invalidate readahead if write overlaps prefetch range.
-                        {
-                            let ra = readahead_state(&volume_name);
-                            let write_end = offset + length;
-                            if ra.prefetch_ready
-                                && offset < ra.prefetch_offset + ra.prefetch_len
-                                && write_end > ra.prefetch_offset
-                            {
-                                ra.reset();
-                            }
-                        }
-
-                        // Try write-back cache for single sub-block writes.
-                        if sb_idx == end_sb_idx && length as usize <= SUB_BLOCK_SIZE {
-                            let global_sb_idx = chunk_idx as u64
-                                * sub_block::SUB_BLOCKS_PER_CHUNK as u64
-                                + sb_idx as u64;
-                            // Gather iov data into a contiguous buffer for cache.
-                            let mut write_data = [0u8; 65536]; // stack buffer for <= 64KB
-                            let mut dst_off = 0usize;
-                            for i in 0..iovcnt {
-                                let iov = &*iovs.add(i);
-                                let to_copy = iov.iov_len.min(length as usize - dst_off);
-                                if to_copy > 0 {
-                                    std::ptr::copy_nonoverlapping(
-                                        iov.iov_base as *const u8,
-                                        write_data[dst_off..].as_mut_ptr(),
-                                        to_copy,
-                                    );
-                                }
-                                dst_off += to_copy;
-                            }
-
-                            let wc = write_cache(&volume_name);
-                            if false
-                                && wc.absorb(
-                                    global_sb_idx,
-                                    off_in_sb,
-                                    write_data.as_ptr(),
-                                    length as usize,
-                                )
-                            {
-                                // Write absorbed into cache — complete immediately.
-                                // Update dirty bitmap.
-                                let bdev_ctx = &*ctx;
-                                if chunk_idx < bdev_ctx.dirty_bitmaps.len() {
-                                    bdev_ctx.dirty_bitmaps[chunk_idx].fetch_or(
-                                        1u64 << sb_idx,
-                                        std::sync::atomic::Ordering::Relaxed,
-                                    );
-                                }
-
-                                ffi::spdk_bdev_io_complete(
-                                    bdev_io,
-                                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                                );
-
-                                // Flush if cache is getting full.
-                                if wc.needs_flush() {
-                                    flush_write_cache(&volume_name, cache, ctx, vol_base);
-                                }
-                                return;
-                            }
-                            // Cache miss (slot collision) — fall through to direct write.
-                        }
-
-                        // Gather iov data into a DMA buffer for backend write.
-                        let aligned_len = (length + cache.block_size - 1) & !(cache.block_size - 1);
-
-                        // Single iov with exact alignment: use directly.
-                        // Otherwise: allocate DMA buffer and gather.
-                        let (write_buf, needs_free) = if iovcnt == 1 && length == aligned_len {
-                            ((&*iovs).iov_base, false)
-                        } else {
-                            let dma_buf =
-                                reactor_dispatch::acquire_dma_buf_public(aligned_len as usize);
-                            if dma_buf.is_null() {
-                                ffi::spdk_bdev_io_complete(
-                                    bdev_io,
-                                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
-                                );
-                                return;
-                            }
-                            std::ptr::write_bytes(dma_buf as *mut u8, 0, aligned_len as usize);
-                            let mut dst_off = 0usize;
-                            for i in 0..iovcnt {
-                                let iov = &*iovs.add(i);
-                                let to_copy = iov.iov_len.min(length as usize - dst_off);
-                                if to_copy > 0 {
-                                    std::ptr::copy_nonoverlapping(
-                                        iov.iov_base as *const u8,
-                                        (dma_buf as *mut u8).add(dst_off),
-                                        to_copy,
-                                    );
-                                }
-                                dst_off += to_copy;
-                                if dst_off >= length as usize {
-                                    break;
-                                }
-                            }
-                            (dma_buf, true)
-                        };
-
-                        // Try to reuse a pre-allocated context from the pool.
-                        // Falls back to Box::new if pool is empty (rare at steady state).
-                        let bdev_ctx_ref = &*ctx;
-                        let mut rctx = bdev_ctx_ref
-                            .write_ctx_pool
-                            .lock()
-                            .ok()
-                            .and_then(|mut pool| pool.pop())
-                            .unwrap_or_else(|| {
-                                Box::new(ReactorWriteCtx {
-                                    parent_io: std::ptr::null_mut(),
-                                    bdev_ctx: std::ptr::null(),
-                                    chunk_idx: 0,
-                                    dirty_mask: 0,
-                                })
-                            });
-                        rctx.parent_io = bdev_io;
-                        rctx.bdev_ctx = ctx;
-                        rctx.chunk_idx = chunk_idx;
-                        // Compute dirty mask for all sub-blocks in this write.
-                        rctx.dirty_mask = if sb_idx == end_sb_idx {
-                            1u64 << sb_idx
-                        } else {
-                            let width = end_sb_idx - sb_idx + 1;
-                            ((1u64 << width) - 1) << sb_idx
-                        };
-                        let rctx_ptr = Box::into_raw(rctx) as *mut c_void;
-
-                        let rc = ffi::spdk_bdev_write(
-                            cache.desc,
-                            cache.channel,
-                            write_buf,
-                            bdev_offset,
-                            aligned_len,
-                            Some(reactor_write_done_cb),
-                            rctx_ptr,
-                        );
-                        if rc != 0 {
-                            let _ = Box::from_raw(rctx_ptr as *mut ReactorWriteCtx);
-                            if needs_free {
-                                reactor_dispatch::release_dma_buf_public(
-                                    write_buf,
-                                    aligned_len as usize,
-                                );
-                            }
-                            ffi::spdk_bdev_io_complete(
-                                bdev_io,
-                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
-                            );
-                        }
-                        return; // Fast path handled.
-                    }
-                }
-            }
-
-            // ---- TOKIO FALLBACK: multi-sub-block or complex writes ----
+            // ---- ALL writes go through ChunkEngine via tokio ----
             let bdev_io_addr = bdev_io as usize;
             let mut data = vec![0u8; length as usize];
             let mut copied = 0usize;
@@ -2234,7 +1836,8 @@ unsafe extern "C" fn bdev_submit_request_cb(
             }
             let handle = get_tokio_handle().expect("tokio handle");
             handle.spawn(async move {
-                let result = sub_block_write(&volume_name, offset, &data).await;
+                let engine = get_chunk_engine().expect("chunk engine");
+                let result = engine.sub_block_write(&volume_name, offset, &data).await;
                 let status = match result {
                     Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
                     Err(e) => {
@@ -2248,15 +1851,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
             });
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_FLUSH => {
-            // Flush write-back cache to backend before acknowledging.
-            if let (Ok(backend), Ok(vol_base)) = (
-                get_backend_bdev_name(),
-                get_volume_base_offset(&volume_name),
-            ) {
-                if let Some(cache) = reactor_cache_open(backend) {
-                    flush_write_cache(&volume_name, cache, ctx, vol_base);
-                }
-            }
+            // ChunkEngine handles persistence — nothing to flush locally.
             ffi::spdk_bdev_io_complete(
                 bdev_io,
                 ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
@@ -2277,17 +1872,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
                         ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
                     }
                 };
-                let vol_name_for_ra = volume_name.clone();
                 reactor_dispatch::send_to_reactor(move || unsafe {
-                    // Invalidate readahead if write_zeroes overlaps prefetch range.
-                    let ra = readahead_state(&vol_name_for_ra);
-                    let write_end = offset + length;
-                    if ra.prefetch_ready
-                        && offset < ra.prefetch_offset + ra.prefetch_len
-                        && write_end > ra.prefetch_offset
-                    {
-                        ra.reset();
-                    }
                     ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
                 });
             });
@@ -2335,8 +1920,13 @@ unsafe extern "C" fn bdev_submit_request_cb(
             let handle = get_tokio_handle().expect("tokio handle");
             handle.spawn(async move {
                 let result = async {
-                    let data = sub_block_read(&volume_name, src_offset, num_bytes).await?;
-                    sub_block_write(&volume_name, dst_offset, &data).await?;
+                    let engine = get_chunk_engine()?;
+                    let data = engine
+                        .sub_block_read(&volume_name, src_offset, num_bytes)
+                        .await?;
+                    engine
+                        .sub_block_write(&volume_name, dst_offset, &data)
+                        .await?;
                     Ok::<(), DataPlaneError>(())
                 }
                 .await;
@@ -2411,39 +2001,15 @@ unsafe extern "C" fn bdev_submit_request_cb(
 }
 
 /// Public wrapper for sub_block_write — used by NDP server.
-/// Public wrapper for sub_block_write — used by NDP server.
-/// Uses a fast path for aligned writes that fit within a single sub-block.
+/// All writes go through ChunkEngine for CRUSH-based placement.
 pub async fn sub_block_write_pub(volume_name: &str, offset: u64, data: &[u8]) -> Result<()> {
-    let length = data.len() as u64;
-    let offset_in_sb = sub_block::offset_in_sub_block(offset) as u64;
-    let sb_end = (offset - offset_in_sb) + SUB_BLOCK_SIZE as u64;
-    if offset + length <= sb_end && offset % 512 == 0 && length % 512 == 0 {
-        let backend_bdev = get_backend_bdev_name()?;
-        let vol_base = get_volume_base_offset(volume_name)?;
-        let chunk_idx = sub_block::chunk_index(offset) as usize;
-        let sb_idx = sub_block::sub_block_index(offset);
-        let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
-        let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx)
-            + sub_block::offset_in_sub_block(offset) as u64;
-        return reactor_dispatch::bdev_write_async(backend_bdev, bdev_offset, data).await;
-    }
-    sub_block_write(volume_name, offset, data).await
+    let engine = get_chunk_engine()?;
+    engine.sub_block_write(volume_name, offset, data).await
 }
 
 /// Public wrapper for sub_block_read — used by NDP server.
-/// Uses a fast path for aligned reads that fit within a single sub-block.
+/// All reads go through ChunkEngine for CRUSH-based placement.
 pub async fn sub_block_read_pub(volume_name: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
-    let offset_in_sb = sub_block::offset_in_sub_block(offset) as u64;
-    let sb_end = (offset - offset_in_sb) + SUB_BLOCK_SIZE as u64;
-    if offset + length <= sb_end && offset % 512 == 0 && length % 512 == 0 {
-        let backend_bdev = get_backend_bdev_name()?;
-        let vol_base = get_volume_base_offset(volume_name)?;
-        let chunk_idx = sub_block::chunk_index(offset) as usize;
-        let sb_idx = sub_block::sub_block_index(offset);
-        let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
-        let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx)
-            + sub_block::offset_in_sub_block(offset) as u64;
-        return reactor_dispatch::bdev_read_async(backend_bdev, bdev_offset, length).await;
-    }
-    sub_block_read(volume_name, offset, length).await
+    let engine = get_chunk_engine()?;
+    engine.sub_block_read(volume_name, offset, length).await
 }

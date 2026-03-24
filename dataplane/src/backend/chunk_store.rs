@@ -96,6 +96,51 @@ pub trait ChunkStore: Send + Sync {
     async fn stats(&self) -> Result<ChunkStoreStats>;
 }
 
+/// A null chunk store for frontend-only nodes that have no local storage.
+///
+/// All local I/O operations return errors, because a frontend-only node has
+/// no backend bdev. The ChunkEngine's CRUSH placement will route all chunks
+/// to remote nodes that have actual backends.
+pub struct NullChunkStore;
+
+#[async_trait]
+impl ChunkStore for NullChunkStore {
+    async fn put(&self, chunk_id: &str, _data: &[u8]) -> Result<()> {
+        Err(crate::error::DataPlaneError::ChunkEngineError(format!(
+            "frontend-only node has no local storage — cannot store chunk '{}'",
+            chunk_id
+        )))
+    }
+
+    async fn get(&self, chunk_id: &str) -> Result<Vec<u8>> {
+        Err(crate::error::DataPlaneError::ChunkEngineError(format!(
+            "frontend-only node has no local storage — cannot read chunk '{}'",
+            chunk_id
+        )))
+    }
+
+    async fn delete(&self, chunk_id: &str) -> Result<()> {
+        Err(crate::error::DataPlaneError::ChunkEngineError(format!(
+            "frontend-only node has no local storage — cannot delete chunk '{}'",
+            chunk_id
+        )))
+    }
+
+    async fn exists(&self, _chunk_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    async fn stats(&self) -> Result<ChunkStoreStats> {
+        Ok(ChunkStoreStats {
+            backend_name: "null".to_string(),
+            total_bytes: 0,
+            used_bytes: 0,
+            data_bytes: 0,
+            chunk_count: 0,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

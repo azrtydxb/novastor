@@ -425,6 +425,9 @@ message CreateVolumeRequest {
   string backend_type = 1;
   string name = 2;
   uint64 size_bytes = 3;
+  // When true, no local chunk store is required. The node acts as a
+  // frontend-only presenter — all I/O routes to remote backends via NDP.
+  bool frontend_only = 5;
 }
 
 message CreateVolumeResponse {
