@@ -1195,40 +1195,38 @@ impl DataplaneService for DataplaneServiceImpl {
         let bdev = crate::bdev::novastor_bdev::create(&req.name, req.size_bytes)
             .map_err(|e| Status::internal(format!("create novastor bdev: {e}")))?;
 
-        // Register volume on ALL topology nodes via NDP so they can serve
-        // CRUSH-routed I/O immediately, eliminating the 30s topology-push race.
-        // Must connect to all nodes (not just existing NDP connections).
+        // Register volume on ALL topology nodes via NDP BEFORE returning.
+        // This MUST be synchronous — I/O starts immediately after CreateVolume
+        // returns, so all nodes must know the volume before that.
         if let Ok(engine) = crate::bdev::novastor_bdev::get_chunk_engine() {
-            let vol_name = req.name.clone();
             let node_id = engine.node_id().to_string();
             let topo = engine.topology_snapshot();
             let ndp_pool = engine.ndp_pool().clone();
-            tokio::spawn(async move {
-                let mut registered = 0usize;
-                for node in topo.nodes() {
-                    if node.id == node_id {
-                        continue; // skip self — already registered locally
-                    }
-                    let addr = format!("{}:4500", node.address);
-                    match ndp_pool.register_volume_on_peer(&addr, &vol_name).await {
-                        Ok(()) => registered += 1,
-                        Err(e) => {
-                            log::warn!(
-                                "create_volume: failed to register '{}' on {}: {}",
-                                vol_name,
-                                addr,
-                                e
-                            );
-                        }
+            let vol_name = req.name.clone();
+            let mut registered = 0usize;
+            for node in topo.nodes() {
+                if node.id == node_id {
+                    continue;
+                }
+                let addr = format!("{}:4500", node.address);
+                match ndp_pool.register_volume_on_peer(&addr, &vol_name).await {
+                    Ok(()) => registered += 1,
+                    Err(e) => {
+                        log::warn!(
+                            "create_volume: failed to register '{}' on {}: {}",
+                            vol_name,
+                            addr,
+                            e
+                        );
                     }
                 }
-                log::info!(
-                    "create_volume: registered '{}' on {}/{} NDP peers",
-                    vol_name,
-                    registered,
-                    topo.nodes().len() - 1
-                );
-            });
+            }
+            log::info!(
+                "create_volume: registered '{}' on {}/{} NDP peers",
+                vol_name,
+                registered,
+                topo.nodes().len() - 1
+            );
         }
 
         Ok(Response::new(CreateVolumeResponse {
