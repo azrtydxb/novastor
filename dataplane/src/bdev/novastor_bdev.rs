@@ -1109,14 +1109,14 @@ unsafe extern "C" fn reactor_write_done_cb(
     }
 }
 
-/// Try reactor-native local write for a single sub-block write.
+/// Try reactor-native local write for writes within the same chunk.
 ///
 /// Returns `true` if the write was submitted on the reactor (caller should
 /// return immediately). Returns `false` if the reactor path cannot handle
 /// this write (caller should fall through to tokio).
 ///
 /// Requirements for reactor-native path:
-/// 1. Write fits within a single sub-block (no cross-sub-block spanning)
+/// 1. Write fits within a single chunk (sub-blocks are contiguous on backend)
 /// 2. CRUSH selects only local placements (rep1 on this node)
 /// 3. Write start offset is block-aligned (512 bytes)
 /// 4. Backend bdev is available via reactor cache
@@ -1129,14 +1129,14 @@ unsafe fn try_reactor_local_write(
     bdev_io: *mut ffi::spdk_bdev_io,
     ctx: *const BdevCtx,
 ) -> bool {
-    // Only handle writes within a single sub-block.
+    // Only handle writes within the same chunk (sub-blocks are contiguous on backend).
     if length == 0 {
         return false;
     }
-    let sb_start = offset / SUB_BLOCK_SIZE as u64;
-    let sb_end = (offset + length - 1) / SUB_BLOCK_SIZE as u64;
-    if sb_start != sb_end {
-        // Write spans multiple sub-blocks — fall to tokio.
+    let chunk_start = offset / CHUNK_SIZE as u64;
+    let chunk_end = (offset + length - 1) / CHUNK_SIZE as u64;
+    if chunk_start != chunk_end {
+        // Write spans multiple chunks — fall to tokio.
         return false;
     }
 
@@ -1209,8 +1209,15 @@ unsafe fn try_reactor_local_write(
         );
     }
 
-    // Compute dirty mask: single sub-block bit.
-    let dirty_mask = 1u64 << sb_idx;
+    // Compute dirty mask: all sub-blocks in the write range.
+    let sb_last = sub_block::sub_block_index(offset + length - 1);
+    let dirty_mask = {
+        let mut mask = 0u64;
+        for sb in sb_idx..=sb_last {
+            mask |= 1u64 << sb;
+        }
+        mask
+    };
 
     // Try to get a pre-allocated context from the pool.
     let bdev_ctx_ref = &*ctx;
@@ -1754,14 +1761,15 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 }
             }
 
-            // Cache miss — try reactor-native local read for single sub-block I/O.
+            // Cache miss — try reactor-native local read (same-chunk I/O).
             let mut reactor_handled = false;
 
-            // Reactor-native path: single sub-block, CRUSH selects local node.
-            if length > 0
-                && offset / SUB_BLOCK_SIZE as u64 == (offset + length - 1) / SUB_BLOCK_SIZE as u64
+            // Reactor-native path: same chunk, CRUSH selects local node.
+            // Sub-blocks are contiguous on the backend within a chunk,
+            // so a multi-sub-block read is a single spdk_bdev_read.
+            if length > 0 && offset / CHUNK_SIZE as u64 == (offset + length - 1) / CHUNK_SIZE as u64
             {
-                // Fits within a single sub-block — try CRUSH on reactor.
+                // Fits within a single chunk — try CRUSH on reactor.
                 if let Ok(engine) = get_chunk_engine() {
                     let topo = engine.topology_snapshot();
                     let prot = engine.protection();
