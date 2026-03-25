@@ -1545,7 +1545,8 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 return;
             }
 
-            // ---- ALL reads go through ChunkEngine via tokio ----
+            // ---- Reads go through tokio (cache lookup at sub-block
+            //      granularity needs range-aware matching) ----
             let bdev_io_addr = bdev_io as usize;
             let mut iov_descs: Vec<(usize, usize)> = Vec::with_capacity(iovcnt);
             for i in 0..iovcnt {
@@ -1608,8 +1609,7 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 return;
             }
 
-            // ---- ALL writes go through ChunkEngine via tokio ----
-            let bdev_io_addr = bdev_io as usize;
+            // ---- Writes: cache absorb on reactor, flush via tokio ----
             let mut data = vec![0u8; length as usize];
             let mut copied = 0usize;
             for i in 0..iovcnt {
@@ -1625,21 +1625,48 @@ unsafe extern "C" fn bdev_submit_request_cb(
                     break;
                 }
             }
-            let handle = get_tokio_handle().expect("tokio handle");
-            handle.spawn(async move {
-                let engine = get_chunk_engine().expect("chunk engine");
-                let result = engine.sub_block_write(&volume_name, offset, &data).await;
-                let status = match result {
-                    Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                    Err(e) => {
-                        error!("novastor_bdev: write failed: {}", e);
-                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
-                    }
-                };
-                reactor_dispatch::send_to_reactor(move || unsafe {
-                    ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
+
+            // Try sync cache absorb directly on reactor — zero thread crossing.
+            let engine = match get_chunk_engine() {
+                Ok(e) => e,
+                Err(_) => {
+                    ffi::spdk_bdev_io_complete(
+                        bdev_io,
+                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED,
+                    );
+                    return;
+                }
+            };
+
+            if engine.write_cache.absorb(&volume_name, offset, &data) {
+                // Cache absorbed — complete immediately on reactor!
+                // No async overflow flush here. Data stays in cache until
+                // host FLUSH command. This prevents the race where async
+                // drain removes entries before persistence, causing reads
+                // to miss both cache and backend.
+                ffi::spdk_bdev_io_complete(
+                    bdev_io,
+                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                );
+            } else {
+                // Cache full — fall back to tokio for direct write
+                let bdev_io_addr = bdev_io as usize;
+                let handle = get_tokio_handle().expect("tokio handle");
+                handle.spawn(async move {
+                    let engine = get_chunk_engine().expect("chunk engine");
+                    let result = engine.flush_single_write(&volume_name, offset, &data).await;
+                    let status = match result {
+                        Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                        Err(e) => {
+                            error!("novastor_bdev: write (cache full) failed: {}", e);
+                            ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                        }
+                    };
+                    reactor_dispatch::send_to_reactor(move || unsafe {
+                        ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
+                    });
                 });
-            });
+            }
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_FLUSH => {
             // Flush write-back cache for this volume through CRUSH fan-out.

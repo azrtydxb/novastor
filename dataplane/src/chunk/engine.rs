@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 
 use crate::backend::chunk_store::{ChunkHeader, ChunkStore, CHUNK_SIZE};
 use crate::chunk::ndp_pool::{ChunkMapBatcher, NdpPool};
-use crate::chunk::write_cache::WriteCache;
+use crate::chunk::write_cache::{coalesce_writes, ShardedWriteCache};
 use crate::error::{DataPlaneError, Result};
 use crate::metadata::crush;
 use crate::metadata::topology::ClusterMap;
@@ -40,7 +40,7 @@ pub struct ChunkEngine {
     /// Batches chunk map placement updates for broadcast to NDP peers.
     chunk_map_batcher: Option<ChunkMapBatcher>,
     /// Write-back cache: absorbs sub-block writes for deferred CRUSH fan-out.
-    write_cache: Mutex<WriteCache>,
+    pub write_cache: ShardedWriteCache,
 }
 
 impl ChunkEngine {
@@ -55,7 +55,7 @@ impl ChunkEngine {
             policy: None,
             ndp_pool: Arc::new(NdpPool::new()),
             chunk_map_batcher: None,
-            write_cache: Mutex::new(WriteCache::new()),
+            write_cache: ShardedWriteCache::new(),
         }
     }
 
@@ -75,7 +75,7 @@ impl ChunkEngine {
             policy: Some(policy),
             ndp_pool: Arc::new(NdpPool::new()),
             chunk_map_batcher: None,
-            write_cache: Mutex::new(WriteCache::new()),
+            write_cache: ShardedWriteCache::new(),
         }
     }
 
@@ -95,7 +95,7 @@ impl ChunkEngine {
             policy: None,
             ndp_pool: Arc::new(NdpPool::new()),
             chunk_map_batcher: None,
-            write_cache: Mutex::new(WriteCache::new()),
+            write_cache: ShardedWriteCache::new(),
         }
     }
 
@@ -116,7 +116,7 @@ impl ChunkEngine {
             policy: Some(policy),
             ndp_pool: Arc::new(NdpPool::new()),
             chunk_map_batcher: None,
-            write_cache: Mutex::new(WriteCache::new()),
+            write_cache: ShardedWriteCache::new(),
         }
     }
 
@@ -753,71 +753,17 @@ impl ChunkEngine {
         length: u64,
     ) -> Result<Vec<u8>> {
         // Check write-back cache first (may have unflushed data)
-        {
-            let cache = self.write_cache.lock().await;
-            if let Some(data) = cache.lookup(volume_id, offset, length) {
-                return Ok(data);
-            }
+        // Sync call — safe on reactor and tokio.
+        if let Some(data) = self.write_cache.lookup(volume_id, offset, length) {
+            return Ok(data);
         }
 
         let chunk_index = offset / CHUNK_SIZE as u64;
         let chunk_key = format!("{}:{}", volume_id, chunk_index);
 
-        // Try chunk map recorded placements first (actual data location).
-        // This handles post-migration scenarios where CRUSH placement
-        // differs from where data actually is.
-        #[cfg(feature = "spdk-sys")]
-        {
-            if let Some(store) = crate::bdev::novastor_bdev::get_metadata_store() {
-                if let Ok(Some(cm_entry)) = store.get_chunk_map(volume_id, chunk_index) {
-                    if !cm_entry.placements.is_empty() {
-                        let vol_hash = Self::volume_hash(volume_id);
-                        for placement_node in &cm_entry.placements {
-                            let result = if placement_node == &self.node_id {
-                                crate::bdev::novastor_bdev::sub_block_read_local(
-                                    volume_id, offset, length,
-                                )
-                                .await
-                            } else {
-                                let addr = {
-                                    let topo = self.topology.read().unwrap();
-                                    topo.get_node(placement_node)
-                                        .map(|n| format!("{}:{}", n.address, NDP_PORT))
-                                };
-                                match addr {
-                                    Some(a) => {
-                                        self.ndp_pool
-                                            .sub_block_read(&a, vol_hash, offset, length as u32)
-                                            .await
-                                    }
-                                    None => continue,
-                                }
-                            };
-                            match result {
-                                Ok(data) => return Ok(data),
-                                Err(e) => {
-                                    log::trace!(
-                                        "chunk map placement {} failed for vol={} offset={}: {}",
-                                        placement_node,
-                                        volume_id,
-                                        offset,
-                                        e
-                                    );
-                                    continue;
-                                }
-                            }
-                        }
-                        // All recorded placements failed — fall through to CRUSH
-                        log::trace!(
-                            "all chunk map placements failed for vol={} chunk={}, falling back to CRUSH",
-                            volume_id,
-                            chunk_index,
-                        );
-                    }
-                }
-            }
-        }
-
+        // CRUSH is the primary placement source — deterministic, pure CPU, no disk I/O.
+        // Chunk map (redb) is only consulted as a fallback if ALL CRUSH nodes fail
+        // (e.g., mid-migration when data hasn't moved yet). See issue #170.
         let placements = {
             let prot = self.protection.read().unwrap().clone();
             let factor = match &prot {
@@ -905,6 +851,49 @@ impl ChunkEngine {
             }
         }
 
+        // All CRUSH placements failed — try chunk map as last resort.
+        // Data may still be at old placement during migration window.
+        #[cfg(feature = "spdk-sys")]
+        {
+            if let Some(store) = crate::bdev::novastor_bdev::get_metadata_store() {
+                if let Ok(Some(cm_entry)) = store.get_chunk_map(volume_id, chunk_index) {
+                    for placement_node in &cm_entry.placements {
+                        // Skip nodes already tried via CRUSH
+                        if placements.iter().any(|(n, _)| n == placement_node) {
+                            continue;
+                        }
+                        let result = if placement_node == &self.node_id {
+                            crate::bdev::novastor_bdev::sub_block_read_local(
+                                volume_id, offset, length,
+                            )
+                            .await
+                        } else {
+                            let addr = {
+                                let topo = self.topology.read().unwrap();
+                                topo.get_node(placement_node)
+                                    .map(|n| format!("{}:{}", n.address, NDP_PORT))
+                            };
+                            match addr {
+                                Some(a) => {
+                                    self.ndp_pool
+                                        .sub_block_read(&a, vol_hash, offset, length as u32)
+                                        .await
+                                }
+                                None => continue,
+                            }
+                        };
+                        if let Ok(data) = result {
+                            log::info!(
+                                "sub_block_read: chunk map fallback succeeded for vol={} offset={} node={}",
+                                volume_id, offset, placement_node
+                            );
+                            return Ok(data);
+                        }
+                    }
+                }
+            }
+        }
+
         log::error!(
             "sub_block_read: all replicas failed for vol={} offset={} length={}",
             volume_id,
@@ -926,34 +915,37 @@ impl ChunkEngine {
     /// CRUSH fan-out. On cache-full, overflows are flushed and the write
     /// is retried; if still full, the write goes through directly.
     pub async fn sub_block_write(&self, volume_id: &str, offset: u64, data: &[u8]) -> Result<()> {
-        {
-            let mut cache = self.write_cache.lock().await;
-            if cache.absorb(volume_id, offset, data) {
-                if cache.needs_flush() {
-                    let overflow = cache.drain_overflow();
-                    drop(cache);
-                    for (vol, off, d) in overflow {
-                        self.flush_single_write(&vol, off, &d).await?;
+        // ShardedWriteCache: each shard has its own mutex, so writes to
+        // different (volume, offset) pairs don't contend. (#173)
+        // Sync cache absorb — no thread crossing needed.
+        if self.write_cache.absorb(volume_id, offset, data) {
+            let shard_idx = self.write_cache.shard_index_for(volume_id, offset);
+            if self.write_cache.shard_needs_flush(shard_idx) {
+                let overflow = self.write_cache.drain_shard_overflow(shard_idx);
+                if !overflow.is_empty() {
+                    // Coalesce adjacent sub-blocks before flushing (#172)
+                    let coalesced = coalesce_writes(overflow);
+                    for cw in coalesced {
+                        if let Err(e) = self
+                            .flush_single_write(&cw.volume_id, cw.offset, &cw.data)
+                            .await
+                        {
+                            log::warn!(
+                                "overflow flush failed for vol={} offset={}: {}",
+                                cw.volume_id,
+                                cw.offset,
+                                e
+                            );
+                            // Re-absorb failed entry so data isn't lost
+                            self.write_cache.absorb(&cw.volume_id, cw.offset, &cw.data);
+                        }
                     }
                 }
-                return Ok(());
             }
-        }
-        // Cache full — flush overflow and retry
-        let overflow = {
-            let mut cache = self.write_cache.lock().await;
-            cache.drain_overflow()
-        };
-        for (vol, off, d) in overflow {
-            self.flush_single_write(&vol, off, &d).await?;
-        }
-        // Retry absorb
-        let mut cache = self.write_cache.lock().await;
-        if cache.absorb(volume_id, offset, data) {
             return Ok(());
         }
-        drop(cache);
-        // Still can't cache — write through directly
+
+        // Shard full — write through directly (rare path)
         self.flush_single_write(volume_id, offset, data).await
     }
 
@@ -961,7 +953,12 @@ impl ChunkEngine {
     ///
     /// This is the actual write-to-backend path: CRUSH select, JoinSet
     /// fan-out to all replicas, quorum check, and placement recording.
-    async fn flush_single_write(&self, volume_id: &str, offset: u64, data: &[u8]) -> Result<()> {
+    pub async fn flush_single_write(
+        &self,
+        volume_id: &str,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<()> {
         let chunk_index = offset / CHUNK_SIZE as u64;
         let chunk_key = format!("{}:{}", volume_id, chunk_index);
 
@@ -1138,20 +1135,24 @@ impl ChunkEngine {
     /// Flush all cached writes for a volume through CRUSH fan-out.
     /// Called on host FLUSH command. Blocks until all writes persist on backends.
     pub async fn flush(&self, volume_id: &str) -> Result<()> {
-        let entries = {
-            let mut cache = self.write_cache.lock().await;
-            cache.drain_volume(volume_id)
-        };
+        let entries = self.write_cache.drain_volume(volume_id);
         if entries.is_empty() {
             return Ok(());
         }
+        // Coalesce adjacent sub-blocks before flushing (#172)
+        let raw: Vec<(String, u64, Vec<u8>)> = entries
+            .into_iter()
+            .map(|(off, data)| (volume_id.to_string(), off, data))
+            .collect();
+        let coalesced = coalesce_writes(raw);
         log::info!(
-            "flushing {} cached writes for volume {}",
-            entries.len(),
+            "flushing {} coalesced writes for volume {}",
+            coalesced.len(),
             volume_id
         );
-        for (offset, data) in entries {
-            self.flush_single_write(volume_id, offset, &data).await?;
+        for cw in coalesced {
+            self.flush_single_write(&cw.volume_id, cw.offset, &cw.data)
+                .await?;
         }
         Ok(())
     }

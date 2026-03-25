@@ -165,6 +165,7 @@ impl Default for NdpPool {
 /// The batcher aggregates these and sends them to all NDP peers either
 /// when the batch reaches 1000 entries or every 100ms, whichever comes
 /// first.
+#[derive(Clone)]
 pub struct ChunkMapBatcher {
     pool: Arc<NdpPool>,
     pending: Arc<tokio::sync::Mutex<Vec<ChunkMapSyncEntry>>>,
