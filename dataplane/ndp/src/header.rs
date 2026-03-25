@@ -23,6 +23,8 @@ pub enum NdpOp {
     Pong = 0x0B,
     ChunkMapSync = 0x0C,
     ChunkMapSyncResp = 0x0D,
+    RegisterVolume = 0x0E,
+    RegisterVolumeResp = 0x0F,
 }
 
 impl NdpOp {
@@ -41,6 +43,8 @@ impl NdpOp {
             0x0B => Ok(Self::Pong),
             0x0C => Ok(Self::ChunkMapSync),
             0x0D => Ok(Self::ChunkMapSyncResp),
+            0x0E => Ok(Self::RegisterVolume),
+            0x0F => Ok(Self::RegisterVolumeResp),
             other => Err(NdpError::UnknownOp(other)),
         }
     }
@@ -48,7 +52,11 @@ impl NdpOp {
     pub fn has_request_data(self) -> bool {
         matches!(
             self,
-            Self::Write | Self::Replicate | Self::EcShard | Self::ChunkMapSync
+            Self::Write
+                | Self::Replicate
+                | Self::EcShard
+                | Self::ChunkMapSync
+                | Self::RegisterVolume
         )
     }
 

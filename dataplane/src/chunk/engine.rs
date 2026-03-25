@@ -120,6 +120,11 @@ impl ChunkEngine {
         }
     }
 
+    /// Return a reference to the NDP connection pool.
+    pub fn ndp_pool(&self) -> &Arc<NdpPool> {
+        &self.ndp_pool
+    }
+
     /// Set the protection scheme at runtime (called by SetVolumePolicy RPC).
     pub fn set_protection(&self, protection: Protection) {
         let mut p = self.protection.write().unwrap();

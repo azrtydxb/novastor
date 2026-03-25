@@ -143,6 +143,24 @@ async fn handle_request(msg: NdpMessage) -> NdpMessage {
 
         NdpOp::ChunkMapSync => handle_chunk_map_sync(&msg.header, msg.data).await,
 
+        NdpOp::RegisterVolume => {
+            let volume_name = msg
+                .data
+                .as_deref()
+                .and_then(|d| std::str::from_utf8(d).ok())
+                .unwrap_or("");
+            if !volume_name.is_empty() {
+                register_volume_hash(volume_name);
+                // Also lazy-allocate volume offset so sub_block_write_local works
+                // immediately when CRUSH routes I/O here.
+                let _ = crate::bdev::novastor_bdev::get_volume_base_offset(volume_name);
+            }
+            NdpMessage::new(
+                NdpHeader::response(&msg.header, NdpOp::RegisterVolumeResp, 0, 0),
+                None,
+            )
+        }
+
         _ => {
             // Unknown or response op received as request.
             NdpMessage::new(

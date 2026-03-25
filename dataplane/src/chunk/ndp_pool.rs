@@ -152,6 +152,57 @@ impl NdpPool {
     }
 }
 
+impl NdpPool {
+    /// Register a volume name on all connected NDP peers.
+    /// Called during CreateVolume to eliminate the registration race where
+    /// CRUSH routes I/O to a node that doesn't yet know about the volume.
+    pub async fn broadcast_register_volume(&self, volume_name: &str) -> usize {
+        let data = volume_name.as_bytes().to_vec();
+        let conns = self.connections.lock().await;
+        let mut success = 0usize;
+        for (addr, conn) in conns.iter() {
+            let header = NdpHeader::request(NdpOp::RegisterVolume, 0, 0, 0, data.len() as u32);
+            match conn.request(header, Some(data.clone())).await {
+                Ok(resp) if resp.header.status == 0 => {
+                    success += 1;
+                }
+                Ok(resp) => {
+                    log::warn!(
+                        "RegisterVolume '{}' to {} failed: status={}",
+                        volume_name,
+                        addr,
+                        resp.header.status
+                    );
+                }
+                Err(e) => {
+                    log::warn!("RegisterVolume '{}' to {} failed: {}", volume_name, addr, e);
+                }
+            }
+        }
+        success
+    }
+}
+
+impl NdpPool {
+    /// Register a volume on a specific peer by address.
+    /// Connects if not already connected (lazy connect).
+    pub async fn register_volume_on_peer(&self, addr: &str, volume_name: &str) -> Result<()> {
+        let conn = self.get_or_connect(addr).await?;
+        let data = volume_name.as_bytes().to_vec();
+        let header = NdpHeader::request(NdpOp::RegisterVolume, 0, 0, 0, data.len() as u32);
+        let resp = conn.request(header, Some(data)).await.map_err(|e| {
+            DataPlaneError::TransportError(format!("RegisterVolume to {}: {}", addr, e))
+        })?;
+        if resp.header.status != 0 {
+            return Err(DataPlaneError::TransportError(format!(
+                "RegisterVolume to {} failed: status={}",
+                addr, resp.header.status
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl Default for NdpPool {
     fn default() -> Self {
         Self::new()

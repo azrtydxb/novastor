@@ -164,7 +164,7 @@ pub fn allocate_volume_offset(volume_name: &str, size_bytes: u64) -> u64 {
 /// Get the base offset for a volume, lazily allocating if needed.
 /// This enables lazy per-chunk allocation: the first sub-block write
 /// to a volume on this backend automatically allocates a 4MB chunk slot.
-fn get_volume_base_offset(volume_name: &str) -> Result<u64> {
+pub fn get_volume_base_offset(volume_name: &str) -> Result<u64> {
     // Fast path: already allocated.
     {
         let offsets = volume_offsets().read().unwrap();
