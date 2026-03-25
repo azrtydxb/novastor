@@ -131,6 +131,11 @@ service DataplaneService {
 
   // --- Metadata Sync ---
   rpc GetChunkMaps(GetChunkMapsRequest) returns (GetChunkMapsResponse);
+
+  // SyncChunkMaps returns all chunk map entries whose generation is strictly
+  // greater than since_generation. Used as a periodic safety net to recover
+  // any NDP broadcast updates that were missed.
+  rpc SyncChunkMaps(SyncChunkMapsRequest) returns (SyncChunkMapsResponse);
 }
 
 // ==========================================================================
@@ -500,9 +505,20 @@ message TopologyBackend {
   string backend_type = 6;
 }
 
+message VolumeInfo {
+  string name = 1;
+  uint64 size_bytes = 2;
+  string protection_type = 3;
+  uint32 rep_factor = 4;
+  uint32 data_shards = 5;
+  uint32 parity_shards = 6;
+  string status = 7;
+}
+
 message UpdateTopologyRequest {
   uint64 generation = 1;
   repeated TopologyNode nodes = 2;
+  repeated VolumeInfo volumes = 3;
 }
 
 message UpdateTopologyResponse {
@@ -510,6 +526,22 @@ message UpdateTopologyResponse {
 }
 
 // Metadata Sync messages
+message ChunkMapUpdate {
+  string volume_id = 1;
+  uint64 chunk_index = 2;
+  uint64 dirty_bitmap = 3;
+  repeated string placements = 4;
+  uint64 generation = 5;
+}
+
+message SyncChunkMapsRequest {
+  uint64 since_generation = 1;
+}
+
+message SyncChunkMapsResponse {
+  repeated ChunkMapUpdate updates = 1;
+}
+
 message ChunkMapEntryProto {
   string volume_id = 1;
   uint64 chunk_index = 2;

@@ -1322,70 +1322,11 @@ impl DataplaneService for DataplaneServiceImpl {
         let engine = crate::bdev::novastor_bdev::get_chunk_engine()
             .map_err(|e| Status::internal(format!("chunk engine not ready: {e}")))?;
 
-        // Guard: reject topology updates when a backend bdev is configured.
-        // Until NDP auto-registration and data migration are implemented,
-        // changing CRUSH topology reroutes reads/writes to remote nodes that
-        // don't have the volume registered, causing silent data corruption.
-        // The init_chunk_store single-node topology ensures all I/O stays local.
-        if crate::bdev::novastor_bdev::get_backend_bdev_name().is_ok() {
-            log::info!(
-                "update_topology: skipping — backend bdev active, keeping local-only \
-                 topology to prevent CRUSH rerouting (proposed {} nodes)",
-                req.nodes.len(),
-            );
-            return Ok(Response::new(UpdateTopologyResponse { accepted: true }));
-        }
-
-        let mut topology = ClusterMap::new(req.generation);
-        for proto_node in &req.nodes {
-            let status = match proto_node.status.as_str() {
-                "online" => NodeStatus::Online,
-                "draining" => NodeStatus::Draining,
-                _ => NodeStatus::Offline,
-            };
-            let backends = proto_node
-                .backends
+        // Build a shared helper that parses proto nodes into Node structs.
+        let parse_nodes = |nodes: &[TopologyNode]| -> Vec<Node> {
+            nodes
                 .iter()
-                .map(|b| Backend {
-                    id: b.id.clone(),
-                    node_id: b.node_id.clone(),
-                    capacity_bytes: b.capacity_bytes,
-                    used_bytes: b.used_bytes,
-                    weight: b.weight,
-                    backend_type: match b.backend_type.as_str() {
-                        "file" => BackendType::File,
-                        "lvm" => BackendType::Lvm,
-                        _ => BackendType::Bdev,
-                    },
-                })
-                .collect();
-            // Strip port from address if the Go agent included it (e.g. "192.168.100.13:9100").
-            // The dataplane needs just the IP for inter-node gRPC connections.
-            let address = if proto_node.address.contains(':') {
-                proto_node
-                    .address
-                    .split(':')
-                    .next()
-                    .unwrap_or(&proto_node.address)
-                    .to_string()
-            } else {
-                proto_node.address.clone()
-            };
-            topology.add_node(Node {
-                id: proto_node.node_id.clone(),
-                address,
-                port: proto_node.port as u16,
-                backends,
-                status,
-            });
-        }
-
-        let accepted = engine.update_topology(topology);
-        if accepted {
-            // Also update the policy engine's topology if it exists.
-            if let Ok(pe) = get_any_policy_engine() {
-                let mut topo2 = ClusterMap::new(req.generation);
-                for proto_node in &req.nodes {
+                .map(|proto_node| {
                     let status = match proto_node.status.as_str() {
                         "online" => NodeStatus::Online,
                         "draining" => NodeStatus::Draining,
@@ -1407,7 +1348,9 @@ impl DataplaneService for DataplaneServiceImpl {
                             },
                         })
                         .collect();
-                    // Strip port from address (same as above).
+                    // Strip port from address if the Go agent included it
+                    // (e.g. "192.168.100.13:9100").  The dataplane needs just
+                    // the IP for inter-node gRPC connections.
                     let address = if proto_node.address.contains(':') {
                         proto_node
                             .address
@@ -1418,14 +1361,72 @@ impl DataplaneService for DataplaneServiceImpl {
                     } else {
                         proto_node.address.clone()
                     };
-                    topo2.add_node(Node {
+                    Node {
                         id: proto_node.node_id.clone(),
                         address,
                         port: proto_node.port as u16,
                         backends,
                         status,
-                    });
-                }
+                    }
+                })
+                .collect()
+        };
+
+        // Build ClusterMap using set_nodes so the generation is set once from
+        // the proto field rather than being incremented per add_node call.
+        let mut topology = ClusterMap::new(req.generation);
+        topology.set_nodes(parse_nodes(&req.nodes));
+
+        // Parse volumes from proto and attach them to the topology.
+        {
+            use crate::metadata::types::{Protection, VolumeDefinition, VolumeStatus};
+            let volumes: Vec<VolumeDefinition> = req
+                .volumes
+                .iter()
+                .map(|vi| {
+                    let protection = if vi.protection_type == "erasure_coding" {
+                        Protection::ErasureCoding {
+                            data_shards: vi.data_shards,
+                            parity_shards: vi.parity_shards,
+                        }
+                    } else {
+                        Protection::Replication {
+                            factor: vi.rep_factor.max(1),
+                        }
+                    };
+                    let status = match vi.status.as_str() {
+                        "deleting" => VolumeStatus::Deleting,
+                        "creating" => VolumeStatus::Creating,
+                        "error" => VolumeStatus::Error,
+                        _ => VolumeStatus::Available,
+                    };
+                    VolumeDefinition {
+                        id: vi.name.clone(),
+                        name: vi.name.clone(),
+                        size_bytes: vi.size_bytes,
+                        protection,
+                        status,
+                        created_at: 0,
+                        chunk_count: vi.size_bytes.saturating_add(4 * 1024 * 1024 - 1)
+                            / (4 * 1024 * 1024),
+                    }
+                })
+                .collect();
+            topology.set_volumes(volumes);
+        }
+
+        let (accepted, _old_topo) = engine.update_topology(topology);
+        if accepted {
+            // Register volume hashes for NDP lookups so peer nodes can route
+            // NDP requests to this node even before a bdev is created.
+            for vi in &req.volumes {
+                crate::transport::ndp_server::register_volume_hash(&vi.name);
+            }
+
+            // Also update the policy engine's topology if it exists.
+            if let Ok(pe) = get_any_policy_engine() {
+                let mut topo2 = ClusterMap::new(req.generation);
+                topo2.set_nodes(parse_nodes(&req.nodes));
                 pe.update_topology(topo2).await;
             }
         }
@@ -1465,6 +1466,38 @@ impl DataplaneService for DataplaneServiceImpl {
             entries,
             volume_count,
         }))
+    }
+
+    async fn sync_chunk_maps(
+        &self,
+        request: Request<SyncChunkMapsRequest>,
+    ) -> Result<Response<SyncChunkMapsResponse>, Status> {
+        let req = request.into_inner();
+        let since = req.since_generation;
+
+        let mut updates = Vec::new();
+
+        if let Some(store) = crate::bdev::novastor_bdev::get_metadata_store() {
+            if let Ok(volumes) = store.list_volumes() {
+                for vol in &volumes {
+                    if let Ok(chunks) = store.list_chunk_map(&vol.id) {
+                        for cm in chunks {
+                            if cm.generation > since {
+                                updates.push(ChunkMapUpdate {
+                                    volume_id: vol.id.clone(),
+                                    chunk_index: cm.chunk_index,
+                                    dirty_bitmap: cm.dirty_bitmap,
+                                    placements: cm.placements.clone(),
+                                    generation: cm.generation,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Response::new(SyncChunkMapsResponse { updates }))
     }
 
     // ========================================================================

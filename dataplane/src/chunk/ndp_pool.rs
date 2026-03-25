@@ -29,7 +29,7 @@ impl NdpPool {
 
     /// Get or create a connection to the given address.
     /// Address format: "host:port" for TCP, "/path/to/socket" or "unix:/path" for Unix.
-    async fn get_or_connect(&self, addr: &str) -> Result<Arc<NdpConnection>> {
+    pub async fn get_or_connect(&self, addr: &str) -> Result<Arc<NdpConnection>> {
         let mut conns = self.connections.lock().await;
         if let Some(conn) = conns.get(addr) {
             return Ok(conn.clone());
@@ -116,8 +116,103 @@ impl NdpPool {
     }
 }
 
+/// A single chunk-map update entry for broadcast to peers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ChunkMapSyncEntry {
+    pub volume_id: String,
+    pub chunk_index: u64,
+    pub dirty_bitmap: u64,
+    pub placements: Vec<String>,
+    pub generation: u64,
+}
+
+impl NdpPool {
+    /// Broadcast chunk map updates to all connected peers.
+    /// Each update is serialized as JSON in the data payload.
+    /// Returns results per peer (addr, success/failure).
+    pub async fn broadcast_chunk_map_sync(
+        &self,
+        updates: &[ChunkMapSyncEntry],
+    ) -> Vec<(String, Result<()>)> {
+        let data = serde_json::to_vec(updates).unwrap_or_default();
+        let conns = self.connections.lock().await;
+        let mut results = Vec::new();
+        for (addr, conn) in conns.iter() {
+            let header = NdpHeader::request(NdpOp::ChunkMapSync, 0, 0, 0, data.len() as u32);
+            let result = conn
+                .request(header, Some(data.clone()))
+                .await
+                .map(|_| ())
+                .map_err(|e| {
+                    DataPlaneError::TransportError(format!("ChunkMapSync to {}: {}", addr, e))
+                });
+            results.push((addr.clone(), result));
+        }
+        results
+    }
+}
+
 impl Default for NdpPool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Batches chunk map updates and broadcasts every 100ms or 1000 entries.
+///
+/// After a successful sub-block write, the ChunkEngine enqueues a
+/// `ChunkMapSyncEntry` recording which nodes acknowledged the write.
+/// The batcher aggregates these and sends them to all NDP peers either
+/// when the batch reaches 1000 entries or every 100ms, whichever comes
+/// first.
+pub struct ChunkMapBatcher {
+    pool: Arc<NdpPool>,
+    pending: Arc<tokio::sync::Mutex<Vec<ChunkMapSyncEntry>>>,
+}
+
+impl ChunkMapBatcher {
+    /// Create a new batcher that broadcasts via the given `NdpPool`.
+    ///
+    /// Spawns a background tokio task that flushes pending entries every
+    /// 100ms. The task silently continues when the pool has no connections.
+    pub fn new(pool: Arc<NdpPool>) -> Self {
+        let pending: Arc<tokio::sync::Mutex<Vec<ChunkMapSyncEntry>>> =
+            Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let pending_clone = pending.clone();
+        let pool_clone = pool.clone();
+
+        // Spawn timer-based flush every 100ms.
+        crate::tokio_handle().spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+            loop {
+                interval.tick().await;
+                let batch: Vec<ChunkMapSyncEntry> = {
+                    let mut p = pending_clone.lock().await;
+                    if p.is_empty() {
+                        continue;
+                    }
+                    std::mem::take(&mut *p)
+                };
+                let _ = pool_clone.broadcast_chunk_map_sync(&batch).await;
+            }
+        });
+
+        Self { pool, pending }
+    }
+
+    /// Enqueue a chunk map entry for batched broadcast.
+    ///
+    /// If the batch reaches 1000 entries, it is flushed immediately in a
+    /// spawned task (non-blocking for the caller).
+    pub async fn enqueue(&self, entry: ChunkMapSyncEntry) {
+        let mut pending = self.pending.lock().await;
+        pending.push(entry);
+        if pending.len() >= 1000 {
+            let batch = std::mem::take(&mut *pending);
+            let pool = self.pool.clone();
+            tokio::spawn(async move {
+                let _ = pool.broadcast_chunk_map_sync(&batch).await;
+            });
+        }
     }
 }

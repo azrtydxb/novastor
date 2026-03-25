@@ -83,6 +83,8 @@ pub fn sync_atomic_bitmaps_to_chunk_maps() {
                         chunk_id: format!("{}:{}", vol_name, i),
                         ec_params: None,
                         dirty_bitmap: 0,
+                        placements: vec![],
+                        generation: 0,
                     });
                     cm_entry.dirty_bitmap = bm;
                 }
@@ -636,6 +638,8 @@ fn update_dirty_bitmap(volume_name: &str, chunk_idx: usize, sb_idx: usize) -> Re
             chunk_id: format!("{}:{}", volume_name, chunk_idx),
             ec_params: None,
             dirty_bitmap: 0,
+            placements: vec![],
+            generation: 0,
         });
         bitmap_set(&mut entry.dirty_bitmap, sb_idx);
     }
@@ -857,222 +861,9 @@ unsafe fn readahead_state(volume_name: &str) -> &mut ReadaheadState {
 }
 
 // ---------------------------------------------------------------------------
-// Write-back cache (reactor-local, no synchronization needed)
+// (Old bdev-layer WriteCache removed — write-back caching is now in
+// ChunkEngine via chunk::write_cache::WriteCache)
 // ---------------------------------------------------------------------------
-
-/// Number of sub-block slots in the write cache per volume.
-/// 128 slots × 64KB = 8MB cache per volume. Slots are addressed by
-/// sub-block index modulo CACHE_SLOTS (direct-mapped cache).
-const WRITE_CACHE_SLOTS: usize = 128;
-
-/// Per-volume write-back cache. Writes are absorbed into cache slots
-/// and acknowledged immediately. Dirty slots are flushed to the backend
-/// in batches, coalescing adjacent writes.
-///
-/// SAFETY: only accessed on the SPDK reactor thread.
-struct WriteCache {
-    /// Flat buffer: WRITE_CACHE_SLOTS × SUB_BLOCK_SIZE bytes.
-    /// Allocated from hugepages via spdk_dma_malloc.
-    buf: *mut u8,
-    /// Per-slot dirty flag + volume-relative sub-block index.
-    /// slot_tag[i] = Some(global_sb_index) if dirty, None if clean.
-    slot_tag: [Option<u64>; WRITE_CACHE_SLOTS],
-    /// Per-slot valid byte ranges (offset_in_sb, length) for partial writes.
-    /// A full sub-block write sets (0, SUB_BLOCK_SIZE).
-    slot_valid: [(usize, usize); WRITE_CACHE_SLOTS],
-    /// Number of dirty slots.
-    dirty_count: u32,
-    /// Flush threshold: trigger background flush when dirty_count >= this.
-    flush_threshold: u32,
-}
-
-impl WriteCache {
-    unsafe fn new() -> Self {
-        let buf_size = WRITE_CACHE_SLOTS * SUB_BLOCK_SIZE;
-        let buf = ffi::spdk_dma_malloc(buf_size, 0x1000, std::ptr::null_mut()) as *mut u8;
-        if !buf.is_null() {
-            std::ptr::write_bytes(buf, 0, buf_size);
-        }
-        Self {
-            buf,
-            slot_tag: [None; WRITE_CACHE_SLOTS],
-            slot_valid: [(0, 0); WRITE_CACHE_SLOTS],
-            dirty_count: 0,
-            flush_threshold: (WRITE_CACHE_SLOTS as u32 * 3) / 4, // 75%
-        }
-    }
-
-    /// Try to absorb a write into the cache. Returns true if cached
-    /// (caller should complete the bdev_io immediately). Returns false
-    /// if the cache is full and needs flushing first.
-    unsafe fn absorb(
-        &mut self,
-        global_sb_idx: u64,
-        off_in_sb: usize,
-        data: *const u8,
-        len: usize,
-    ) -> bool {
-        if self.buf.is_null() {
-            return false; // Cache not allocated.
-        }
-        let slot = (global_sb_idx as usize) % WRITE_CACHE_SLOTS;
-
-        // Evict if slot is occupied by a different sub-block.
-        if let Some(existing) = self.slot_tag[slot] {
-            if existing != global_sb_idx {
-                // Slot collision — can't cache without evicting.
-                // Return false to let the write go through the normal path.
-                return false;
-            }
-        }
-
-        // Copy data into cache slot.
-        let slot_buf = self.buf.add(slot * SUB_BLOCK_SIZE);
-        std::ptr::copy_nonoverlapping(data, slot_buf.add(off_in_sb), len);
-
-        // Update slot metadata.
-        if self.slot_tag[slot].is_none() {
-            self.dirty_count += 1;
-        }
-        self.slot_tag[slot] = Some(global_sb_idx);
-        // Extend valid range to cover this write.
-        let (prev_off, prev_len) = self.slot_valid[slot];
-        if prev_len == 0 {
-            self.slot_valid[slot] = (off_in_sb, len);
-        } else {
-            let new_start = prev_off.min(off_in_sb);
-            let new_end = (prev_off + prev_len).max(off_in_sb + len);
-            self.slot_valid[slot] = (new_start, new_end - new_start);
-        }
-
-        true
-    }
-
-    /// Check if a read can be served from the cache.
-    /// Returns a pointer to the cached data if the requested range
-    /// is fully covered by a cache slot.
-    unsafe fn lookup(&self, global_sb_idx: u64, off_in_sb: usize, len: usize) -> Option<*const u8> {
-        if self.buf.is_null() {
-            return None;
-        }
-        let slot = (global_sb_idx as usize) % WRITE_CACHE_SLOTS;
-        if self.slot_tag[slot] != Some(global_sb_idx) {
-            return None;
-        }
-        let (valid_off, valid_len) = self.slot_valid[slot];
-        if off_in_sb >= valid_off && off_in_sb + len <= valid_off + valid_len {
-            Some(self.buf.add(slot * SUB_BLOCK_SIZE).add(off_in_sb) as *const u8)
-        } else {
-            None
-        }
-    }
-
-    /// Check if flush is needed (dirty count exceeds threshold).
-    fn needs_flush(&self) -> bool {
-        self.dirty_count >= self.flush_threshold
-    }
-
-    /// Collect dirty slots for flushing. Returns (slot_index, global_sb_idx, off, len) tuples
-    /// sorted by global_sb_idx for write coalescing.
-    fn collect_dirty(&self) -> Vec<(usize, u64, usize, usize)> {
-        let mut dirty: Vec<(usize, u64, usize, usize)> = self
-            .slot_tag
-            .iter()
-            .enumerate()
-            .filter_map(|(i, tag)| {
-                tag.map(|sb_idx| {
-                    let (off, len) = self.slot_valid[i];
-                    (i, sb_idx, off, len)
-                })
-            })
-            .collect();
-        dirty.sort_by_key(|&(_, sb_idx, _, _)| sb_idx);
-        dirty
-    }
-
-    /// Mark a slot as clean after successful flush.
-    fn mark_clean(&mut self, slot: usize) {
-        if self.slot_tag[slot].is_some() {
-            self.slot_tag[slot] = None;
-            self.slot_valid[slot] = (0, 0);
-            self.dirty_count = self.dirty_count.saturating_sub(1);
-        }
-    }
-}
-
-static mut WRITE_CACHES: Option<HashMap<String, WriteCache>> = None;
-
-/// Get or create write cache for a volume.
-/// SAFETY: must be called on the SPDK reactor thread.
-unsafe fn write_cache(volume_name: &str) -> &mut WriteCache {
-    let caches = WRITE_CACHES.get_or_insert_with(HashMap::new);
-    caches
-        .entry(volume_name.to_string())
-        .or_insert_with(|| WriteCache::new())
-}
-
-/// Flush dirty cache slots to backend. Called from the reactor thread.
-/// Batches adjacent sub-blocks into single backend writes for coalescing.
-unsafe fn flush_write_cache(
-    volume_name: &str,
-    cache: &ReactorBdevCache,
-    bdev_ctx: *const BdevCtx,
-    vol_base: u64,
-) {
-    let wc = write_cache(volume_name);
-    if wc.dirty_count == 0 {
-        return;
-    }
-
-    let dirty = wc.collect_dirty();
-    if dirty.is_empty() {
-        return;
-    }
-
-    // Flush each dirty slot individually (coalescing of adjacent slots
-    // is a future optimization — for now, per-slot flush is correct and
-    // still much faster than per-I/O backend writes).
-    for &(slot, global_sb_idx, _off_in_sb, _len) in &dirty {
-        let chunk_idx = (global_sb_idx as usize) / sub_block::SUB_BLOCKS_PER_CHUNK;
-        let sb_idx = (global_sb_idx as usize) % sub_block::SUB_BLOCKS_PER_CHUNK;
-        let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
-        let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx);
-        let slot_buf = wc.buf.add(slot * SUB_BLOCK_SIZE) as *mut c_void;
-
-        // Write the full sub-block to backend.
-        let rc = ffi::spdk_bdev_write(
-            cache.desc,
-            cache.channel,
-            slot_buf,
-            bdev_offset,
-            SUB_BLOCK_SIZE as u64,
-            Some(flush_write_done_cb),
-            std::ptr::null_mut(),
-        );
-        if rc == 0 {
-            // Update dirty bitmap.
-            if !bdev_ctx.is_null() {
-                let ctx = &*bdev_ctx;
-                if chunk_idx < ctx.dirty_bitmaps.len() {
-                    ctx.dirty_bitmaps[chunk_idx]
-                        .fetch_or(1u64 << sb_idx, std::sync::atomic::Ordering::Relaxed);
-                }
-            }
-            wc.mark_clean(slot);
-        } else {
-            warn!("write cache flush: spdk_bdev_write failed rc={}", rc);
-        }
-    }
-}
-
-/// Dummy completion callback for cache flush writes.
-unsafe extern "C" fn flush_write_done_cb(
-    child_io: *mut ffi::spdk_bdev_io,
-    _success: bool,
-    _ctx: *mut c_void,
-) {
-    ffi::spdk_bdev_free_io(child_io);
-}
 
 /// Context for an in-flight prefetch I/O.
 struct PrefetchCtx {
@@ -1851,11 +1642,24 @@ unsafe extern "C" fn bdev_submit_request_cb(
             });
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_FLUSH => {
-            // ChunkEngine handles persistence — nothing to flush locally.
-            ffi::spdk_bdev_io_complete(
-                bdev_io,
-                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-            );
+            // Flush write-back cache for this volume through CRUSH fan-out.
+            let bdev_io_addr = bdev_io as usize;
+            let handle = get_tokio_handle().expect("tokio handle");
+            handle.spawn(async move {
+                let status = match get_chunk_engine() {
+                    Ok(engine) => match engine.flush(&volume_name).await {
+                        Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                        Err(e) => {
+                            error!("novastor_bdev: flush failed: {}", e);
+                            ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                        }
+                    },
+                    Err(_) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                };
+                reactor_dispatch::send_to_reactor(move || unsafe {
+                    ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
+                });
+            });
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES => {
             let bdev_params = (*bdev_io).u.bdev.as_ref();

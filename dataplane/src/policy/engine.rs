@@ -10,6 +10,7 @@ use log::{info, warn};
 use tokio::sync::RwLock;
 
 use crate::backend::chunk_store::ChunkStore;
+use crate::chunk::engine::ChunkEngine;
 use crate::error::Result;
 use crate::metadata::topology::ClusterMap;
 use crate::policy::evaluator::PolicyEvaluator;
@@ -29,6 +30,10 @@ pub struct PolicyEngine {
     operations: ChunkOperations,
     topology: RwLock<Arc<ClusterMap>>,
     policies: RwLock<HashMap<String, VolumePolicy>>,
+    /// Optional ChunkEngine reference for migration I/O.
+    chunk_engine: RwLock<Option<Arc<ChunkEngine>>>,
+    /// Rate-limits concurrent migration tasks.
+    migration_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl PolicyEngine {
@@ -52,6 +57,8 @@ impl PolicyEngine {
             operations,
             topology: RwLock::new(Arc::new(topology)),
             policies: RwLock::new(HashMap::new()),
+            chunk_engine: RwLock::new(None),
+            migration_semaphore: Arc::new(tokio::sync::Semaphore::new(16)),
         }
     }
 
@@ -95,6 +102,66 @@ impl PolicyEngine {
     /// Returns this engine's node ID.
     pub fn node_id(&self) -> &str {
         &self.node_id
+    }
+
+    /// Set the ChunkEngine reference for migration I/O.
+    /// Called after both PolicyEngine and ChunkEngine are created.
+    pub async fn set_chunk_engine(&self, engine: Arc<ChunkEngine>) {
+        let mut ce = self.chunk_engine.write().await;
+        *ce = Some(engine);
+    }
+
+    /// Detect chunks stored locally that CRUSH says should be elsewhere.
+    /// Returns a list of (volume_id, chunk_index, target_node) tuples.
+    pub async fn detect_misplaced_chunks(&self) -> Vec<(String, u64, String)> {
+        let mut misplaced = Vec::new();
+
+        #[cfg(feature = "spdk-sys")]
+        {
+            let store = match crate::bdev::novastor_bdev::get_metadata_store() {
+                Some(s) => s,
+                None => return misplaced,
+            };
+            let topo = self.topology.read().await;
+            let volumes = match store.list_volumes() {
+                Ok(v) => v,
+                Err(_) => return misplaced,
+            };
+
+            for vol in &volumes {
+                // Skip deleting volumes
+                if vol.status == crate::metadata::types::VolumeStatus::Deleting {
+                    continue;
+                }
+                let factor = match vol.protection {
+                    crate::metadata::types::Protection::Replication { factor } => factor as usize,
+                    crate::metadata::types::Protection::ErasureCoding {
+                        data_shards,
+                        parity_shards,
+                    } => (data_shards + parity_shards) as usize,
+                };
+                let chunks = match store.list_chunk_map(&vol.id) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                for cm in &chunks {
+                    // Only migrate chunks we actually have locally
+                    if !cm.placements.contains(&self.node_id) {
+                        continue;
+                    }
+                    let chunk_key = format!("{}:{}", vol.id, cm.chunk_index);
+                    let placements = crate::metadata::crush::select(&chunk_key, factor, &topo);
+                    let still_here = placements.iter().any(|(n, _)| n == &self.node_id);
+                    if !still_here {
+                        if let Some((target, _)) = placements.first() {
+                            misplaced.push((vol.id.clone(), cm.chunk_index, target.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        misplaced
     }
 
     /// Run one reconciliation pass: evaluate all chunks, execute corrective
@@ -276,6 +343,38 @@ impl PolicyEngine {
                             "cannot reconstruct shard {} index {}: missing address for target {}",
                             chunk_id, shard_index, target_node
                         );
+                    }
+                }
+            }
+        }
+
+        // Migration check — detect and migrate misplaced chunks.
+        {
+            let chunk_engine = self.chunk_engine.read().await;
+            if let Some(engine) = chunk_engine.as_ref() {
+                let misplaced = self.detect_misplaced_chunks().await;
+                if !misplaced.is_empty() {
+                    info!(
+                        "policy: {} misplaced chunks, migrating (max 16 concurrent)",
+                        misplaced.len()
+                    );
+                    for (vol_id, chunk_idx, target) in misplaced {
+                        let permit = self.migration_semaphore.clone().acquire_owned().await;
+                        if permit.is_err() {
+                            break;
+                        }
+                        let permit = permit.unwrap();
+                        let engine = engine.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = engine.migrate_chunk(&vol_id, chunk_idx, &target).await
+                            {
+                                warn!(
+                                    "migration {}:{} -> {} failed: {}",
+                                    vol_id, chunk_idx, target, e
+                                );
+                            }
+                            drop(permit);
+                        });
                     }
                 }
             }

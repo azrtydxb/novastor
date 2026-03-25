@@ -502,12 +502,13 @@ func (c *Client) SetVolumePolicy(volumeID string, desiredReplicas, dataShards, p
 // UpdateTopology pushes a full cluster topology snapshot to the dataplane.
 // The generation must be strictly higher than the current one (except when
 // upgrading from generation 0, which is the bootstrap placeholder).
-func (c *Client) UpdateTopology(generation uint64, nodes []*pb.TopologyNode) (bool, error) {
+func (c *Client) UpdateTopology(generation uint64, nodes []*pb.TopologyNode, volumes []*pb.VolumeInfo) (bool, error) {
 	ctx, cancel := c.ctx()
 	defer cancel()
 	resp, err := c.svc.UpdateTopology(ctx, &pb.UpdateTopologyRequest{
 		Generation: generation,
 		Nodes:      nodes,
+		Volumes:    volumes,
 	})
 	if err != nil {
 		return false, fmt.Errorf("update topology (gen %d): %w", generation, err)
@@ -529,6 +530,22 @@ func (c *Client) GetChunkMaps(bdevName string) ([]*pb.ChunkMapEntryProto, error)
 		return nil, fmt.Errorf("get chunk maps for %s: %w", bdevName, err)
 	}
 	return resp.GetEntries(), nil
+}
+
+// SyncChunkMaps retrieves chunk map updates from the dataplane since the given
+// generation. Returns only entries whose generation is strictly greater than
+// sinceGeneration. Pass 0 to retrieve all entries. This is the safety-net
+// fallback for missed NDP ChunkMapSync broadcasts.
+func (c *Client) SyncChunkMaps(sinceGeneration uint64) ([]*pb.ChunkMapUpdate, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := c.svc.SyncChunkMaps(ctx, &pb.SyncChunkMapsRequest{
+		SinceGeneration: sinceGeneration,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("SyncChunkMaps: %w", err)
+	}
+	return resp.GetUpdates(), nil
 }
 
 // --------------------------------------------------------------------------

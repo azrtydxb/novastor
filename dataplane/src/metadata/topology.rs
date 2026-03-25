@@ -87,6 +87,9 @@ pub struct ClusterMap {
     generation: u64,
     /// All nodes known to the cluster.
     nodes: Vec<Node>,
+    /// Volumes tracked in this cluster map snapshot.
+    #[serde(default)]
+    volumes: Vec<crate::metadata::types::VolumeDefinition>,
 }
 
 impl ClusterMap {
@@ -95,6 +98,7 @@ impl ClusterMap {
         Self {
             generation,
             nodes: Vec::new(),
+            volumes: Vec::new(),
         }
     }
 
@@ -140,6 +144,23 @@ impl ClusterMap {
             .iter()
             .filter(|n| n.status == NodeStatus::Online)
             .collect()
+    }
+
+    /// Bulk-set nodes without incrementing generation per node.
+    ///
+    /// Used when constructing from proto — generation is set once from the proto field.
+    pub fn set_nodes(&mut self, nodes: Vec<Node>) {
+        self.nodes = nodes;
+    }
+
+    /// Replace the volumes list in this map.
+    pub fn set_volumes(&mut self, volumes: Vec<crate::metadata::types::VolumeDefinition>) {
+        self.volumes = volumes;
+    }
+
+    /// Returns a slice of all volumes tracked in this cluster map.
+    pub fn volumes(&self) -> &[crate::metadata::types::VolumeDefinition] {
+        &self.volumes
     }
 }
 

@@ -208,6 +208,8 @@ mod tests {
             chunk_id: "deadbeef".to_string(),
             ec_params: None,
             dirty_bitmap: 0,
+            placements: vec![],
+            generation: 0,
         };
 
         // put

@@ -210,7 +210,38 @@ func syncTopology(ctx context.Context, metaClient *metadata.GRPCClient, dpClient
 			})
 		}
 
-		accepted, err := dpClient.UpdateTopology(generation, protoNodes)
+		// Fetch active volumes from metadata service for topology push.
+		var protoVolumes []*pb.VolumeInfo
+		volumes, vErr := metaClient.ListVolumesMeta(ctx)
+		if vErr != nil {
+			logging.L.Warn("topology sync: failed to list volumes", zap.Error(vErr))
+		} else {
+			protoVolumes = make([]*pb.VolumeInfo, 0, len(volumes))
+			for _, v := range volumes {
+				vi := &pb.VolumeInfo{
+					Name:      v.VolumeID,
+					SizeBytes: v.SizeBytes,
+				}
+				if v.DataProtection != nil {
+					switch v.DataProtection.Mode {
+					case metadata.ProtectionModeReplication:
+						vi.ProtectionType = string(metadata.ProtectionModeReplication)
+						if v.DataProtection.Replication != nil {
+							vi.RepFactor = uint32(v.DataProtection.Replication.Factor)
+						}
+					case metadata.ProtectionModeErasureCoding:
+						vi.ProtectionType = string(metadata.ProtectionModeErasureCoding)
+						if v.DataProtection.ErasureCoding != nil {
+							vi.DataShards = uint32(v.DataProtection.ErasureCoding.DataShards)
+							vi.ParityShards = uint32(v.DataProtection.ErasureCoding.ParityShards)
+						}
+					}
+				}
+				protoVolumes = append(protoVolumes, vi)
+			}
+		}
+
+		accepted, err := dpClient.UpdateTopology(generation, protoNodes, protoVolumes)
 		if err != nil {
 			logging.L.Warn("topology sync: UpdateTopology RPC failed", zap.Error(err))
 			return

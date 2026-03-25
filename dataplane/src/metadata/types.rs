@@ -53,6 +53,12 @@ pub struct ChunkMapEntry {
     /// Bitmap of which 64KB sub-blocks have been written (64 bits = 64 sub-blocks).
     #[serde(default)]
     pub dirty_bitmap: u64,
+    /// Node IDs that hold a copy of this chunk (set by placement engine).
+    #[serde(default)]
+    pub placements: Vec<String>,
+    /// Cluster map generation at the time this entry was written.
+    #[serde(default)]
+    pub generation: u64,
 }
 
 /// Requests that can be applied to the metadata state machine.
@@ -137,6 +143,8 @@ mod tests {
             chunk_id: "deadbeef".to_string(),
             ec_params: None,
             dirty_bitmap: 0,
+            placements: vec![],
+            generation: 0,
         };
 
         let json = serde_json::to_string(&entry).expect("serialize");
@@ -157,6 +165,8 @@ mod tests {
                 parity_shards: 2,
             }),
             dirty_bitmap: 0,
+            placements: vec![],
+            generation: 0,
         };
 
         let json = serde_json::to_string(&entry).expect("serialize");

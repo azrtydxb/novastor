@@ -452,6 +452,8 @@ mod tests {
             chunk_id: format!("chunk-{index:04}"),
             ec_params: None,
             dirty_bitmap: 0,
+            placements: vec![],
+            generation: 0,
         }
     }
 
@@ -504,6 +506,8 @@ mod tests {
                 parity_shards: 2,
             }),
             dirty_bitmap: 0,
+            placements: vec![],
+            generation: 0,
         };
         store.put_chunk_map("vol-1", &entry).unwrap();
         let got = store.get_chunk_map("vol-1", 0).unwrap().unwrap();

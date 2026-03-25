@@ -12,7 +12,8 @@ use ring::digest;
 use tokio::sync::Mutex;
 
 use crate::backend::chunk_store::{ChunkHeader, ChunkStore, CHUNK_SIZE};
-use crate::chunk::ndp_pool::NdpPool;
+use crate::chunk::ndp_pool::{ChunkMapBatcher, NdpPool};
+use crate::chunk::write_cache::WriteCache;
 use crate::error::{DataPlaneError, Result};
 use crate::metadata::crush;
 use crate::metadata::topology::ClusterMap;
@@ -36,6 +37,10 @@ pub struct ChunkEngine {
     policy: Option<Arc<PolicyEngine>>,
     /// NDP connection pool for sub-block I/O to remote backend nodes.
     ndp_pool: Arc<NdpPool>,
+    /// Batches chunk map placement updates for broadcast to NDP peers.
+    chunk_map_batcher: Option<ChunkMapBatcher>,
+    /// Write-back cache: absorbs sub-block writes for deferred CRUSH fan-out.
+    write_cache: Mutex<WriteCache>,
 }
 
 impl ChunkEngine {
@@ -49,6 +54,8 @@ impl ChunkEngine {
             connections: Mutex::new(HashMap::new()),
             policy: None,
             ndp_pool: Arc::new(NdpPool::new()),
+            chunk_map_batcher: None,
+            write_cache: Mutex::new(WriteCache::new()),
         }
     }
 
@@ -67,6 +74,8 @@ impl ChunkEngine {
             connections: Mutex::new(HashMap::new()),
             policy: Some(policy),
             ndp_pool: Arc::new(NdpPool::new()),
+            chunk_map_batcher: None,
+            write_cache: Mutex::new(WriteCache::new()),
         }
     }
 
@@ -85,6 +94,8 @@ impl ChunkEngine {
             connections: Mutex::new(HashMap::new()),
             policy: None,
             ndp_pool: Arc::new(NdpPool::new()),
+            chunk_map_batcher: None,
+            write_cache: Mutex::new(WriteCache::new()),
         }
     }
 
@@ -104,6 +115,8 @@ impl ChunkEngine {
             connections: Mutex::new(HashMap::new()),
             policy: Some(policy),
             ndp_pool: Arc::new(NdpPool::new()),
+            chunk_map_batcher: None,
+            write_cache: Mutex::new(WriteCache::new()),
         }
     }
 
@@ -118,10 +131,24 @@ impl ChunkEngine {
         self.protection.read().unwrap().clone()
     }
 
+    /// Enable batched chunk map broadcast via NDP.
+    ///
+    /// Must be called inside a tokio runtime context (spawns a background
+    /// timer task). Safe to call multiple times — subsequent calls are no-ops.
+    pub fn enable_chunk_map_batcher(&mut self) {
+        if self.chunk_map_batcher.is_none() {
+            self.chunk_map_batcher = Some(ChunkMapBatcher::new(self.ndp_pool.clone()));
+        }
+    }
+
     /// Replace the cluster topology with an updated snapshot.
     /// Rejects updates with a generation <= the current one (except when
     /// current is generation 0, which is the bootstrap placeholder).
-    pub fn update_topology(&self, new_topology: ClusterMap) -> bool {
+    ///
+    /// Returns `(accepted, old_topology)` — `old_topology` is `Some` only
+    /// when the update was accepted, and contains the topology that was
+    /// replaced (useful for migration / diff detection by the caller).
+    pub fn update_topology(&self, new_topology: ClusterMap) -> (bool, Option<Arc<ClusterMap>>) {
         let mut topo = self.topology.write().unwrap();
         let current_gen = topo.generation();
         let new_gen = new_topology.generation();
@@ -131,7 +158,7 @@ impl ChunkEngine {
                 current_gen,
                 new_gen,
             );
-            return false;
+            return (false, None);
         }
         log::info!(
             "topology updated: generation {} -> {}, nodes: {}",
@@ -139,8 +166,9 @@ impl ChunkEngine {
             new_gen,
             new_topology.nodes().len(),
         );
+        let old = topo.clone();
         *topo = Arc::new(new_topology);
-        true
+        (true, Some(old))
     }
 
     /// Returns the current topology generation.
@@ -275,6 +303,8 @@ impl ChunkEngine {
                 chunk_id,
                 ec_params,
                 dirty_bitmap: u64::MAX,
+                placements: vec![],
+                generation: 0,
             });
         }
 
@@ -713,14 +743,80 @@ impl ChunkEngine {
     /// nodes, then tries each placement in order (local first when possible).
     /// Local reads go through the bdev sub_block_read_local path; remote reads
     /// go through the NDP connection pool.
+    ///
+    /// Checks the write-back cache first — unflushed data is more current
+    /// than what is on backends.
     pub async fn sub_block_read(
         &self,
         volume_id: &str,
         offset: u64,
         length: u64,
     ) -> Result<Vec<u8>> {
+        // Check write-back cache first (may have unflushed data)
+        {
+            let cache = self.write_cache.lock().await;
+            if let Some(data) = cache.lookup(volume_id, offset, length) {
+                return Ok(data);
+            }
+        }
+
         let chunk_index = offset / CHUNK_SIZE as u64;
         let chunk_key = format!("{}:{}", volume_id, chunk_index);
+
+        // Try chunk map recorded placements first (actual data location).
+        // This handles post-migration scenarios where CRUSH placement
+        // differs from where data actually is.
+        #[cfg(feature = "spdk-sys")]
+        {
+            if let Some(store) = crate::bdev::novastor_bdev::get_metadata_store() {
+                if let Ok(Some(cm_entry)) = store.get_chunk_map(volume_id, chunk_index) {
+                    if !cm_entry.placements.is_empty() {
+                        let vol_hash = Self::volume_hash(volume_id);
+                        for placement_node in &cm_entry.placements {
+                            let result = if placement_node == &self.node_id {
+                                crate::bdev::novastor_bdev::sub_block_read_local(
+                                    volume_id, offset, length,
+                                )
+                                .await
+                            } else {
+                                let addr = {
+                                    let topo = self.topology.read().unwrap();
+                                    topo.get_node(placement_node)
+                                        .map(|n| format!("{}:{}", n.address, NDP_PORT))
+                                };
+                                match addr {
+                                    Some(a) => {
+                                        self.ndp_pool
+                                            .sub_block_read(&a, vol_hash, offset, length as u32)
+                                            .await
+                                    }
+                                    None => continue,
+                                }
+                            };
+                            match result {
+                                Ok(data) => return Ok(data),
+                                Err(e) => {
+                                    log::trace!(
+                                        "chunk map placement {} failed for vol={} offset={}: {}",
+                                        placement_node,
+                                        volume_id,
+                                        offset,
+                                        e
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        // All recorded placements failed — fall through to CRUSH
+                        log::trace!(
+                            "all chunk map placements failed for vol={} chunk={}, falling back to CRUSH",
+                            volume_id,
+                            chunk_index,
+                        );
+                    }
+                }
+            }
+        }
 
         let placements = {
             let prot = self.protection.read().unwrap().clone();
@@ -823,12 +919,49 @@ impl ChunkEngine {
         }))
     }
 
-    /// Write a sub-block range to the volume, routing through CRUSH.
+    /// Write a sub-block range to the volume via write-back cache.
     ///
-    /// Computes which chunk the offset falls in, uses CRUSH to find all
-    /// replica nodes, then fans out writes to ALL replicas concurrently.
-    /// Returns Ok when a majority quorum of writes succeed.
+    /// Absorbs the write into the cache and returns immediately. When the
+    /// cache reaches high-water mark, oldest entries are flushed through
+    /// CRUSH fan-out. On cache-full, overflows are flushed and the write
+    /// is retried; if still full, the write goes through directly.
     pub async fn sub_block_write(&self, volume_id: &str, offset: u64, data: &[u8]) -> Result<()> {
+        {
+            let mut cache = self.write_cache.lock().await;
+            if cache.absorb(volume_id, offset, data) {
+                if cache.needs_flush() {
+                    let overflow = cache.drain_overflow();
+                    drop(cache);
+                    for (vol, off, d) in overflow {
+                        self.flush_single_write(&vol, off, &d).await?;
+                    }
+                }
+                return Ok(());
+            }
+        }
+        // Cache full — flush overflow and retry
+        let overflow = {
+            let mut cache = self.write_cache.lock().await;
+            cache.drain_overflow()
+        };
+        for (vol, off, d) in overflow {
+            self.flush_single_write(&vol, off, &d).await?;
+        }
+        // Retry absorb
+        let mut cache = self.write_cache.lock().await;
+        if cache.absorb(volume_id, offset, data) {
+            return Ok(());
+        }
+        drop(cache);
+        // Still can't cache — write through directly
+        self.flush_single_write(volume_id, offset, data).await
+    }
+
+    /// Flush a single write through CRUSH fan-out to backend nodes.
+    ///
+    /// This is the actual write-to-backend path: CRUSH select, JoinSet
+    /// fan-out to all replicas, quorum check, and placement recording.
+    async fn flush_single_write(&self, volume_id: &str, offset: u64, data: &[u8]) -> Result<()> {
         let chunk_index = offset / CHUNK_SIZE as u64;
         let chunk_key = format!("{}:{}", volume_id, chunk_index);
 
@@ -853,7 +986,7 @@ impl ChunkEngine {
         }
 
         log::trace!(
-            "sub_block_write: vol={} offset={} len={} chunk={} placements={:?} self={}",
+            "flush_single_write: vol={} offset={} len={} chunk={} placements={:?} self={}",
             volume_id,
             offset,
             data.len(),
@@ -924,21 +1057,23 @@ impl ChunkEngine {
         }
 
         let mut successes = 0usize;
+        let mut successful_nodes: Vec<String> = Vec::new();
         let mut last_err = None;
 
         while let Some(result) = join_set.join_next().await {
             match result {
-                Ok(Ok(_target)) => {
+                Ok(Ok(target)) => {
                     successes += 1;
+                    successful_nodes.push(target);
                 }
                 Ok(Err(e)) => {
-                    warn!("sub_block_write replica failed: {}", e);
+                    warn!("flush_single_write replica failed: {}", e);
                     last_err = Some(e);
                 }
                 Err(e) => {
-                    warn!("sub_block_write replica task panicked: {}", e);
+                    warn!("flush_single_write replica task panicked: {}", e);
                     last_err = Some(DataPlaneError::ChunkEngineError(format!(
-                        "sub_block_write task panicked: {}",
+                        "flush_single_write task panicked: {}",
                         e
                     )));
                 }
@@ -947,7 +1082,7 @@ impl ChunkEngine {
 
         if successes < quorum {
             log::error!(
-                "sub_block_write: quorum not met for vol={} offset={}: {}/{} succeeded, need {}",
+                "flush_single_write: quorum not met for vol={} offset={}: {}/{} succeeded, need {}",
                 volume_id,
                 offset,
                 successes,
@@ -956,7 +1091,7 @@ impl ChunkEngine {
             );
             return Err(last_err.unwrap_or_else(|| {
                 DataPlaneError::ChunkEngineError(format!(
-                    "sub_block_write quorum not met: {}/{} succeeded, need {}",
+                    "flush_single_write quorum not met: {}/{} succeeded, need {}",
                     successes,
                     placements.len(),
                     quorum
@@ -964,6 +1099,60 @@ impl ChunkEngine {
             }));
         }
 
+        // Record actual placements in chunk map + broadcast to peers.
+        let gen = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        #[cfg(feature = "spdk-sys")]
+        {
+            if let Some(store) = crate::bdev::novastor_bdev::get_metadata_store() {
+                let cm = ChunkMapEntry {
+                    chunk_index,
+                    chunk_id: chunk_key.clone(),
+                    ec_params: None,
+                    dirty_bitmap: u64::MAX,
+                    placements: successful_nodes.clone(),
+                    generation: gen,
+                };
+                let _ = store.put_chunk_map(volume_id, &cm);
+            }
+        }
+
+        // Broadcast placement info to peers (batched).
+        if let Some(batcher) = self.chunk_map_batcher.as_ref() {
+            let entry = crate::chunk::ndp_pool::ChunkMapSyncEntry {
+                volume_id: volume_id.to_string(),
+                chunk_index,
+                dirty_bitmap: u64::MAX,
+                placements: successful_nodes,
+                generation: gen,
+            };
+            batcher.enqueue(entry).await;
+        }
+
+        Ok(())
+    }
+
+    /// Flush all cached writes for a volume through CRUSH fan-out.
+    /// Called on host FLUSH command. Blocks until all writes persist on backends.
+    pub async fn flush(&self, volume_id: &str) -> Result<()> {
+        let entries = {
+            let mut cache = self.write_cache.lock().await;
+            cache.drain_volume(volume_id)
+        };
+        if entries.is_empty() {
+            return Ok(());
+        }
+        log::info!(
+            "flushing {} cached writes for volume {}",
+            entries.len(),
+            volume_id
+        );
+        for (offset, data) in entries {
+            self.flush_single_write(volume_id, offset, &data).await?;
+        }
         Ok(())
     }
 
@@ -1074,6 +1263,95 @@ impl ChunkEngine {
 
         reconstructed.truncate(CHUNK_SIZE);
         Ok(reconstructed)
+    }
+
+    /// Migrate a chunk from local backend to target node via NDP.
+    /// Sets FLAG_MIGRATION so the target checks generation before accepting
+    /// (prevents overwriting fresh host writes with stale migration data).
+    #[cfg(feature = "spdk-sys")]
+    pub async fn migrate_chunk(
+        &self,
+        volume_id: &str,
+        chunk_index: u64,
+        target_node: &str,
+    ) -> Result<()> {
+        let chunk_offset = chunk_index * CHUNK_SIZE as u64;
+        let vol_hash = Self::volume_hash(volume_id);
+
+        // Read all sub-blocks from local backend
+        let data = crate::bdev::novastor_bdev::sub_block_read_local(
+            volume_id,
+            chunk_offset,
+            CHUNK_SIZE as u64,
+        )
+        .await?;
+
+        // Get target address
+        let addr = {
+            let topo = self.topology.read().unwrap();
+            topo.get_node(target_node)
+                .map(|n| format!("{}:{}", n.address, NDP_PORT))
+                .ok_or_else(|| {
+                    DataPlaneError::ChunkEngineError(format!(
+                        "migration target {} not in topology",
+                        target_node
+                    ))
+                })?
+        };
+
+        // Write with migration flag via NDP
+        let conn = self.ndp_pool.get_or_connect(&addr).await?;
+        let mut header = ndp::NdpHeader::request(
+            ndp::NdpOp::Write,
+            0,
+            vol_hash,
+            chunk_offset,
+            data.len() as u32,
+        );
+        header.flags |= ndp::header::FLAG_MIGRATION;
+
+        let resp = conn
+            .request(header, Some(data))
+            .await
+            .map_err(|e| DataPlaneError::TransportError(format!("migrate to {}: {}", addr, e)))?;
+
+        match resp.header.status {
+            0 => {
+                log::info!(
+                    "migrated chunk {}:{} to node {}",
+                    volume_id,
+                    chunk_index,
+                    target_node
+                );
+                Ok(())
+            }
+            5 => {
+                log::info!(
+                    "migration {}:{} to {} skipped — target has newer data",
+                    volume_id,
+                    chunk_index,
+                    target_node
+                );
+                Ok(()) // Not an error — target already has fresh data
+            }
+            s => Err(DataPlaneError::TransportError(format!(
+                "migration write to {} failed: status={}",
+                addr, s
+            ))),
+        }
+    }
+
+    /// Migrate a chunk from local backend to target node via NDP (stub for non-SPDK builds).
+    #[cfg(not(feature = "spdk-sys"))]
+    pub async fn migrate_chunk(
+        &self,
+        _volume_id: &str,
+        _chunk_index: u64,
+        _target_node: &str,
+    ) -> Result<()> {
+        Err(DataPlaneError::ChunkEngineError(
+            "migrate_chunk requires spdk-sys feature".into(),
+        ))
     }
 }
 

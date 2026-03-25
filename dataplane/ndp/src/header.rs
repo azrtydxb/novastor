@@ -3,6 +3,9 @@ use crate::error::{NdpError, Result};
 pub const NDP_MAGIC: u32 = 0x4E565354; // "NVST"
 pub const NDP_HEADER_SIZE: usize = 64;
 
+/// NDP header flag: write is a migration — target checks generation before accepting.
+pub const FLAG_MIGRATION: u8 = 0x01;
+
 /// NDP operation codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -18,6 +21,8 @@ pub enum NdpOp {
     EcShard = 0x09,
     Ping = 0x0A,
     Pong = 0x0B,
+    ChunkMapSync = 0x0C,
+    ChunkMapSyncResp = 0x0D,
 }
 
 impl NdpOp {
@@ -34,12 +39,17 @@ impl NdpOp {
             0x09 => Ok(Self::EcShard),
             0x0A => Ok(Self::Ping),
             0x0B => Ok(Self::Pong),
+            0x0C => Ok(Self::ChunkMapSync),
+            0x0D => Ok(Self::ChunkMapSyncResp),
             other => Err(NdpError::UnknownOp(other)),
         }
     }
 
     pub fn has_request_data(self) -> bool {
-        matches!(self, Self::Write | Self::Replicate | Self::EcShard)
+        matches!(
+            self,
+            Self::Write | Self::Replicate | Self::EcShard | Self::ChunkMapSync
+        )
     }
 
     pub fn has_response_data(self) -> bool {

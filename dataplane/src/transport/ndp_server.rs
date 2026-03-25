@@ -141,6 +141,8 @@ async fn handle_request(msg: NdpMessage) -> NdpMessage {
 
         NdpOp::Replicate => handle_write(&msg.header, msg.data).await,
 
+        NdpOp::ChunkMapSync => handle_chunk_map_sync(&msg.header, msg.data).await,
+
         _ => {
             // Unknown or response op received as request.
             NdpMessage::new(
@@ -191,6 +193,26 @@ async fn handle_write(header: &NdpHeader, data: Option<Vec<u8>>) -> NdpMessage {
             return NdpMessage::new(NdpHeader::response(header, NdpOp::WriteResp, 2, 0), None);
         }
     };
+
+    // Check migration flag — reject if local data is newer
+    if header.flags & ndp::header::FLAG_MIGRATION != 0 {
+        if let Some(store) = novastor_bdev::get_metadata_store() {
+            let chunk_size: u64 = 4 * 1024 * 1024; // CHUNK_SIZE
+            let chunk_idx = header.offset / chunk_size;
+            if let Ok(Some(local_cm)) = store.get_chunk_map(&volume_name, chunk_idx) {
+                if local_cm.generation > 0 {
+                    info!(
+                        "NDP: rejecting migration write for {}:{} — local gen {} > 0",
+                        volume_name, chunk_idx, local_cm.generation
+                    );
+                    return NdpMessage::new(
+                        NdpHeader::response(header, NdpOp::WriteResp, 5, 0),
+                        None,
+                    );
+                }
+            }
+        }
+    }
 
     let write_data = match data {
         Some(d) => d,
@@ -252,4 +274,49 @@ pub fn unregister_volume_hash(volume_name: &str) {
     if let Some(cache) = VOLUME_HASH_CACHE.get() {
         cache.write().unwrap().remove(&hash);
     }
+}
+
+/// Handle a ChunkMapSync request: deserialize updates and merge into local
+/// metadata store using highest-generation-wins semantics.
+async fn handle_chunk_map_sync(req_header: &NdpHeader, data: Option<Vec<u8>>) -> NdpMessage {
+    let entries: Vec<crate::chunk::ndp_pool::ChunkMapSyncEntry> =
+        match data.as_deref().and_then(|d| serde_json::from_slice(d).ok()) {
+            Some(e) => e,
+            None => {
+                return NdpMessage::new(
+                    NdpHeader::response(req_header, NdpOp::ChunkMapSyncResp, 0, 0),
+                    None,
+                );
+            }
+        };
+
+    // Merge into local metadata store (highest generation wins).
+    if let Some(store) = novastor_bdev::get_metadata_store() {
+        for entry in &entries {
+            let existing: Option<crate::metadata::types::ChunkMapEntry> = store
+                .get_chunk_map(&entry.volume_id, entry.chunk_index)
+                .ok()
+                .flatten();
+            let should_update = match &existing {
+                Some(e) => entry.generation > e.generation,
+                None => true,
+            };
+            if should_update {
+                let cm = crate::metadata::types::ChunkMapEntry {
+                    chunk_index: entry.chunk_index,
+                    chunk_id: format!("{}:{}", entry.volume_id, entry.chunk_index),
+                    ec_params: None,
+                    dirty_bitmap: entry.dirty_bitmap,
+                    placements: entry.placements.clone(),
+                    generation: entry.generation,
+                };
+                let _ = store.put_chunk_map(&entry.volume_id, &cm);
+            }
+        }
+    }
+
+    NdpMessage::new(
+        NdpHeader::response(req_header, NdpOp::ChunkMapSyncResp, 0, 0),
+        None,
+    )
 }

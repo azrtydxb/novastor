@@ -54,6 +54,7 @@ const (
 	DataplaneService_GetVersion_FullMethodName          = "/dataplane.DataplaneService/GetVersion"
 	DataplaneService_Heartbeat_FullMethodName           = "/dataplane.DataplaneService/Heartbeat"
 	DataplaneService_GetChunkMaps_FullMethodName        = "/dataplane.DataplaneService/GetChunkMaps"
+	DataplaneService_SyncChunkMaps_FullMethodName       = "/dataplane.DataplaneService/SyncChunkMaps"
 )
 
 // DataplaneServiceClient is the client API for DataplaneService service.
@@ -135,6 +136,10 @@ type DataplaneServiceClient interface {
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	// --- Metadata Sync ---
 	GetChunkMaps(ctx context.Context, in *GetChunkMapsRequest, opts ...grpc.CallOption) (*GetChunkMapsResponse, error)
+	// SyncChunkMaps returns all chunk map entries whose generation is strictly
+	// greater than since_generation. Used as a periodic safety net to recover
+	// any NDP broadcast updates that were missed.
+	SyncChunkMaps(ctx context.Context, in *SyncChunkMapsRequest, opts ...grpc.CallOption) (*SyncChunkMapsResponse, error)
 }
 
 type dataplaneServiceClient struct {
@@ -507,6 +512,16 @@ func (c *dataplaneServiceClient) GetChunkMaps(ctx context.Context, in *GetChunkM
 	return out, nil
 }
 
+func (c *dataplaneServiceClient) SyncChunkMaps(ctx context.Context, in *SyncChunkMapsRequest, opts ...grpc.CallOption) (*SyncChunkMapsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncChunkMapsResponse)
+	err := c.cc.Invoke(ctx, DataplaneService_SyncChunkMaps_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataplaneServiceServer is the server API for DataplaneService service.
 // All implementations must embed UnimplementedDataplaneServiceServer
 // for forward compatibility.
@@ -586,6 +601,10 @@ type DataplaneServiceServer interface {
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	// --- Metadata Sync ---
 	GetChunkMaps(context.Context, *GetChunkMapsRequest) (*GetChunkMapsResponse, error)
+	// SyncChunkMaps returns all chunk map entries whose generation is strictly
+	// greater than since_generation. Used as a periodic safety net to recover
+	// any NDP broadcast updates that were missed.
+	SyncChunkMaps(context.Context, *SyncChunkMapsRequest) (*SyncChunkMapsResponse, error)
 	mustEmbedUnimplementedDataplaneServiceServer()
 }
 
@@ -700,6 +719,9 @@ func (UnimplementedDataplaneServiceServer) Heartbeat(context.Context, *Heartbeat
 }
 func (UnimplementedDataplaneServiceServer) GetChunkMaps(context.Context, *GetChunkMapsRequest) (*GetChunkMapsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetChunkMaps not implemented")
+}
+func (UnimplementedDataplaneServiceServer) SyncChunkMaps(context.Context, *SyncChunkMapsRequest) (*SyncChunkMapsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SyncChunkMaps not implemented")
 }
 func (UnimplementedDataplaneServiceServer) mustEmbedUnimplementedDataplaneServiceServer() {}
 func (UnimplementedDataplaneServiceServer) testEmbeddedByValue()                          {}
@@ -1334,6 +1356,24 @@ func _DataplaneService_GetChunkMaps_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataplaneService_SyncChunkMaps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncChunkMapsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneServiceServer).SyncChunkMaps(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneService_SyncChunkMaps_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneServiceServer).SyncChunkMaps(ctx, req.(*SyncChunkMapsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataplaneService_ServiceDesc is the grpc.ServiceDesc for DataplaneService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1472,6 +1512,10 @@ var DataplaneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetChunkMaps",
 			Handler:    _DataplaneService_GetChunkMaps_Handler,
+		},
+		{
+			MethodName: "SyncChunkMaps",
+			Handler:    _DataplaneService_SyncChunkMaps_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
