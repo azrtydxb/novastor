@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 
 use crate::backend::chunk_store::{ChunkHeader, ChunkStore, CHUNK_SIZE};
 use crate::chunk::ndp_pool::{ChunkMapBatcher, NdpPool};
-use crate::chunk::write_cache::{coalesce_writes, ShardedWriteCache};
+use crate::chunk::write_cache::{coalesce_writes, AbsorbResult, ShardedWriteCache};
 use crate::error::{DataPlaneError, Result};
 use crate::metadata::crush;
 use crate::metadata::topology::ClusterMap;
@@ -918,35 +918,45 @@ impl ChunkEngine {
         // ShardedWriteCache: each shard has its own mutex, so writes to
         // different (volume, offset) pairs don't contend. (#173)
         // Sync cache absorb — no thread crossing needed.
-        if self.write_cache.absorb(volume_id, offset, data) {
-            let shard_idx = self.write_cache.shard_index_for(volume_id, offset);
-            if self.write_cache.shard_needs_flush(shard_idx) {
-                let overflow = self.write_cache.drain_shard_overflow(shard_idx);
-                if !overflow.is_empty() {
-                    // Coalesce adjacent sub-blocks before flushing (#172)
-                    let coalesced = coalesce_writes(overflow);
-                    for cw in coalesced {
-                        if let Err(e) = self
-                            .flush_single_write(&cw.volume_id, cw.offset, &cw.data)
-                            .await
-                        {
-                            log::warn!(
-                                "overflow flush failed for vol={} offset={}: {}",
-                                cw.volume_id,
-                                cw.offset,
-                                e
-                            );
-                            // Re-absorb failed entry so data isn't lost
-                            self.write_cache.absorb(&cw.volume_id, cw.offset, &cw.data);
+        match self.write_cache.absorb(volume_id, offset, data) {
+            AbsorbResult::Cached => {
+                let shard_idx = self.write_cache.shard_index_for(volume_id, offset);
+                if self.write_cache.shard_needs_flush(shard_idx) {
+                    let overflow = self.write_cache.drain_shard_overflow(shard_idx);
+                    if !overflow.is_empty() {
+                        // Coalesce adjacent sub-blocks before flushing (#172)
+                        let coalesced = coalesce_writes(overflow);
+                        for cw in coalesced {
+                            if let Err(e) = self
+                                .flush_single_write(&cw.volume_id, cw.offset, &cw.data)
+                                .await
+                            {
+                                log::warn!(
+                                    "overflow flush failed for vol={} offset={}: {}",
+                                    cw.volume_id,
+                                    cw.offset,
+                                    e
+                                );
+                                // Re-absorb failed entry so data isn't lost
+                                self.write_cache.absorb(&cw.volume_id, cw.offset, &cw.data);
+                            }
                         }
                     }
                 }
+                Ok(())
             }
-            return Ok(());
+            AbsorbResult::NotAligned => {
+                // CRITICAL: invalidate cached sub-blocks that overlap with this
+                // partial write to prevent stale reads. (#176)
+                self.write_cache
+                    .invalidate_range(volume_id, offset, data.len() as u64);
+                self.flush_single_write(volume_id, offset, data).await
+            }
+            AbsorbResult::Full => {
+                // Shard full — write through directly (rare path)
+                self.flush_single_write(volume_id, offset, data).await
+            }
         }
-
-        // Shard full — write through directly (rare path)
-        self.flush_single_write(volume_id, offset, data).await
     }
 
     /// Flush a single write through CRUSH fan-out to backend nodes.

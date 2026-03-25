@@ -12,6 +12,7 @@
 
 use crate::bdev::sub_block::{self, bitmap_is_set, bitmap_set, CHUNK_SIZE, SUB_BLOCK_SIZE};
 use crate::chunk::engine::ChunkEngine;
+use crate::chunk::write_cache::AbsorbResult;
 use crate::error::{DataPlaneError, Result};
 use crate::metadata::store::MetadataStore;
 use crate::metadata::types::ChunkMapEntry;
@@ -1545,8 +1546,38 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 return;
             }
 
-            // ---- Reads go through tokio (cache lookup at sub-block
-            //      granularity needs range-aware matching) ----
+            // ---- Reads: try cache lookup on reactor first, fall to tokio on miss ----
+            // Fast path: if all sub-blocks are cached, serve from cache
+            // directly on the reactor — zero thread crossing.
+            if let Ok(engine) = get_chunk_engine() {
+                if let Some(cached) = engine.write_cache.lookup(&volume_name, offset, length) {
+                    // Cache hit — copy to iovs, complete on reactor.
+                    let mut src_off = 0usize;
+                    for i in 0..iovcnt {
+                        let iov = &*iovs.add(i);
+                        let to_copy =
+                            std::cmp::min(iov.iov_len, cached.len().saturating_sub(src_off));
+                        if to_copy > 0 {
+                            std::ptr::copy_nonoverlapping(
+                                cached[src_off..].as_ptr(),
+                                iov.iov_base as *mut u8,
+                                to_copy,
+                            );
+                        }
+                        src_off += to_copy;
+                        if src_off >= cached.len() {
+                            break;
+                        }
+                    }
+                    ffi::spdk_bdev_io_complete(
+                        bdev_io,
+                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                    );
+                    return;
+                }
+            }
+
+            // Cache miss — fall through to tokio for backend read.
             let bdev_io_addr = bdev_io as usize;
             let mut iov_descs: Vec<(usize, usize)> = Vec::with_capacity(iovcnt);
             for i in 0..iovcnt {
@@ -1638,34 +1669,67 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 }
             };
 
-            if engine.write_cache.absorb(&volume_name, offset, &data) {
-                // Cache absorbed — complete immediately on reactor!
-                // No async overflow flush here. Data stays in cache until
-                // host FLUSH command. This prevents the race where async
-                // drain removes entries before persistence, causing reads
-                // to miss both cache and backend.
-                ffi::spdk_bdev_io_complete(
-                    bdev_io,
-                    ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                );
-            } else {
-                // Cache full — fall back to tokio for direct write
-                let bdev_io_addr = bdev_io as usize;
-                let handle = get_tokio_handle().expect("tokio handle");
-                handle.spawn(async move {
-                    let engine = get_chunk_engine().expect("chunk engine");
-                    let result = engine.flush_single_write(&volume_name, offset, &data).await;
-                    let status = match result {
-                        Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                        Err(e) => {
-                            error!("novastor_bdev: write (cache full) failed: {}", e);
-                            ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
-                        }
-                    };
-                    reactor_dispatch::send_to_reactor(move || unsafe {
-                        ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
+            match engine.write_cache.absorb(&volume_name, offset, &data) {
+                AbsorbResult::Cached => {
+                    // Cache absorbed — complete immediately on reactor!
+                    // No async overflow flush here. Data stays in cache until
+                    // host FLUSH command. This prevents the race where async
+                    // drain removes entries before persistence, causing reads
+                    // to miss both cache and backend.
+                    ffi::spdk_bdev_io_complete(
+                        bdev_io,
+                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                    );
+                }
+                AbsorbResult::NotAligned => {
+                    // CRITICAL: invalidate stale cached sub-blocks that overlap
+                    // with this partial write to prevent stale reads. (#176)
+                    engine
+                        .write_cache
+                        .invalidate_range(&volume_name, offset, length);
+                    // Fall through to tokio for direct write.
+                    let bdev_io_addr = bdev_io as usize;
+                    let handle = get_tokio_handle().expect("tokio handle");
+                    handle.spawn(async move {
+                        let engine = get_chunk_engine().expect("chunk engine");
+                        let result = engine.flush_single_write(&volume_name, offset, &data).await;
+                        let status = match result {
+                            Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                            Err(e) => {
+                                error!("novastor_bdev: write (not aligned) failed: {}", e);
+                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                            }
+                        };
+                        reactor_dispatch::send_to_reactor(move || unsafe {
+                            ffi::spdk_bdev_io_complete(
+                                bdev_io_addr as *mut ffi::spdk_bdev_io,
+                                status,
+                            );
+                        });
                     });
-                });
+                }
+                AbsorbResult::Full => {
+                    // Cache full — fall back to tokio for direct write.
+                    let bdev_io_addr = bdev_io as usize;
+                    let handle = get_tokio_handle().expect("tokio handle");
+                    handle.spawn(async move {
+                        let engine = get_chunk_engine().expect("chunk engine");
+                        let result = engine.flush_single_write(&volume_name, offset, &data).await;
+                        let status = match result {
+                            Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                            Err(e) => {
+                                error!("novastor_bdev: write (cache full) failed: {}", e);
+                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                            }
+                        };
+                        reactor_dispatch::send_to_reactor(move || unsafe {
+                            ffi::spdk_bdev_io_complete(
+                                bdev_io_addr as *mut ffi::spdk_bdev_io,
+                                status,
+                            );
+                        });
+                    });
+                }
             }
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_FLUSH => {
