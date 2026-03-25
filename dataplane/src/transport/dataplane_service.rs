@@ -1196,36 +1196,35 @@ impl DataplaneService for DataplaneServiceImpl {
             .map_err(|e| Status::internal(format!("create novastor bdev: {e}")))?;
 
         // Register volume on ALL topology nodes via NDP BEFORE returning.
-        // This MUST be synchronous — I/O starts immediately after CreateVolume
-        // returns, so all nodes must know the volume before that.
+        // Concurrent — all registrations in parallel to avoid timeout.
         if let Ok(engine) = crate::bdev::novastor_bdev::get_chunk_engine() {
             let node_id = engine.node_id().to_string();
             let topo = engine.topology_snapshot();
             let ndp_pool = engine.ndp_pool().clone();
             let vol_name = req.name.clone();
-            let mut registered = 0usize;
+
+            let mut tasks = tokio::task::JoinSet::new();
             for node in topo.nodes() {
                 if node.id == node_id {
                     continue;
                 }
                 let addr = format!("{}:4500", node.address);
-                match ndp_pool.register_volume_on_peer(&addr, &vol_name).await {
-                    Ok(()) => registered += 1,
-                    Err(e) => {
-                        log::warn!(
-                            "create_volume: failed to register '{}' on {}: {}",
-                            vol_name,
-                            addr,
-                            e
-                        );
-                    }
+                let pool = ndp_pool.clone();
+                let vn = vol_name.clone();
+                tasks.spawn(async move { pool.register_volume_on_peer(&addr, &vn).await });
+            }
+            let total = tasks.len();
+            let mut registered = 0usize;
+            while let Some(result) = tasks.join_next().await {
+                if let Ok(Ok(())) = result {
+                    registered += 1;
                 }
             }
             log::info!(
                 "create_volume: registered '{}' on {}/{} NDP peers",
                 vol_name,
                 registered,
-                topo.nodes().len() - 1
+                total
             );
         }
 
