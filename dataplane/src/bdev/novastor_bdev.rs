@@ -14,8 +14,9 @@ use crate::bdev::sub_block::{self, bitmap_is_set, bitmap_set, CHUNK_SIZE, SUB_BL
 use crate::chunk::engine::ChunkEngine;
 use crate::chunk::write_cache::AbsorbResult;
 use crate::error::{DataPlaneError, Result};
+use crate::metadata::crush;
 use crate::metadata::store::MetadataStore;
-use crate::metadata::types::ChunkMapEntry;
+use crate::metadata::types::{ChunkMapEntry, Protection};
 use crate::spdk::reactor_dispatch;
 use dashmap::DashMap;
 use log::{error, info, warn};
@@ -1577,7 +1578,108 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 }
             }
 
-            // Cache miss — fall through to tokio for backend read.
+            // Cache miss — try reactor-native local read for single sub-block I/O.
+            let mut reactor_handled = false;
+
+            // Reactor-native path: single sub-block, CRUSH selects local node.
+            if length > 0
+                && offset / SUB_BLOCK_SIZE as u64 == (offset + length - 1) / SUB_BLOCK_SIZE as u64
+            {
+                // Fits within a single sub-block — try CRUSH on reactor.
+                if let Ok(engine) = get_chunk_engine() {
+                    let topo = engine.topology_snapshot();
+                    let prot = engine.protection();
+                    let chunk_idx = sub_block::chunk_index(offset) as usize;
+                    let chunk_key = format!("{}:{}", volume_name, chunk_idx);
+                    let factor = match &prot {
+                        Protection::Replication { factor } => *factor as usize,
+                        Protection::ErasureCoding {
+                            data_shards,
+                            parity_shards,
+                        } => (*data_shards + *parity_shards) as usize,
+                    };
+                    let placements = crush::select(&chunk_key, factor, &topo);
+                    // Check if first placement is the local node.
+                    if let Some((ref node_id, _)) = placements.first() {
+                        if node_id == engine.node_id() {
+                            // Local node — attempt reactor-native bdev read.
+                            if let Ok(backend_name) = get_backend_bdev_name() {
+                                if let Some(cache) = reactor_cache_open(backend_name) {
+                                    if let Ok(vol_base) = get_volume_base_offset(&volume_name) {
+                                        let sb_idx = sub_block::sub_block_index(offset);
+                                        let offset_in_sb = sub_block::offset_in_sub_block(offset);
+                                        let bdev_offset = sub_block::backend_sub_block_offset(
+                                            vol_base + chunk_idx as u64 * CHUNK_SIZE as u64,
+                                            sb_idx,
+                                        );
+                                        let raw_len = (offset_in_sb + length as usize) as u64;
+                                        let aligned_len = if cache.block_size == 0 {
+                                            raw_len
+                                        } else {
+                                            (raw_len + cache.block_size - 1)
+                                                & !(cache.block_size - 1)
+                                        };
+                                        let dma_buf = reactor_dispatch::acquire_dma_buf_public(
+                                            aligned_len as usize,
+                                        );
+                                        if !dma_buf.is_null() {
+                                            let mut iov_descs: Vec<(usize, usize)> =
+                                                Vec::with_capacity(iovcnt);
+                                            for i in 0..iovcnt {
+                                                let iov = &*iovs.add(i);
+                                                iov_descs
+                                                    .push((iov.iov_base as usize, iov.iov_len));
+                                            }
+                                            let rctx = Box::new(ReactorReadCtx {
+                                                parent_io: bdev_io,
+                                                dma_buf,
+                                                dma_len: aligned_len as usize,
+                                                total_len: length as usize,
+                                                iovs: iov_descs,
+                                                buf_offset: offset_in_sb,
+                                                bitmap: u64::MAX,
+                                                sb_start: sb_idx,
+                                                off_in_first_sb: offset_in_sb,
+                                            });
+                                            let rctx_ptr = Box::into_raw(rctx) as *mut c_void;
+                                            let rc = ffi::spdk_bdev_read(
+                                                cache.desc,
+                                                cache.channel,
+                                                dma_buf,
+                                                bdev_offset,
+                                                aligned_len,
+                                                Some(reactor_read_done_cb),
+                                                rctx_ptr,
+                                            );
+                                            if rc == 0 {
+                                                reactor_handled = true;
+                                            } else {
+                                                // Submit failed — recover context and free resources.
+                                                let _ =
+                                                    Box::from_raw(rctx_ptr as *mut ReactorReadCtx);
+                                                reactor_dispatch::release_dma_buf_public(
+                                                    dma_buf,
+                                                    aligned_len as usize,
+                                                );
+                                                warn!(
+                                                    "reactor-native read submit failed rc={}, falling to tokio",
+                                                    rc
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if reactor_handled {
+                return;
+            }
+
+            // Tokio fallback — handles multi-sub-block, remote, or any setup failure.
             let bdev_io_addr = bdev_io as usize;
             let mut iov_descs: Vec<(usize, usize)> = Vec::with_capacity(iovcnt);
             for i in 0..iovcnt {

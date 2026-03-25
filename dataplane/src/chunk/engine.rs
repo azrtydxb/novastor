@@ -176,6 +176,17 @@ impl ChunkEngine {
         self.topology.read().unwrap().generation()
     }
 
+    /// Returns the node ID of this engine instance.
+    pub fn node_id(&self) -> &str {
+        &self.node_id
+    }
+
+    /// Returns an `Arc` snapshot of the current cluster topology.
+    /// Safe to call from the SPDK reactor (takes a brief read lock).
+    pub fn topology_snapshot(&self) -> Arc<ClusterMap> {
+        self.topology.read().unwrap().clone()
+    }
+
     /// Get or create a cached ChunkClient for the given address.
     async fn get_client(&self, addr: &str) -> Result<ChunkClient> {
         let mut cache = self.connections.lock().await;
