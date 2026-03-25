@@ -1040,6 +1040,10 @@ struct ReactorWriteCtx {
     chunk_idx: usize,
     /// Bitmask of sub-blocks to mark dirty (supports multi-sub-block writes).
     dirty_mask: u64,
+    /// DMA buffer pointer for deallocation on completion.
+    dma_buf: *mut c_void,
+    /// DMA buffer size for deallocation on completion.
+    dma_len: usize,
 }
 
 /// Context passed to reactor-native read completion callback.
@@ -1073,6 +1077,12 @@ unsafe extern "C" fn reactor_write_done_cb(
     let mut rctx = Box::from_raw(ctx as *mut ReactorWriteCtx);
     ffi::spdk_bdev_free_io(child_io);
 
+    // Free DMA buffer if one was allocated for this write.
+    if !rctx.dma_buf.is_null() {
+        reactor_dispatch::release_dma_buf_public(rctx.dma_buf, rctx.dma_len);
+        rctx.dma_buf = std::ptr::null_mut();
+    }
+
     let bdev_ctx = &*rctx.bdev_ctx;
     if success {
         // Update dirty bitmap — direct array index, atomic fetch_or.
@@ -1097,6 +1107,170 @@ unsafe extern "C" fn reactor_write_done_cb(
     if let Ok(mut pool) = bdev_ctx.write_ctx_pool.lock() {
         pool.push(rctx);
     }
+}
+
+/// Try reactor-native local write for a single sub-block write.
+///
+/// Returns `true` if the write was submitted on the reactor (caller should
+/// return immediately). Returns `false` if the reactor path cannot handle
+/// this write (caller should fall through to tokio).
+///
+/// Requirements for reactor-native path:
+/// 1. Write fits within a single sub-block (no cross-sub-block spanning)
+/// 2. CRUSH selects only local placements (rep1 on this node)
+/// 3. Write start offset is block-aligned (512 bytes)
+/// 4. Backend bdev is available via reactor cache
+unsafe fn try_reactor_local_write(
+    engine: &ChunkEngine,
+    volume_name: &str,
+    offset: u64,
+    length: u64,
+    data: &[u8],
+    bdev_io: *mut ffi::spdk_bdev_io,
+    ctx: *const BdevCtx,
+) -> bool {
+    // Only handle writes within a single sub-block.
+    if length == 0 {
+        return false;
+    }
+    let sb_start = offset / SUB_BLOCK_SIZE as u64;
+    let sb_end = (offset + length - 1) / SUB_BLOCK_SIZE as u64;
+    if sb_start != sb_end {
+        // Write spans multiple sub-blocks — fall to tokio.
+        return false;
+    }
+
+    // CRUSH: check if all placements are local.
+    let chunk_idx = sub_block::chunk_index(offset) as usize;
+    let chunk_key = format!("{}:{}", volume_name, chunk_idx);
+    let prot = engine.protection();
+    let factor = match &prot {
+        Protection::Replication { factor } => *factor as usize,
+        Protection::ErasureCoding {
+            data_shards,
+            parity_shards,
+        } => (*data_shards + *parity_shards) as usize,
+    };
+    let topo = engine.topology_snapshot();
+    let placements = crush::select(&chunk_key, factor, &topo);
+    if placements.is_empty() {
+        return false;
+    }
+    if !placements.iter().all(|(n, _)| n == engine.node_id()) {
+        // Remote placement required — fall to tokio for NDP fan-out.
+        return false;
+    }
+
+    // Compute backend offset.
+    let vol_base = match get_volume_base_offset(volume_name) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let sb_idx = sub_block::sub_block_index(offset);
+    let offset_in_sb = sub_block::offset_in_sub_block(offset);
+    let chunk_base = vol_base + chunk_idx as u64 * CHUNK_SIZE as u64;
+    let bdev_offset = sub_block::backend_sub_block_offset(chunk_base, sb_idx);
+    let write_start = bdev_offset + offset_in_sb as u64;
+
+    // write_start must be block-aligned (512).
+    if write_start & 511 != 0 {
+        return false;
+    }
+
+    // Open backend bdev via reactor cache.
+    let backend_name = match get_backend_bdev_name() {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    let cache = match reactor_cache_open(backend_name) {
+        Some(c) => c,
+        None => return false,
+    };
+
+    // Align length up to block size.
+    let aligned_len = if cache.block_size == 0 {
+        length
+    } else {
+        (length + cache.block_size - 1) & !(cache.block_size - 1)
+    };
+
+    // Allocate DMA buffer and copy data.
+    let dma_buf = reactor_dispatch::acquire_dma_buf_public(aligned_len as usize);
+    if dma_buf.is_null() {
+        return false;
+    }
+    std::ptr::copy_nonoverlapping(data.as_ptr(), dma_buf as *mut u8, length as usize);
+    // Zero padding bytes for alignment.
+    if aligned_len > length {
+        std::ptr::write_bytes(
+            (dma_buf as *mut u8).add(length as usize),
+            0,
+            (aligned_len - length) as usize,
+        );
+    }
+
+    // Compute dirty mask: single sub-block bit.
+    let dirty_mask = 1u64 << sb_idx;
+
+    // Try to get a pre-allocated context from the pool.
+    let bdev_ctx_ref = &*ctx;
+    let mut rctx = if let Ok(mut pool) = bdev_ctx_ref.write_ctx_pool.lock() {
+        pool.pop().unwrap_or_else(|| {
+            Box::new(ReactorWriteCtx {
+                parent_io: std::ptr::null_mut(),
+                bdev_ctx: std::ptr::null(),
+                chunk_idx: 0,
+                dirty_mask: 0,
+                dma_buf: std::ptr::null_mut(),
+                dma_len: 0,
+            })
+        })
+    } else {
+        Box::new(ReactorWriteCtx {
+            parent_io: std::ptr::null_mut(),
+            bdev_ctx: std::ptr::null(),
+            chunk_idx: 0,
+            dirty_mask: 0,
+            dma_buf: std::ptr::null_mut(),
+            dma_len: 0,
+        })
+    };
+    rctx.parent_io = bdev_io;
+    rctx.bdev_ctx = ctx;
+    rctx.chunk_idx = chunk_idx;
+    rctx.dirty_mask = dirty_mask;
+    rctx.dma_buf = dma_buf;
+    rctx.dma_len = aligned_len as usize;
+
+    let rctx_ptr = Box::into_raw(rctx) as *mut c_void;
+
+    let rc = ffi::spdk_bdev_write(
+        cache.desc,
+        cache.channel,
+        dma_buf,
+        write_start,
+        aligned_len,
+        Some(reactor_write_done_cb),
+        rctx_ptr,
+    );
+    if rc == 0 {
+        return true; // Submitted successfully on reactor.
+    }
+
+    // Submit failed — clean up.
+    warn!(
+        "reactor-native write submit failed rc={}, falling to tokio",
+        rc
+    );
+    let mut rctx = Box::from_raw(rctx_ptr as *mut ReactorWriteCtx);
+    reactor_dispatch::release_dma_buf_public(rctx.dma_buf, rctx.dma_len);
+    rctx.dma_buf = std::ptr::null_mut();
+    rctx.parent_io = std::ptr::null_mut();
+    // Return to pool.
+    if let Ok(mut pool) = bdev_ctx_ref.write_ctx_pool.lock() {
+        pool.push(rctx);
+    }
+    false
 }
 
 /// Direct read completion — data is already in the iov buffer (no DMA copy needed).
@@ -1264,6 +1438,8 @@ pub fn create(volume_name: &str, size_bytes: u64) -> Result<String> {
                 bdev_ctx: std::ptr::null(),
                 chunk_idx: 0,
                 dirty_mask: 0,
+                dma_buf: std::ptr::null_mut(),
+                dma_len: 0,
             })
         })
         .collect();
@@ -1789,6 +1965,20 @@ unsafe extern "C" fn bdev_submit_request_cb(
                     engine
                         .write_cache
                         .invalidate_range(&volume_name, offset, length);
+
+                    // Try reactor-native local write — zero thread crossing.
+                    if try_reactor_local_write(
+                        &engine,
+                        &volume_name,
+                        offset,
+                        length,
+                        &data,
+                        bdev_io,
+                        ctx,
+                    ) {
+                        return;
+                    }
+
                     // Fall through to tokio for direct write.
                     let bdev_io_addr = bdev_io as usize;
                     let handle = get_tokio_handle().expect("tokio handle");
@@ -1811,7 +2001,20 @@ unsafe extern "C" fn bdev_submit_request_cb(
                     });
                 }
                 AbsorbResult::Full => {
-                    // Cache full — fall back to tokio for direct write.
+                    // Cache full — try reactor-native local write first.
+                    if try_reactor_local_write(
+                        &engine,
+                        &volume_name,
+                        offset,
+                        length,
+                        &data,
+                        bdev_io,
+                        ctx,
+                    ) {
+                        return;
+                    }
+
+                    // Fall back to tokio for direct write.
                     let bdev_io_addr = bdev_io as usize;
                     let handle = get_tokio_handle().expect("tokio handle");
                     handle.spawn(async move {

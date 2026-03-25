@@ -108,86 +108,113 @@ fn release_dma_buf(buf: *mut std::os::raw::c_void, size: usize) {
 // ---------------------------------------------------------------------------
 // Cached bdev descriptor + I/O channel
 // ---------------------------------------------------------------------------
-// Eliminates per-I/O spdk_bdev_open_ext / spdk_bdev_close overhead.
-// All access is from reactor closures (single SPDK thread) — no contention.
+// Bdev descriptor cache (shared across reactor cores) and per-core I/O
+// channel cache. SPDK bdev descriptors are thread-safe, but I/O channels
+// are per-thread — each reactor core must have its own channel.
 
-struct CachedBdev {
+struct CachedBdevDesc {
     desc: *mut ffi::spdk_bdev_desc,
-    channel: *mut ffi::spdk_io_channel,
     block_size: u64,
 }
 
-// SAFETY: Only accessed from the SPDK reactor thread via send_to_reactor.
-unsafe impl Send for CachedBdev {}
+// SAFETY: spdk_bdev_desc is thread-safe (can be shared across reactor cores).
+unsafe impl Send for CachedBdevDesc {}
+unsafe impl Sync for CachedBdevDesc {}
 
-static BDEV_CACHE: OnceLock<Mutex<HashMap<String, CachedBdev>>> = OnceLock::new();
+/// Global cache of bdev descriptors (shared across all reactor cores).
+static BDEV_DESC_CACHE: OnceLock<Mutex<HashMap<String, CachedBdevDesc>>> = OnceLock::new();
 
-fn bdev_cache() -> &'static Mutex<HashMap<String, CachedBdev>> {
-    BDEV_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn bdev_desc_cache() -> &'static Mutex<HashMap<String, CachedBdevDesc>> {
+    BDEV_DESC_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Open a bdev (or return cached handles). MUST be called on the reactor thread.
+/// Per-core I/O channel cache. Each reactor core gets its own channel.
+/// thread_local ensures no cross-core channel sharing.
+thread_local! {
+    static CHANNEL_CACHE: std::cell::RefCell<HashMap<String, *mut ffi::spdk_io_channel>>
+        = std::cell::RefCell::new(HashMap::new());
+}
+
+/// Open a bdev (or return cached handles). MUST be called on a reactor thread.
 /// Returns (desc, channel, block_size) or an error string.
+/// The descriptor is shared across cores; the channel is per-core.
 unsafe fn get_or_open_bdev(
     name: &str,
     write: bool,
 ) -> std::result::Result<(*mut ffi::spdk_bdev_desc, *mut ffi::spdk_io_channel, u64), String> {
-    let mut cache = bdev_cache().lock().unwrap();
-    if let Some(entry) = cache.get(name) {
-        return Ok((entry.desc, entry.channel, entry.block_size));
-    }
+    // Get or open the shared descriptor.
+    let (desc, block_size) = {
+        let mut cache = bdev_desc_cache().lock().unwrap();
+        if let Some(entry) = cache.get(name) {
+            (entry.desc, entry.block_size)
+        } else {
+            let name_c = std::ffi::CString::new(name).map_err(|e| format!("invalid name: {e}"))?;
+            let mut desc: *mut ffi::spdk_bdev_desc = std::ptr::null_mut();
+            let rc = ffi::spdk_bdev_open_ext(
+                name_c.as_ptr() as *const c_char,
+                write,
+                Some(bdev_event_cb),
+                std::ptr::null_mut(),
+                &mut desc,
+            );
+            if rc != 0 {
+                return Err(format!("spdk_bdev_open_ext('{}') failed: rc={rc}", name));
+            }
+            let bdev = ffi::spdk_bdev_desc_get_bdev(desc);
+            let block_size = if bdev.is_null() {
+                512
+            } else {
+                ffi::spdk_bdev_get_block_size(bdev)
+            } as u64;
 
-    // First access — open the bdev and cache.
-    let name_c = std::ffi::CString::new(name).map_err(|e| format!("invalid name: {e}"))?;
-    let mut desc: *mut ffi::spdk_bdev_desc = std::ptr::null_mut();
-    let rc = ffi::spdk_bdev_open_ext(
-        name_c.as_ptr() as *const c_char,
-        write,
-        Some(bdev_event_cb),
-        std::ptr::null_mut(),
-        &mut desc,
-    );
-    if rc != 0 {
-        return Err(format!("spdk_bdev_open_ext('{}') failed: rc={rc}", name));
-    }
+            log::info!(
+                "bdev desc cache: opened '{}' (block_size={}, write={})",
+                name,
+                block_size,
+                write
+            );
+            cache.insert(name.to_string(), CachedBdevDesc { desc, block_size });
+            (desc, block_size)
+        }
+    };
 
-    let bdev = ffi::spdk_bdev_desc_get_bdev(desc);
-    let block_size = if bdev.is_null() {
-        512
-    } else {
-        ffi::spdk_bdev_get_block_size(bdev)
-    } as u64;
+    // Get or create the per-core I/O channel.
+    let channel = CHANNEL_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(&ch) = cache.get(name) {
+            return Ok(ch);
+        }
+        let ch = ffi::spdk_bdev_get_io_channel(desc);
+        if ch.is_null() {
+            return Err("spdk_bdev_get_io_channel null".to_string());
+        }
+        log::info!(
+            "bdev channel cache: created per-core channel for '{}' on core {:?}",
+            name,
+            std::thread::current().id()
+        );
+        cache.insert(name.to_string(), ch);
+        Ok(ch)
+    })?;
 
-    let channel = ffi::spdk_bdev_get_io_channel(desc);
-    if channel.is_null() {
-        ffi::spdk_bdev_close(desc);
-        return Err("spdk_bdev_get_io_channel null".into());
-    }
-
-    log::info!(
-        "bdev cache: opened '{}' (block_size={}, write={})",
-        name,
-        block_size,
-        write
-    );
-    cache.insert(
-        name.to_string(),
-        CachedBdev {
-            desc,
-            channel,
-            block_size,
-        },
-    );
     Ok((desc, channel, block_size))
 }
 
-/// Close all cached bdev handles. Call on shutdown from the reactor thread.
+/// Close all cached bdev descriptors and channels. Call on shutdown.
 pub fn close_all_cached_bdevs() {
     send_to_reactor(|| unsafe {
-        let mut cache = bdev_cache().lock().unwrap();
+        // Close per-core channels
+        CHANNEL_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            for (name, ch) in cache.drain() {
+                log::info!("bdev channel cache: closing '{}'", name);
+                ffi::spdk_put_io_channel(ch);
+            }
+        });
+        // Close shared descriptors
+        let mut cache = bdev_desc_cache().lock().unwrap();
         for (name, entry) in cache.drain() {
-            log::info!("bdev cache: closing '{}'", name);
-            ffi::spdk_put_io_channel(entry.channel);
+            log::info!("bdev desc cache: closing '{}'", name);
             ffi::spdk_bdev_close(entry.desc);
         }
     });
