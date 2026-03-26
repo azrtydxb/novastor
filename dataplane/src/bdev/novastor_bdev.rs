@@ -165,16 +165,10 @@ pub fn allocate_volume_offset(volume_name: &str, size_bytes: u64) -> u64 {
 /// This enables lazy per-chunk allocation: the first sub-block write
 /// to a volume on this backend automatically allocates a 4MB chunk slot.
 pub fn get_volume_base_offset(volume_name: &str) -> Result<u64> {
-    // Fast path: already allocated. Use try_read to never block the reactor.
+    // Fast path: already allocated. Read lock is sub-microsecond (HashMap lookup).
+    // Only write locks (allocation) could stall, and those are rare (first I/O per volume).
     {
-        let offsets = match volume_offsets().try_read() {
-            Ok(o) => o,
-            Err(_) => {
-                return Err(crate::error::DataPlaneError::BdevError(
-                    "volume offsets contended".to_string(),
-                ));
-            }
-        };
+        let offsets = volume_offsets().read().unwrap();
         if let Some(&offset) = offsets.get(volume_name) {
             return Ok(offset);
         }
@@ -535,10 +529,7 @@ async fn sub_block_write_zeroes(volume_name: &str, offset: u64, length: u64) -> 
 /// Find the byte offset of the next data (written) region at or after `offset`.
 /// Returns `u64::MAX` if no data exists after `offset`.
 fn find_next_data(volume_name: &str, offset: u64) -> u64 {
-    let maps = match volume_chunk_maps().try_read() {
-        Ok(m) => m,
-        Err(_) => return u64::MAX, // Contended — report no data/all holes
-    };
+    let maps = volume_chunk_maps().read().unwrap();
     let chunk_map = match maps.get(volume_name) {
         Some(cm) => cm,
         None => return u64::MAX,
@@ -572,10 +563,7 @@ fn find_next_data(volume_name: &str, offset: u64) -> u64 {
 /// Find the byte offset of the next hole (unwritten) region at or after `offset`.
 /// Returns `u64::MAX` if the entire remaining volume is data.
 fn find_next_hole(volume_name: &str, offset: u64) -> u64 {
-    let maps = match volume_chunk_maps().try_read() {
-        Ok(m) => m,
-        Err(_) => return u64::MAX, // Contended — report no data/all holes
-    };
+    let maps = volume_chunk_maps().read().unwrap();
     let chunk_map = match maps.get(volume_name) {
         Some(cm) => cm,
         None => return offset, // No data at all — entire volume is a hole.
