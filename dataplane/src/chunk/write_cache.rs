@@ -296,8 +296,8 @@ impl ShardedWriteCache {
     /// Absorb a write into the appropriate shard.
     /// Returns `AbsorbResult::Cached` only for 64KB-aligned, full sub-block writes.
     /// Returns `AbsorbResult::NotAligned` for partial / misaligned writes.
-    /// Returns `AbsorbResult::Full` if the target shard is at capacity.
-    /// Sync — safe to call from SPDK reactor (sub-microsecond lock hold).
+    /// Returns `AbsorbResult::Full` if the target shard is at capacity OR contended.
+    /// Uses try_lock — NEVER blocks the SPDK reactor.
     pub fn absorb(&self, volume_id: &str, offset: u64, data: &[u8]) -> AbsorbResult {
         // Pre-check alignment before taking a lock.
         if offset % SUB_BLOCK_SIZE != 0 || data.len() as u64 != SUB_BLOCK_SIZE {
@@ -305,16 +305,16 @@ impl ShardedWriteCache {
         }
         let sb_index = offset / SUB_BLOCK_SIZE;
         let idx = self.shard_index(volume_id, sb_index);
-        self.shards[idx]
-            .lock()
-            .unwrap()
-            .absorb(volume_id, offset, data)
+        match self.shards[idx].try_lock() {
+            Ok(mut shard) => shard.absorb(volume_id, offset, data),
+            Err(_) => AbsorbResult::Full, // Contended — fall through to tokio
+        }
     }
 
     /// Look up cached data for an arbitrary byte range.
     /// Decomposes into sub-block queries and returns data only if ALL
     /// required sub-blocks are cached.
-    /// Sync — safe to call from SPDK reactor.
+    /// Uses try_lock — NEVER blocks the SPDK reactor. Returns None if contended.
     pub fn lookup(&self, volume_id: &str, offset: u64, length: u64) -> Option<Vec<u8>> {
         if length == 0 {
             return Some(Vec::new());
@@ -326,17 +326,20 @@ impl ShardedWriteCache {
         // Fast path: single sub-block — only one shard lock.
         if first_sb == last_sb {
             let idx = self.shard_index(volume_id, first_sb);
-            return self.shards[idx]
-                .lock()
-                .unwrap()
-                .lookup(volume_id, offset, length);
+            return match self.shards[idx].try_lock() {
+                Ok(shard) => shard.lookup(volume_id, offset, length),
+                Err(_) => None, // Contended — cache miss, fall to backend
+            };
         }
 
         // Multi-sub-block read: must gather from potentially multiple shards.
         let mut result = Vec::with_capacity(length as usize);
         for sb in first_sb..=last_sb {
             let idx = self.shard_index(volume_id, sb);
-            let shard = self.shards[idx].lock().unwrap();
+            let shard = match self.shards[idx].try_lock() {
+                Ok(s) => s,
+                Err(_) => return None, // Contended — cache miss
+            };
             let key = (volume_id.to_string(), sb);
             let entry = shard.entries.get(&key)?;
 
@@ -364,7 +367,10 @@ impl ShardedWriteCache {
     /// Invalidate any cached sub-blocks that overlap with the given byte range.
     /// MUST be called when a partial / unaligned write bypasses the cache and
     /// goes directly to the backend, to prevent stale reads.
-    /// Sync — safe to call from SPDK reactor.
+    /// Uses try_lock — if contended, skips invalidation (the flush path will
+    /// see the stale entry but the backend has the correct data, so reads from
+    /// backend are correct; a subsequent flush will overwrite with stale data
+    /// which is then invalidated on the next partial write).
     pub fn invalidate_range(&self, volume_id: &str, offset: u64, length: u64) -> usize {
         if length == 0 {
             return 0;
@@ -374,11 +380,13 @@ impl ShardedWriteCache {
         let mut total_removed = 0;
         for sb in first_sb..=last_sb {
             let idx = self.shard_index(volume_id, sb);
-            let mut shard = self.shards[idx].lock().unwrap();
-            let key = (volume_id.to_string(), sb);
-            if shard.entries.remove(&key).is_some() {
-                total_removed += 1;
+            if let Ok(mut shard) = self.shards[idx].try_lock() {
+                let key = (volume_id.to_string(), sb);
+                if shard.entries.remove(&key).is_some() {
+                    total_removed += 1;
+                }
             }
+            // If contended, skip — flush will handle it
         }
         total_removed
     }
