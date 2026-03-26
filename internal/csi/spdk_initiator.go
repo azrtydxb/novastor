@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -248,6 +248,7 @@ func nvmeConnect(addr, port, nqn string) error {
 		"-a", addr,
 		"-s", port,
 		"-n", nqn,
+		"-i", fmt.Sprintf("%d", runtime.NumCPU()),
 		"-k", "10", // keep-alive timeout: detect dead target in 10s
 		"-l", "10", // ctrl-loss-tmo: give up on path after 10s of reconnect failures
 		"--reconnect-delay", "1", // retry reconnect every 1s (not default 10s)
