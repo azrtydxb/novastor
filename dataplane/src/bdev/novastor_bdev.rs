@@ -1787,9 +1787,10 @@ unsafe extern "C" fn bdev_submit_request_cb(
                         } => (*data_shards + *parity_shards) as usize,
                     };
                     let placements = crush::select(&chunk_key, factor, &topo);
-                    // Check if first placement is the local node.
-                    if let Some((ref node_id, _)) = placements.first() {
-                        if node_id == engine.node_id() {
+                    // Check if ANY placement is the local node (read from any replica).
+                    let is_local = placements.iter().any(|(n, _)| n == engine.node_id());
+                    if is_local {
+                        if true {
                             // Local node — attempt reactor-native bdev read.
                             if let Ok(backend_name) = get_backend_bdev_name() {
                                 if let Some(cache) = reactor_cache_open(backend_name) {
