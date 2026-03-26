@@ -1463,6 +1463,21 @@ impl DataplaneService for DataplaneServiceImpl {
                 topo2.set_nodes(parse_nodes(&req.nodes));
                 pe.update_topology(topo2).await;
             }
+
+            // Pre-warm NDP connections to all peer nodes so that
+            // CreateVolume registration and data I/O don't pay TCP connect
+            // latency. Done in background (non-blocking).
+            let node_id = engine.node_id().to_string();
+            let ndp_pool = engine.ndp_pool().clone();
+            let peer_addrs: Vec<String> = req
+                .nodes
+                .iter()
+                .filter(|n| n.node_id != node_id)
+                .map(|n| format!("{}:4500", n.address))
+                .collect();
+            tokio::spawn(async move {
+                ndp_pool.warm_connections(&peer_addrs).await;
+            });
         }
 
         Ok(Response::new(UpdateTopologyResponse { accepted }))

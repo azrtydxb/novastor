@@ -110,6 +110,37 @@ impl NdpPool {
         }
     }
 
+    /// Pre-warm connections to all given addresses.
+    /// Called on topology update so that subsequent I/O and registration
+    /// don't pay the TCP connect latency.
+    pub async fn warm_connections(&self, addrs: &[String]) {
+        let mut tasks = tokio::task::JoinSet::new();
+        for addr in addrs {
+            let a = addr.clone();
+            // Check if already connected before spawning.
+            let already = {
+                let conns = self.connections.lock().await;
+                conns.contains_key(&a)
+            };
+            if already {
+                continue;
+            }
+            tasks.spawn({
+                let a2 = a.clone();
+                async move { (a2.clone(), NdpConnection::connect(&a2).await) }
+            });
+        }
+        let mut conns = self.connections.lock().await;
+        while let Some(result) = tasks.join_next().await {
+            if let Ok((addr, Ok(conn))) = result {
+                conns.entry(addr.clone()).or_insert_with(|| {
+                    info!("NDP pool: pre-warmed connection to {}", addr);
+                    Arc::new(conn)
+                });
+            }
+        }
+    }
+
     /// List all connected peer addresses.
     pub async fn peers(&self) -> Vec<String> {
         self.connections.lock().await.keys().cloned().collect()
