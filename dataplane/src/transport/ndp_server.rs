@@ -175,9 +175,14 @@ async fn handle_read(header: &NdpHeader) -> NdpMessage {
     let volume_name = match lookup_volume(header.volume_hash) {
         Some(name) => name,
         None => {
+            // Volume not registered yet — return zeros (unallocated region).
+            // This can happen when CRUSH routes a read before fire-and-forget
+            // registration completes. Returning zeros is correct because no
+            // data has been written to this volume on this backend yet.
+            let zeros = vec![0u8; header.data_length as usize];
             return NdpMessage::new(
-                NdpHeader::response(header, NdpOp::ReadResp, 2, 0), // status 2 = not found
-                None,
+                NdpHeader::response(header, NdpOp::ReadResp, 0, zeros.len() as u32),
+                Some(zeros),
             );
         }
     };
@@ -191,7 +196,7 @@ async fn handle_read(header: &NdpHeader) -> NdpMessage {
     .await
     {
         Ok(data) => {
-            let mut resp = NdpHeader::response(header, NdpOp::ReadResp, 0, data.len() as u32);
+            let resp = NdpHeader::response(header, NdpOp::ReadResp, 0, data.len() as u32);
             NdpMessage::new(resp, Some(data))
         }
         Err(e) => {
@@ -208,6 +213,14 @@ async fn handle_write(header: &NdpHeader, data: Option<Vec<u8>>) -> NdpMessage {
     let volume_name = match lookup_volume(header.volume_hash) {
         Some(name) => name,
         None => {
+            // Volume not registered — can't write without knowing the volume name.
+            // Unlike reads (which return zeros for unregistered volumes), writes need
+            // the volume name for backend allocation. Return error; the topology push
+            // will register the volume within 30s and the write will be retried.
+            warn!(
+                "NDP write for unknown volume hash 0x{:016X} — not registered yet",
+                header.volume_hash
+            );
             return NdpMessage::new(NdpHeader::response(header, NdpOp::WriteResp, 2, 0), None);
         }
     };

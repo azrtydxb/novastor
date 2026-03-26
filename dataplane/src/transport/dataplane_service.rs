@@ -1196,20 +1196,32 @@ impl DataplaneService for DataplaneServiceImpl {
             .map_err(|e| Status::internal(format!("create novastor bdev: {e}")))?;
 
         // Register volume on ALL topology nodes via NDP.
-        // Fire-and-forget: topology push every 30s catches missed registrations.
-        // NDP connections are pre-warmed on topology update, so broadcast_register_volume
-        // only sends messages (no TCP connect latency).
+        // NDP connections are pre-warmed on topology update, so broadcast only
+        // sends messages (no TCP connect latency). Wait with 5s timeout to
+        // ensure all nodes know the volume before I/O starts.
         if let Ok(engine) = crate::bdev::novastor_bdev::get_chunk_engine() {
             let ndp_pool = engine.ndp_pool().clone();
             let vol_name = req.name.clone();
-            tokio::spawn(async move {
-                let registered = ndp_pool.broadcast_register_volume(&vol_name).await;
-                log::info!(
-                    "create_volume: registered '{}' on {} NDP peers (background)",
-                    vol_name,
-                    registered
-                );
-            });
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                ndp_pool.broadcast_register_volume(&vol_name),
+            )
+            .await;
+            match result {
+                Ok(registered) => {
+                    log::info!(
+                        "create_volume: registered '{}' on {} NDP peers",
+                        vol_name,
+                        registered
+                    );
+                }
+                Err(_) => {
+                    log::warn!(
+                        "create_volume: NDP registration timed out for '{}' — topology push will catch up",
+                        vol_name
+                    );
+                }
+            }
         }
 
         Ok(Response::new(CreateVolumeResponse {
