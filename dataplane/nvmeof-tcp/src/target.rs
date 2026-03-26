@@ -7,6 +7,7 @@
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -48,6 +49,9 @@ pub struct SubsystemConfig {
 struct Subsystem {
     config: SubsystemConfig,
     backend: Box<dyn NvmeOfBackend>,
+    /// Unique controller ID counter — each connection gets a different cntlid.
+    /// Required for NVMe multipath: kernel rejects duplicate cntlid on same NQN.
+    next_cntlid: AtomicU16,
 }
 
 /// Multi-subsystem NVMe-oF TCP target.
@@ -69,6 +73,7 @@ impl NvmeOfTarget {
         let subsystem = Arc::new(Subsystem {
             config,
             backend: Box::new(backend),
+            next_cntlid: AtomicU16::new(1),
         });
         // Use try_write to avoid blocking; in practice this is called from async context.
         if let Ok(mut subs) = self.subsystems.try_write() {
@@ -537,7 +542,10 @@ impl NvmeOfTarget {
                 state.connected = true;
 
                 let mut cqe = NvmeCqe::success(cmd.cid, qid);
-                cqe.dw0 = 1; // Controller ID
+                // Unique controller ID per connection — required for NVMe multipath.
+                // The kernel rejects duplicate cntlid on the same NQN.
+                let cntlid = subsys.next_cntlid.fetch_add(1, Ordering::Relaxed);
+                cqe.dw0 = cntlid as u32;
                 stream.write_all(&build_capsule_resp(&cqe)).await?;
                 stream.flush().await?;
 
@@ -653,7 +661,7 @@ impl NvmeOfTarget {
 
         let data = match cns {
             identify_cns::CONTROLLER => build_identify_controller(&subsys.config),
-            identify_cns::NAMESPACE => build_identify_namespace(&*subsys.backend),
+            identify_cns::NAMESPACE => build_identify_namespace(&*subsys.backend, &subsys.config.nqn),
             identify_cns::ACTIVE_NS_LIST => {
                 let mut buf = vec![0u8; 4096];
                 buf[0..4].copy_from_slice(&1u32.to_le_bytes());
@@ -896,7 +904,7 @@ fn build_identify_controller(config: &SubsystemConfig) -> Vec<u8> {
     buf
 }
 
-fn build_identify_namespace(backend: &dyn NvmeOfBackend) -> Vec<u8> {
+fn build_identify_namespace(backend: &dyn NvmeOfBackend, nqn: &str) -> Vec<u8> {
     let mut buf = vec![0u8; 4096];
     let block_size = backend.block_size() as u64;
     let nsze = backend.size() / block_size;
@@ -907,7 +915,29 @@ fn build_identify_namespace(backend: &dyn NvmeOfBackend) -> Vec<u8> {
     buf[24] = 1 << 2;
     // DLFEAT (offset 32): bits [2:0] = 001 = read of deallocated LB returns zeros
     buf[32] = 0x01;
+
+    // NGUID (offset 104, 16 bytes) — must be identical across all multipath
+    // targets for the same volume. Derived from NQN hash so it's deterministic.
+    let nguid = nqn_to_nguid(nqn);
+    buf[104..120].copy_from_slice(&nguid);
+
     let ds = (block_size as f64).log2() as u8;
     buf[130] = ds;
     buf
+}
+
+/// Derive a 16-byte NGUID from the NQN string. Same NQN → same NGUID,
+/// so all multipath targets for the same volume return the same namespace ID.
+fn nqn_to_nguid(nqn: &str) -> [u8; 16] {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    nqn.hash(&mut hasher);
+    let h1 = hasher.finish();
+    // Hash again for the second half
+    h1.hash(&mut hasher);
+    let h2 = hasher.finish();
+    let mut nguid = [0u8; 16];
+    nguid[0..8].copy_from_slice(&h1.to_le_bytes());
+    nguid[8..16].copy_from_slice(&h2.to_le_bytes());
+    nguid
 }
