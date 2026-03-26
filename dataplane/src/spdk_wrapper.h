@@ -17,6 +17,7 @@
 #include <spdk/thread.h>
 #include <spdk/log.h>
 #include <spdk/string.h>
+#include <spdk/sock.h>
 
 /* Forward declarations for SPDK malloc bdev module internals.
  * These functions are part of the SPDK malloc bdev module
