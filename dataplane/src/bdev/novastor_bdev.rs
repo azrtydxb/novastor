@@ -165,9 +165,16 @@ pub fn allocate_volume_offset(volume_name: &str, size_bytes: u64) -> u64 {
 /// This enables lazy per-chunk allocation: the first sub-block write
 /// to a volume on this backend automatically allocates a 4MB chunk slot.
 pub fn get_volume_base_offset(volume_name: &str) -> Result<u64> {
-    // Fast path: already allocated.
+    // Fast path: already allocated. Use try_read to never block the reactor.
     {
-        let offsets = volume_offsets().read().unwrap();
+        let offsets = match volume_offsets().try_read() {
+            Ok(o) => o,
+            Err(_) => {
+                return Err(crate::error::DataPlaneError::BdevError(
+                    "volume offsets contended".to_string(),
+                ));
+            }
+        };
         if let Some(&offset) = offsets.get(volume_name) {
             return Ok(offset);
         }
@@ -528,7 +535,10 @@ async fn sub_block_write_zeroes(volume_name: &str, offset: u64, length: u64) -> 
 /// Find the byte offset of the next data (written) region at or after `offset`.
 /// Returns `u64::MAX` if no data exists after `offset`.
 fn find_next_data(volume_name: &str, offset: u64) -> u64 {
-    let maps = volume_chunk_maps().read().unwrap();
+    let maps = match volume_chunk_maps().try_read() {
+        Ok(m) => m,
+        Err(_) => return u64::MAX, // Contended — report no data/all holes
+    };
     let chunk_map = match maps.get(volume_name) {
         Some(cm) => cm,
         None => return u64::MAX,
@@ -562,7 +572,10 @@ fn find_next_data(volume_name: &str, offset: u64) -> u64 {
 /// Find the byte offset of the next hole (unwritten) region at or after `offset`.
 /// Returns `u64::MAX` if the entire remaining volume is data.
 fn find_next_hole(volume_name: &str, offset: u64) -> u64 {
-    let maps = volume_chunk_maps().read().unwrap();
+    let maps = match volume_chunk_maps().try_read() {
+        Ok(m) => m,
+        Err(_) => return u64::MAX, // Contended — report no data/all holes
+    };
     let chunk_map = match maps.get(volume_name) {
         Some(cm) => cm,
         None => return offset, // No data at all — entire volume is a hole.
@@ -977,7 +990,10 @@ static REACTOR_BDEV_CACHE: OnceLock<Mutex<Option<ReactorBdevCache>>> = OnceLock:
 /// Open the backend bdev for reactor-native I/O. Must be called on reactor.
 unsafe fn reactor_cache_open(bdev_name: &str) -> Option<&'static ReactorBdevCache> {
     let cell = REACTOR_BDEV_CACHE.get_or_init(|| Mutex::new(None));
-    let mut guard = cell.lock().unwrap();
+    let mut guard = match cell.try_lock() {
+        Ok(g) => g,
+        Err(_) => return None,
+    };
     if guard.is_none() {
         let name_c = match std::ffi::CString::new(bdev_name) {
             Ok(c) => c,
