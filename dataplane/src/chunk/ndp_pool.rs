@@ -58,9 +58,20 @@ impl NdpPool {
         let conn = self.get_or_connect(addr).await?;
 
         let header = NdpHeader::request(NdpOp::Read, 0, volume_hash, offset, length);
-        let resp = conn.request(header, None).await.map_err(|e| {
-            DataPlaneError::TransportError(format!("NDP read from {}: {}", addr, e))
-        })?;
+        let resp = match conn.request(header.clone(), None).await {
+            Ok(r) => r,
+            Err(e) => {
+                // Connection broken — remove and retry once with fresh connection.
+                self.remove(addr).await;
+                let conn2 = self.get_or_connect(addr).await?;
+                conn2.request(header, None).await.map_err(|e2| {
+                    DataPlaneError::TransportError(format!(
+                        "NDP read from {} (retry): {}",
+                        addr, e2
+                    ))
+                })?
+            }
+        };
 
         if resp.header.status != 0 {
             return Err(DataPlaneError::TransportError(format!(
@@ -88,10 +99,18 @@ impl NdpPool {
         let conn = self.get_or_connect(addr).await?;
 
         let header = NdpHeader::request(NdpOp::Write, 0, volume_hash, offset, data.len() as u32);
-        let resp = conn
-            .request(header, Some(data.to_vec()))
-            .await
-            .map_err(|e| DataPlaneError::TransportError(format!("NDP write to {}: {}", addr, e)))?;
+        let payload = data.to_vec();
+        let resp = match conn.request(header.clone(), Some(payload.clone())).await {
+            Ok(r) => r,
+            Err(_) => {
+                // Connection broken — remove and retry once.
+                self.remove(addr).await;
+                let conn2 = self.get_or_connect(addr).await?;
+                conn2.request(header, Some(payload)).await.map_err(|e2| {
+                    DataPlaneError::TransportError(format!("NDP write to {} (retry): {}", addr, e2))
+                })?
+            }
+        };
 
         if resp.header.status != 0 {
             return Err(DataPlaneError::TransportError(format!(
