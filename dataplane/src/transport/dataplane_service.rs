@@ -1195,37 +1195,21 @@ impl DataplaneService for DataplaneServiceImpl {
         let bdev = crate::bdev::novastor_bdev::create(&req.name, req.size_bytes)
             .map_err(|e| Status::internal(format!("create novastor bdev: {e}")))?;
 
-        // Register volume on ALL topology nodes via NDP BEFORE returning.
-        // Concurrent — all registrations in parallel to avoid timeout.
+        // Register volume on ALL topology nodes via NDP.
+        // Fire-and-forget: topology push every 30s catches missed registrations.
+        // NDP connections are pre-warmed on topology update, so broadcast_register_volume
+        // only sends messages (no TCP connect latency).
         if let Ok(engine) = crate::bdev::novastor_bdev::get_chunk_engine() {
-            let node_id = engine.node_id().to_string();
-            let topo = engine.topology_snapshot();
             let ndp_pool = engine.ndp_pool().clone();
             let vol_name = req.name.clone();
-
-            let mut tasks = tokio::task::JoinSet::new();
-            for node in topo.nodes() {
-                if node.id == node_id {
-                    continue;
-                }
-                let addr = format!("{}:4500", node.address);
-                let pool = ndp_pool.clone();
-                let vn = vol_name.clone();
-                tasks.spawn(async move { pool.register_volume_on_peer(&addr, &vn).await });
-            }
-            let total = tasks.len();
-            let mut registered = 0usize;
-            while let Some(result) = tasks.join_next().await {
-                if let Ok(Ok(())) = result {
-                    registered += 1;
-                }
-            }
-            log::info!(
-                "create_volume: registered '{}' on {}/{} NDP peers",
-                vol_name,
-                registered,
-                total
-            );
+            tokio::spawn(async move {
+                let registered = ndp_pool.broadcast_register_volume(&vol_name).await;
+                log::info!(
+                    "create_volume: registered '{}' on {} NDP peers (background)",
+                    vol_name,
+                    registered
+                );
+            });
         }
 
         Ok(Response::new(CreateVolumeResponse {
