@@ -1471,9 +1471,29 @@ impl DataplaneService for DataplaneServiceImpl {
                 .filter(|n| n.node_id != node_id)
                 .map(|n| format!("{}:4500", n.address))
                 .collect();
+            // Pre-warm tokio NDP connections (for flush/write fan-out).
+            let peer_addrs_clone = peer_addrs.clone();
             tokio::spawn(async move {
-                ndp_pool.warm_connections(&peer_addrs).await;
+                ndp_pool.warm_connections(&peer_addrs_clone).await;
             });
+
+            // Also connect reactor-native NDP peers (for zero-crossing remote I/O).
+            #[cfg(feature = "spdk-sys")]
+            {
+                let addrs = peer_addrs;
+                crate::spdk::reactor_dispatch::send_to_reactor(move || {
+                    for addr in &addrs {
+                        // Parse "ip:port" to separate ip and port.
+                        if let Some((ip, port_str)) = addr.rsplit_once(':') {
+                            if let Ok(port) = port_str.parse::<u16>() {
+                                unsafe {
+                                    crate::chunk::reactor_ndp::connect_peer(ip, port);
+                                }
+                            }
+                        }
+                    }
+                });
+            }
         }
 
         Ok(Response::new(UpdateTopologyResponse { accepted }))

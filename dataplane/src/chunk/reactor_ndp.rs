@@ -82,8 +82,8 @@ const MAX_INFLIGHT: usize = 64;
 
 /// A pending NDP request waiting for a response.
 struct PendingRequest {
-    /// The bdev_io to complete when response arrives.
-    bdev_io: *mut ffi::spdk_bdev_io,
+    /// The bdev_io to complete when response arrives (opaque *mut spdk_bdev_io).
+    bdev_io: *mut c_void,
     /// Expected operation type in response.
     expected_op: NdpOp,
     /// IOV descriptors for scatter into (reads only).
@@ -226,12 +226,13 @@ pub unsafe fn connect_peer(addr: &str, port: u16) -> bool {
 }
 
 /// Send an NDP read request on the reactor. Returns true if queued.
+/// `bdev_io` is an opaque pointer (*mut spdk_bdev_io) passed through for completion.
 pub unsafe fn send_read(
     peer_addr: &str,
     volume_hash: u64,
     offset: u64,
     length: u32,
-    bdev_io: *mut ffi::spdk_bdev_io,
+    bdev_io: *mut c_void,
     iovs: Vec<(usize, usize)>,
     buf_offset: usize,
 ) -> bool {
@@ -293,7 +294,7 @@ pub unsafe fn send_write(
     volume_hash: u64,
     offset: u64,
     data: &[u8],
-    bdev_io: *mut ffi::spdk_bdev_io,
+    bdev_io: *mut c_void,
 ) -> bool {
     let cell = match REACTOR_NDP.get() {
         Some(c) => c,

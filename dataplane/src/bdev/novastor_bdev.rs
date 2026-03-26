@@ -1868,7 +1868,59 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 return;
             }
 
-            // Tokio fallback — handles multi-sub-block, remote, or any setup failure.
+            // Reactor NDP fallback — try remote read via SPDK sockets (zero crossing).
+            #[cfg(feature = "spdk-sys")]
+            if !reactor_handled
+                && length > 0
+                && offset / CHUNK_SIZE as u64 == (offset + length - 1) / CHUNK_SIZE as u64
+            {
+                if let Ok(engine) = get_chunk_engine() {
+                    let chunk_idx = sub_block::chunk_index(offset) as usize;
+                    let chunk_key = format!("{}:{}", volume_name, chunk_idx);
+                    let prot = engine.protection();
+                    let factor = match &prot {
+                        Protection::Replication { factor } => *factor as usize,
+                        Protection::ErasureCoding {
+                            data_shards,
+                            parity_shards,
+                        } => (*data_shards + *parity_shards) as usize,
+                    };
+                    let topo = engine.topology_snapshot();
+                    let placements = crush::select(&chunk_key, factor, &topo);
+
+                    // Try each placement — first connected reactor NDP peer wins.
+                    for (node_id, _) in &placements {
+                        if node_id == engine.node_id() {
+                            continue; // Skip self — local path already failed above.
+                        }
+                        // Find the node's address from topology.
+                        if let Some(node) = topo.nodes().iter().find(|n| &n.id == node_id) {
+                            let peer_addr = format!("{}:4500", node.address);
+                            if crate::chunk::reactor_ndp::is_connected(&peer_addr) {
+                                let volume_hash = ndp::header::volume_hash(&volume_name);
+                                let mut iov_descs: Vec<(usize, usize)> = Vec::with_capacity(iovcnt);
+                                for i in 0..iovcnt {
+                                    let iov = &*iovs.add(i);
+                                    iov_descs.push((iov.iov_base as usize, iov.iov_len));
+                                }
+                                if crate::chunk::reactor_ndp::send_read(
+                                    &peer_addr,
+                                    volume_hash,
+                                    offset,
+                                    length as u32,
+                                    bdev_io as *mut std::os::raw::c_void,
+                                    iov_descs,
+                                    0, // buf_offset
+                                ) {
+                                    return; // Reactor NDP handles completion.
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Tokio fallback — handles anything reactor paths couldn't.
             let bdev_io_addr = bdev_io as usize;
             let mut iov_descs: Vec<(usize, usize)> = Vec::with_capacity(iovcnt);
             for i in 0..iovcnt {
