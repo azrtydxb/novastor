@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // isFormatted returns true if the block device at devicePath already contains
@@ -27,7 +28,14 @@ func isFormatted(ctx context.Context, devicePath string) (bool, error) {
 
 // formatDevice formats devicePath with the given filesystem type.
 // This is a destructive operation and should only be called on unformatted devices.
-func formatDevice(ctx context.Context, devicePath, fsType string) error {
+func formatDevice(_ context.Context, devicePath, fsType string) error {
+	// Use a generous 10-minute timeout for mkfs — distributed storage with
+	// CRUSH routing can be slow for initial format (thousands of small writes
+	// fan out to remote backends via NDP). The kubelet will retry if this
+	// times out.
+	mkfsCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
 	var cmd *exec.Cmd
 	switch fsType {
 	case "ext4":
@@ -36,7 +44,7 @@ func formatDevice(ctx context.Context, devicePath, fsType string) error {
 		// which causes mkfs to issue a full-volume discard that is
 		// extremely slow over NVMe-oF (writes real zeros).
 		// Unwritten blocks already return zeros, so discard is unnecessary.
-		cmd = exec.CommandContext(ctx, "mkfs.ext4", "-E", "nodiscard,lazy_itable_init=1,lazy_journal_init=1", devicePath)
+		cmd = exec.CommandContext(mkfsCtx, "mkfs.ext4", "-E", "nodiscard,lazy_itable_init=1,lazy_journal_init=1", devicePath)
 	default:
 		return fmt.Errorf("unsupported filesystem type: %s", fsType)
 	}
