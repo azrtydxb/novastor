@@ -2074,7 +2074,42 @@ unsafe extern "C" fn bdev_submit_request_cb(
                         return;
                     }
 
-                    // Write-through via tokio — immediate CRUSH + NDP with retry.
+                    // Try reactor NDP write — zero thread crossing.
+                    #[cfg(feature = "spdk-sys")]
+                    {
+                        let chunk_idx = sub_block::chunk_index(offset) as usize;
+                        let chunk_key = format!("{}:{}", volume_name, chunk_idx);
+                        let prot = engine.protection();
+                        let factor = match &prot {
+                            Protection::Replication { factor } => *factor as usize,
+                            Protection::ErasureCoding {
+                                data_shards,
+                                parity_shards,
+                            } => (*data_shards + *parity_shards) as usize,
+                        };
+                        let topo = engine.topology_snapshot();
+                        let placements = crush::select(&chunk_key, factor, &topo);
+
+                        if let Some((node_id, _)) = placements.first() {
+                            if node_id != engine.node_id() {
+                                if let Some(node) = topo.nodes().iter().find(|n| &n.id == node_id) {
+                                    let peer_addr = format!("{}:4500", node.address);
+                                    let vol_hash = ndp::header::volume_hash(&volume_name);
+                                    if crate::chunk::reactor_ndp::send_write(
+                                        &peer_addr,
+                                        vol_hash,
+                                        offset,
+                                        &data,
+                                        bdev_io as *mut std::os::raw::c_void,
+                                    ) {
+                                        return; // Reactor NDP handles completion.
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Tokio fallback — write-through with NDP retry.
                     let bdev_io_addr = bdev_io as usize;
                     let handle = get_tokio_handle().expect("tokio handle");
                     handle.spawn(async move {
@@ -2180,45 +2215,28 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 });
             });
         }
-        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES => {
-            let bdev_params = (*bdev_io).u.bdev.as_ref();
-            let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
-            let length = bdev_params.num_blocks * (*bdev).blocklen as u64;
-            let bdev_io_addr = bdev_io as usize;
-
-            let handle = get_tokio_handle().expect("tokio handle");
-            handle.spawn(async move {
-                let status = match sub_block_write_zeroes(&volume_name, offset, length).await {
-                    Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                    Err(e) => {
-                        error!("novastor_bdev: write_zeroes failed: {}", e);
-                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
-                    }
-                };
-                reactor_dispatch::send_to_reactor(move || unsafe {
-                    ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
-                });
-            });
-        }
-        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_UNMAP => {
-            let bdev_params = (*bdev_io).u.bdev.as_ref();
-            let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
-            let length = bdev_params.num_blocks * (*bdev).blocklen as u64;
-            let bdev_io_addr = bdev_io as usize;
-
-            let handle = get_tokio_handle().expect("tokio handle");
-            handle.spawn(async move {
-                let status = match sub_block_write_zeroes(&volume_name, offset, length).await {
-                    Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                    Err(e) => {
-                        error!("novastor_bdev: unmap failed: {}", e);
-                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
-                    }
-                };
-                reactor_dispatch::send_to_reactor(move || unsafe {
-                    ffi::spdk_bdev_io_complete(bdev_io_addr as *mut ffi::spdk_bdev_io, status);
-                });
-            });
+        ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_WRITE_ZEROES
+        | ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_UNMAP => {
+            // Thin provisioning: WRITE_ZEROES and UNMAP are no-ops.
+            // Unwritten/unmapped regions already return zeros (the NDP server
+            // returns zeros for unallocated regions, and the NVMe-oF identify
+            // namespace reports DLFEAT=read-zeros-on-deallocate).
+            // Completing immediately on the reactor — zero thread crossing.
+            //
+            // Invalidate any cached sub-blocks in the zeroed/unmapped range
+            // so reads don't return stale cached data.
+            if let Ok(engine) = get_chunk_engine() {
+                let bdev_params = (*bdev_io).u.bdev.as_ref();
+                let offset = bdev_params.offset_blocks * (*bdev).blocklen as u64;
+                let length = bdev_params.num_blocks * (*bdev).blocklen as u64;
+                engine
+                    .write_cache
+                    .invalidate_range(&volume_name, offset, length);
+            }
+            ffi::spdk_bdev_io_complete(
+                bdev_io,
+                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+            );
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_RESET => {
             // Reset: gracefully accept — no state to reset.
