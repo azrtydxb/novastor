@@ -850,9 +850,30 @@ impl ChunkEngine {
                         }
                     }
                 }; // topo guard dropped
-                self.ndp_pool
-                    .sub_block_read(&addr, vol_hash, offset, length as u32)
-                    .await
+                   // Retry NDP read with backoff — connection may not be ready post-rollout.
+                let mut read_result = Err(DataPlaneError::ChunkEngineError("not attempted".into()));
+                for attempt in 0..3u32 {
+                    match self
+                        .ndp_pool
+                        .sub_block_read(&addr, vol_hash, offset, length as u32)
+                        .await
+                    {
+                        Ok(data) => {
+                            read_result = Ok(data);
+                            break;
+                        }
+                        Err(e) => {
+                            read_result = Err(e);
+                            if attempt < 2 {
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    100 * (1 << attempt),
+                                ))
+                                .await;
+                            }
+                        }
+                    }
+                }
+                read_result
             };
 
             match result {
@@ -1066,10 +1087,23 @@ impl ChunkEngine {
                         ))
                     }
                 } else if let Some(addr) = remote_addr {
-                    ndp_pool
-                        .sub_block_write(&addr, vol_hash, write_offset, &data_owned)
-                        .await?;
-                    Ok(target_owned)
+                    // Retry NDP write with backoff — connections may not be
+                    // established yet after a dataplane rollout.
+                    let mut last_err = None;
+                    for attempt in 0..5u32 {
+                        match ndp_pool
+                            .sub_block_write(&addr, vol_hash, write_offset, &data_owned)
+                            .await
+                        {
+                            Ok(()) => return Ok(target_owned),
+                            Err(e) => {
+                                last_err = Some(e);
+                                let delay = std::time::Duration::from_millis(100 * (1 << attempt));
+                                tokio::time::sleep(delay).await;
+                            }
+                        }
+                    }
+                    Err(last_err.unwrap())
                 } else {
                     Err(DataPlaneError::ChunkEngineError(format!(
                         "node {} not found in topology",
