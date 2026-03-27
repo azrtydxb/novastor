@@ -43,7 +43,7 @@ pub struct ChunkEngine {
     pub write_cache: ShardedWriteCache,
     /// Pending unaligned writes: queued on reactor, flushed on FLUSH command.
     /// Uses std::sync::Mutex with try_lock on reactor side.
-    pending_writes: std::sync::Mutex<Vec<(String, u64, Vec<u8>)>>,
+    pub pending_writes: std::sync::Mutex<Vec<(String, u64, Vec<u8>)>>,
 }
 
 impl ChunkEngine {
@@ -812,6 +812,23 @@ impl ChunkEngine {
         // Sync call — safe on reactor and tokio.
         if let Some(data) = self.write_cache.lookup(volume_id, offset, length) {
             return Ok(data);
+        }
+
+        // Check pending unaligned writes (queued but not yet flushed).
+        // These were acknowledged to the host but haven't reached the backend.
+        if let Ok(pending) = self.pending_writes.try_lock() {
+            for (vid, poff, pdata) in pending.iter() {
+                if vid == volume_id
+                    && *poff <= offset
+                    && *poff + pdata.len() as u64 >= offset + length
+                {
+                    let start = (offset - *poff) as usize;
+                    let end = start + length as usize;
+                    if end <= pdata.len() {
+                        return Ok(pdata[start..end].to_vec());
+                    }
+                }
+            }
         }
 
         let chunk_index = offset / CHUNK_SIZE as u64;

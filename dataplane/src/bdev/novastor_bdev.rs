@@ -1124,6 +1124,35 @@ unsafe extern "C" fn reactor_write_done_cb(
 /// 2. CRUSH selects only local placements (rep1 on this node)
 /// 3. Write start offset is block-aligned (512 bytes)
 /// 4. Backend bdev is available via reactor cache
+/// Copy data to iovs and complete bdev_io with success. Used for cache/pending hits.
+unsafe fn copy_to_iovs_and_complete(
+    data: &[u8],
+    iovs: *const ffi::iovec,
+    iovcnt: usize,
+    bdev_io: *mut ffi::spdk_bdev_io,
+) {
+    let mut src_off = 0usize;
+    for i in 0..iovcnt {
+        let iov = &*iovs.add(i);
+        let to_copy = std::cmp::min(iov.iov_len, data.len().saturating_sub(src_off));
+        if to_copy > 0 {
+            std::ptr::copy_nonoverlapping(
+                data[src_off..].as_ptr(),
+                iov.iov_base as *mut u8,
+                to_copy,
+            );
+        }
+        src_off += to_copy;
+        if src_off >= data.len() {
+            break;
+        }
+    }
+    ffi::spdk_bdev_io_complete(
+        bdev_io,
+        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+    );
+}
+
 unsafe fn try_reactor_local_write(
     engine: &ChunkEngine,
     volume_name: &str,
@@ -1738,30 +1767,31 @@ unsafe extern "C" fn bdev_submit_request_cb(
             // Fast path: if all sub-blocks are cached, serve from cache
             // directly on the reactor — zero thread crossing.
             if let Ok(engine) = get_chunk_engine() {
+                // Check write-back cache first.
                 if let Some(cached) = engine.write_cache.lookup(&volume_name, offset, length) {
-                    // Cache hit — copy to iovs, complete on reactor.
-                    let mut src_off = 0usize;
-                    for i in 0..iovcnt {
-                        let iov = &*iovs.add(i);
-                        let to_copy =
-                            std::cmp::min(iov.iov_len, cached.len().saturating_sub(src_off));
-                        if to_copy > 0 {
-                            std::ptr::copy_nonoverlapping(
-                                cached[src_off..].as_ptr(),
-                                iov.iov_base as *mut u8,
-                                to_copy,
-                            );
-                        }
-                        src_off += to_copy;
-                        if src_off >= cached.len() {
-                            break;
+                    copy_to_iovs_and_complete(&cached, iovs, iovcnt, bdev_io);
+                    return;
+                }
+                // Check pending unaligned writes (queued but not flushed).
+                if let Ok(pending) = engine.pending_writes.try_lock() {
+                    for (vid, poff, pdata) in pending.iter() {
+                        if vid == &volume_name
+                            && *poff <= offset
+                            && *poff + pdata.len() as u64 >= offset + length
+                        {
+                            let start = (offset - *poff) as usize;
+                            let end = start + length as usize;
+                            if end <= pdata.len() {
+                                copy_to_iovs_and_complete(
+                                    &pdata[start..end],
+                                    iovs,
+                                    iovcnt,
+                                    bdev_io,
+                                );
+                                return;
+                            }
                         }
                     }
-                    ffi::spdk_bdev_io_complete(
-                        bdev_io,
-                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                    );
-                    return;
                 }
             }
 
