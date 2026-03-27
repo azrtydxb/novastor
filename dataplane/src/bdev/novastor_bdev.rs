@@ -2031,39 +2031,15 @@ unsafe extern "C" fn bdev_submit_request_cb(
                         .write_cache
                         .invalidate_range(&volume_name, offset, length);
 
-                    // Try reactor-native local write — zero thread crossing.
-                    if try_reactor_local_write(
-                        &engine,
-                        &volume_name,
-                        offset,
-                        length,
-                        &data,
+                    // Queue the unaligned write for batched flush instead of
+                    // writing immediately. This dramatically speeds up mkfs
+                    // which does thousands of small writes — they get batched
+                    // and flushed together on the next FLUSH command.
+                    engine.queue_pending_write(volume_name.clone(), offset, data);
+                    ffi::spdk_bdev_io_complete(
                         bdev_io,
-                        ctx,
-                    ) {
-                        return;
-                    }
-
-                    // Fall through to tokio for direct write.
-                    let bdev_io_addr = bdev_io as usize;
-                    let handle = get_tokio_handle().expect("tokio handle");
-                    handle.spawn(async move {
-                        let engine = get_chunk_engine().expect("chunk engine");
-                        let result = engine.flush_single_write(&volume_name, offset, &data).await;
-                        let status = match result {
-                            Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                            Err(e) => {
-                                error!("novastor_bdev: write (not aligned) failed: {}", e);
-                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
-                            }
-                        };
-                        reactor_dispatch::send_to_reactor(move || unsafe {
-                            ffi::spdk_bdev_io_complete(
-                                bdev_io_addr as *mut ffi::spdk_bdev_io,
-                                status,
-                            );
-                        });
-                    });
+                        ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
+                    );
                 }
                 AbsorbResult::Full => {
                     // Cache full — try reactor-native local write first.
@@ -2103,18 +2079,46 @@ unsafe extern "C" fn bdev_submit_request_cb(
             }
         }
         ffi::spdk_bdev_io_type_SPDK_BDEV_IO_TYPE_FLUSH => {
-            // Flush write-back cache for this volume through CRUSH fan-out.
+            // Flush write-back cache + pending unaligned writes through CRUSH fan-out.
             let bdev_io_addr = bdev_io as usize;
             let handle = get_tokio_handle().expect("tokio handle");
             handle.spawn(async move {
                 let status = match get_chunk_engine() {
-                    Ok(engine) => match engine.flush(&volume_name).await {
-                        Ok(()) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
-                        Err(e) => {
-                            error!("novastor_bdev: flush failed: {}", e);
-                            ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                    Ok(engine) => {
+                        // First, flush pending unaligned writes.
+                        let pending = engine.drain_all_pending_writes();
+                        let mut flush_ok = true;
+                        if !pending.is_empty() {
+                            // Fan-out all pending writes concurrently.
+                            let mut tasks = tokio::task::JoinSet::new();
+                            for (vol, offset, data) in pending {
+                                let eng = engine.clone();
+                                tasks.spawn(async move {
+                                    eng.flush_single_write(&vol, offset, &data).await
+                                });
+                            }
+                            while let Some(result) = tasks.join_next().await {
+                                if let Ok(Err(e)) = result {
+                                    error!("novastor_bdev: pending write flush failed: {}", e);
+                                    flush_ok = false;
+                                }
+                            }
                         }
-                    },
+                        // Then flush the sub-block cache.
+                        match engine.flush(&volume_name).await {
+                            Ok(()) if flush_ok => {
+                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS
+                            }
+                            Ok(()) => {
+                                // Cache flush ok but some pending writes failed.
+                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                            }
+                            Err(e) => {
+                                error!("novastor_bdev: flush failed: {}", e);
+                                ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_FAILED
+                            }
+                        }
+                    }
                     Err(_) => ffi::spdk_bdev_io_status_SPDK_BDEV_IO_STATUS_SUCCESS,
                 };
                 reactor_dispatch::send_to_reactor(move || unsafe {

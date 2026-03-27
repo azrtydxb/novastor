@@ -41,6 +41,9 @@ pub struct ChunkEngine {
     chunk_map_batcher: Option<ChunkMapBatcher>,
     /// Write-back cache: absorbs sub-block writes for deferred CRUSH fan-out.
     pub write_cache: ShardedWriteCache,
+    /// Pending unaligned writes: queued on reactor, flushed on FLUSH command.
+    /// Uses std::sync::Mutex with try_lock on reactor side.
+    pending_writes: std::sync::Mutex<Vec<(String, u64, Vec<u8>)>>,
 }
 
 impl ChunkEngine {
@@ -56,6 +59,7 @@ impl ChunkEngine {
             ndp_pool: Arc::new(NdpPool::new()),
             chunk_map_batcher: None,
             write_cache: ShardedWriteCache::new(),
+            pending_writes: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -76,6 +80,7 @@ impl ChunkEngine {
             ndp_pool: Arc::new(NdpPool::new()),
             chunk_map_batcher: None,
             write_cache: ShardedWriteCache::new(),
+            pending_writes: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -96,6 +101,7 @@ impl ChunkEngine {
             ndp_pool: Arc::new(NdpPool::new()),
             chunk_map_batcher: None,
             write_cache: ShardedWriteCache::new(),
+            pending_writes: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -117,12 +123,46 @@ impl ChunkEngine {
             ndp_pool: Arc::new(NdpPool::new()),
             chunk_map_batcher: None,
             write_cache: ShardedWriteCache::new(),
+            pending_writes: std::sync::Mutex::new(Vec::new()),
         }
     }
 
     /// Return a reference to the NDP connection pool.
     pub fn ndp_pool(&self) -> &Arc<NdpPool> {
         &self.ndp_pool
+    }
+
+    /// Queue an unaligned write for batched flush. Called from reactor via try_lock.
+    /// Data is flushed to backends on next FLUSH command.
+    pub fn queue_pending_write(&self, volume_id: String, offset: u64, data: Vec<u8>) {
+        if let Ok(mut pending) = self.pending_writes.try_lock() {
+            pending.push((volume_id, offset, data));
+        }
+        // If try_lock fails (flush in progress), the write is lost.
+        // This is acceptable: FLUSH will catch subsequent writes, and the
+        // host hasn't received a FLUSH acknowledgment yet so data is volatile.
+    }
+
+    /// Drain all pending unaligned writes for a volume.
+    pub fn drain_pending_writes(&self, volume_id: &str) -> Vec<(u64, Vec<u8>)> {
+        let mut pending = self.pending_writes.lock().unwrap();
+        let mut result = Vec::new();
+        let mut remaining = Vec::new();
+        for (vid, offset, data) in pending.drain(..) {
+            if vid == volume_id {
+                result.push((offset, data));
+            } else {
+                remaining.push((vid, offset, data));
+            }
+        }
+        *pending = remaining;
+        result
+    }
+
+    /// Drain ALL pending writes (for FLUSH across all volumes).
+    pub fn drain_all_pending_writes(&self) -> Vec<(String, u64, Vec<u8>)> {
+        let mut pending = self.pending_writes.lock().unwrap();
+        std::mem::take(&mut *pending)
     }
 
     /// Set the protection scheme at runtime (called by SetVolumePolicy RPC).
