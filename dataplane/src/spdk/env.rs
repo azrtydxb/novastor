@@ -105,11 +105,11 @@ unsafe extern "C" fn spdk_startup_cb(arg: *mut std::os::raw::c_void) {
     // Pre-allocate DMA buffer pool for bdev I/O (eliminates per-I/O malloc).
     super::reactor_dispatch::init_dma_pool();
 
-    // Initialize reactor-native NDP client (SPDK sock_group + poller).
-    // Dead sockets are removed from the group on disconnect to prevent
-    // poller stall.
-    #[cfg(feature = "spdk-sys")]
-    crate::chunk::reactor_ndp::init();
+    // Reactor-native NDP: disabled until lazy-connect + NDP server
+    // keep-alive issues are resolved. The sock_group poller on an empty
+    // group may cause reactor overhead.
+    // #[cfg(feature = "spdk-sys")]
+    // crate::chunk::reactor_ndp::init();
 
     // Recover the startup data passed through the arg pointer.
     let data = Box::from_raw(arg as *mut SpdkStartupData);
