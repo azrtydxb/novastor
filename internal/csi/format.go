@@ -6,7 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/azrtydxb/novastor/internal/logging"
 )
 
 // isFormatted returns true if the block device at devicePath already contains
@@ -28,32 +33,74 @@ func isFormatted(ctx context.Context, devicePath string) (bool, error) {
 
 // formatDevice formats devicePath with the given filesystem type.
 // This is a destructive operation and should only be called on unformatted devices.
+//
+// On distributed storage, mkfs can take minutes (writes fan out to remote
+// backends via NDP). To survive kubelet gRPC deadline expiry, mkfs runs in
+// a background goroutine with a 10-minute timeout. If already in progress,
+// returns a retriable error so kubelet retries and checks isFormatted.
 func formatDevice(_ context.Context, devicePath, fsType string) error {
-	// Use a generous 10-minute timeout for mkfs — distributed storage with
-	// CRUSH routing can be slow for initial format (thousands of small writes
-	// fan out to remote backends via NDP). The kubelet will retry if this
-	// times out.
+	formatMu.Lock()
+	if _, running := formatInProgress[devicePath]; running {
+		formatMu.Unlock()
+		return fmt.Errorf("mkfs already in progress for %s (will complete in background)", devicePath)
+	}
+	formatInProgress[devicePath] = struct{}{}
+	formatMu.Unlock()
+
 	mkfsCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
 
 	var cmd *exec.Cmd
 	switch fsType {
 	case "ext4":
-		// -E nodiscard: skip full-volume discard during format.
-		// Our NVMe-oF target advertises WRITE_ZEROES/TRIM support,
-		// which causes mkfs to issue a full-volume discard that is
-		// extremely slow over NVMe-oF (writes real zeros).
-		// Unwritten blocks already return zeros, so discard is unnecessary.
 		cmd = exec.CommandContext(mkfsCtx, "mkfs.ext4", "-E", "nodiscard,lazy_itable_init=1,lazy_journal_init=1", devicePath)
 	default:
+		cancel()
+		formatMu.Lock()
+		delete(formatInProgress, devicePath)
+		formatMu.Unlock()
 		return fmt.Errorf("unsupported filesystem type: %s", fsType)
 	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("mkfs.%s %s: %w: %s", fsType, devicePath, err, string(out))
+
+	// Run mkfs in the background — survives gRPC deadline expiry.
+	go func() {
+		defer cancel()
+		defer func() {
+			formatMu.Lock()
+			delete(formatInProgress, devicePath)
+			formatMu.Unlock()
+		}()
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			logging.L.Error("background mkfs failed",
+				zap.String("device", devicePath),
+				zap.Error(err),
+				zap.String("output", string(out)))
+		} else {
+			logging.L.Info("background mkfs completed",
+				zap.String("device", devicePath))
+		}
+	}()
+
+	// Wait briefly — small volumes format quickly.
+	time.Sleep(5 * time.Second)
+
+	// Check if already done.
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer checkCancel()
+	formatted, _ := isFormatted(checkCtx, devicePath)
+	if formatted {
+		return nil
 	}
-	return nil
+
+	// Not done yet — return error so kubelet retries. The background
+	// goroutine will eventually complete mkfs.
+	return fmt.Errorf("mkfs in progress for %s (background, will retry)", devicePath)
 }
+
+var (
+	formatInProgress = make(map[string]struct{})
+	formatMu         sync.Mutex
+)
 
 // mountDevice mounts devicePath to targetPath using the given filesystem type.
 func mountDevice(ctx context.Context, devicePath, targetPath, fsType string) error {
