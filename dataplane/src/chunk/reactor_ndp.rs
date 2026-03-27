@@ -329,6 +329,8 @@ pub unsafe fn send_read(
 }
 
 /// Send an NDP write request on the reactor. Returns true if queued.
+/// Only handles writes up to 8KB (header + data must fit in one TCP send).
+/// Larger writes fall through to tokio to avoid partial write corruption.
 pub unsafe fn send_write(
     peer_addr: &str,
     volume_hash: u64,
@@ -336,6 +338,11 @@ pub unsafe fn send_write(
     data: &[u8],
     bdev_io: *mut c_void,
 ) -> bool {
+    // Skip large writes — SPDK socket writev can't guarantee atomic send
+    // for payloads > TCP buffer. Partial writes corrupt the NDP stream.
+    if data.len() > 8192 {
+        return false;
+    }
     let cell = match REACTOR_NDP.get() {
         Some(c) => c,
         None => return false,
