@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
+
 	"path/filepath"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -225,13 +225,12 @@ func (ns *NodeService) NodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	}
 
 	if devicePath != "" {
-		// Wipe any stale filesystem signatures from reused backend
-		// storage before checking. The chunk store reuses backend
-		// regions, so new volumes may inherit old superblock data.
-		if wipeErr := exec.CommandContext(ctx, "wipefs", "-a", devicePath).Run(); wipeErr != nil {
-			logging.L.Warn("wipefs failed (non-fatal)", zap.Error(wipeErr))
-		}
 		// Format the device with ext4 if it has no filesystem yet.
+		// NOTE: wipefs removed — it was erasing partial mkfs progress on
+		// kubelet retries, preventing mkfs from ever completing on slow
+		// distributed backends. With ChunkEngine CRUSH routing, each
+		// volume gets unique backend placement, so stale superblocks
+		// from reused regions are not a concern.
 		formatted, fmtErr := ns.formatter.IsFormatted(ctx, devicePath)
 		if fmtErr != nil {
 			return nil, status.Errorf(codes.Internal, "checking filesystem on %s: %v", devicePath, fmtErr)
