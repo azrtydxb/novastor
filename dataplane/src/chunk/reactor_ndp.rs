@@ -246,13 +246,53 @@ pub unsafe fn send_read(
         None => return false,
     };
 
-    let peer = match state.peers.get_mut(peer_addr) {
-        Some(p) => p,
-        None => return false,
-    };
+    // Lazy-connect: if not connected, connect now and add to sock_group.
+    if !state.peers.contains_key(peer_addr) {
+        if let Some((ip, port_str)) = peer_addr.rsplit_once(':') {
+            if let Ok(port) = port_str.parse::<u16>() {
+                let addr_c = match CString::new(ip) {
+                    Ok(c) => c,
+                    Err(_) => return false,
+                };
+                let sock = ffi::spdk_sock_connect(addr_c.as_ptr(), port as c_int, std::ptr::null());
+                if sock.is_null() {
+                    return false;
+                }
+                let rc = ffi::spdk_sock_group_add_sock(
+                    state.sock_group,
+                    sock,
+                    Some(ndp_sock_cb),
+                    std::ptr::null_mut(),
+                );
+                if rc != 0 {
+                    let mut s = sock;
+                    ffi::spdk_sock_close(&mut s);
+                    return false;
+                }
+                info!("reactor_ndp: lazy-connected to {}", peer_addr);
+                state.peers.insert(
+                    peer_addr.to_string(),
+                    ReactorNdpPeer {
+                        sock,
+                        addr: ip.to_string(),
+                        port,
+                        pending: Vec::with_capacity(MAX_INFLIGHT),
+                        recv_buf: Vec::with_capacity(NDP_HEADER_SIZE + 65536),
+                        send_buf: Vec::new(),
+                    },
+                );
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    let peer = state.peers.get_mut(peer_addr).unwrap();
 
     if peer.pending.len() >= MAX_INFLIGHT {
-        return false; // Too many in-flight.
+        return false;
     }
 
     // Build NDP read request header.
@@ -268,11 +308,11 @@ pub unsafe fn send_read(
 
     let written = ffi::spdk_sock_writev(peer.sock, &mut iov, 1);
     if written < 0 || written as usize != NDP_HEADER_SIZE {
-        warn!(
-            "reactor_ndp: partial write to {}, written={}",
-            peer_addr, written
-        );
-        // TODO: buffer partial writes. For now, fail.
+        // Connection may have failed — remove and let next attempt reconnect.
+        if let Some(mut dead) = state.peers.remove(peer_addr) {
+            ffi::spdk_sock_group_remove_sock(state.sock_group, dead.sock);
+            ffi::spdk_sock_close(&mut dead.sock);
+        }
         return false;
     }
 
@@ -353,17 +393,17 @@ pub unsafe fn send_write(
     true
 }
 
-/// Check if a peer is connected.
+/// Check if reactor NDP is available for this peer.
+/// With lazy-connect, always returns true if reactor NDP is initialized —
+/// send_read/send_write will connect on demand.
 pub fn is_connected(peer_addr: &str) -> bool {
+    let _ = peer_addr; // Lazy connect — don't check peer map.
     let cell = match REACTOR_NDP.get() {
         Some(c) => c,
         None => return false,
     };
     let guard = cell.lock().unwrap();
-    match guard.as_ref() {
-        Some(s) => s.peers.contains_key(peer_addr),
-        None => false,
-    }
+    guard.is_some() // Initialized = available. Lazy connect on first use.
 }
 
 /// Poller function — called by SPDK reactor on every iteration.
