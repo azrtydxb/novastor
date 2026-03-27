@@ -1069,7 +1069,7 @@ impl ChunkEngine {
             )));
         }
 
-        log::trace!(
+        log::info!(
             "flush_single_write: vol={} offset={} len={} chunk={} placements={:?} self={}",
             volume_id,
             offset,
@@ -1137,6 +1137,12 @@ impl ChunkEngine {
                         {
                             Ok(()) => return Ok(target_owned),
                             Err(e) => {
+                                log::warn!(
+                                    "flush_single_write: NDP write to {} failed (attempt {}): {}",
+                                    addr,
+                                    attempt,
+                                    e
+                                );
                                 last_err = Some(e);
                                 let delay = std::time::Duration::from_millis(100 * (1 << attempt));
                                 tokio::time::sleep(delay).await;
