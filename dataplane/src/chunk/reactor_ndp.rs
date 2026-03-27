@@ -148,7 +148,7 @@ pub unsafe fn init() {
     let poller = ffi::spdk_poller_register(
         Some(ndp_poller_fn),
         sock_group as *mut c_void,
-        0, // poll every iteration
+        50, // poll every 50μs — fast enough for NDP responses, low enough overhead
     );
 
     info!(
