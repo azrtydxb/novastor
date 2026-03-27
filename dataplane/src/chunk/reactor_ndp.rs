@@ -394,9 +394,40 @@ unsafe extern "C" fn ndp_sock_cb(
     let n = ffi::spdk_sock_readv(sock, &mut iov, 1);
     if n <= 0 {
         if n == 0 {
-            warn!("reactor_ndp: peer disconnected");
+            // EOF — peer closed connection. Remove from sock_group to stop
+            // the poller from continuously firing on this dead socket.
+            let cell = match REACTOR_NDP.get() {
+                Some(c) => c,
+                None => return,
+            };
+            let mut guard = cell.lock().unwrap();
+            if let Some(state) = guard.as_mut() {
+                // Remove socket from group first.
+                ffi::spdk_sock_group_remove_sock(state.sock_group, sock);
+                let mut sock_ptr = sock;
+                ffi::spdk_sock_close(&mut sock_ptr);
+
+                // Find and remove the peer entry.
+                let dead_key: Option<String> = state
+                    .peers
+                    .iter()
+                    .find(|(_, p)| std::ptr::eq(p.sock, sock))
+                    .map(|(k, _)| k.clone());
+                if let Some(key) = dead_key {
+                    // Fail any pending requests on this peer.
+                    if let Some(peer) = state.peers.remove(&key) {
+                        for req in peer.pending {
+                            ffi::spdk_bdev_io_complete(
+                                req.bdev_io,
+                                -1i32, /* SPDK_BDEV_IO_STATUS_FAILED */
+                            );
+                        }
+                        warn!("reactor_ndp: peer {} disconnected, removed from pool", key);
+                    }
+                }
+            }
         }
-        // TODO: handle disconnect / reconnect
+        // n < 0: EAGAIN or transient error — silently return, poller will retry.
         return;
     }
 
