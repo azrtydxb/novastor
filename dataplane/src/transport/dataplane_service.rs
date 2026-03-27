@@ -1477,11 +1477,9 @@ impl DataplaneService for DataplaneServiceImpl {
                 ndp_pool.warm_connections(&peer_addrs_clone).await;
             });
 
-            // Connect reactor NDP peers. Poller at 50μs avoids reactor stall.
-            // Dead sockets cleaned up in ndp_sock_cb. Lazy-connect in send_read
-            // handles peers that disconnect between topology updates.
+            // Reactor NDP disabled — see env.rs comment.
             #[cfg(feature = "spdk-sys")]
-            {
+            if false {
                 let addrs = peer_addrs;
                 crate::spdk::reactor_dispatch::send_to_reactor(move || {
                     for addr in &addrs {
