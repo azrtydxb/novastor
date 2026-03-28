@@ -52,7 +52,10 @@ func formatDevice(_ context.Context, devicePath, fsType string) error {
 	var cmd *exec.Cmd
 	switch fsType {
 	case "ext4":
-		cmd = exec.CommandContext(mkfsCtx, "mkfs.ext4", "-E", "nodiscard,lazy_itable_init=1,lazy_journal_init=1", devicePath)
+		// UNMAP/WRITE_ZEROES complete instantly (reactor no-op, thin provisioning).
+		// Let mkfs use discard for fast initialization — the full-volume discard
+		// completes in milliseconds since our UNMAP is a no-op.
+		cmd = exec.CommandContext(mkfsCtx, "mkfs.ext4", "-E", "lazy_itable_init=1,lazy_journal_init=1", devicePath)
 	default:
 		cancel()
 		formatMu.Lock()
