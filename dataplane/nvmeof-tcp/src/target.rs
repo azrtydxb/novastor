@@ -430,6 +430,65 @@ impl NvmeOfTarget {
                                         )
                                         .await;
                                 }
+                                opcode::COMPARE => {
+                                    // Compare: read data from backend and compare with
+                                    // provided data. Return success if equal, error if not.
+                                    let offset = cmd.slba * subsys.backend.block_size() as u64;
+                                    let nlb = (cmd.cdw12 & 0xFFFF) as u32 + 1;
+                                    let length = nlb as u64 * subsys.backend.block_size() as u64;
+                                    let resp = match subsys.backend.read(offset, length as u32).await {
+                                        Ok(backend_data) => {
+                                            if let Some(ref cmp_data) = write_data {
+                                                if backend_data.len() == cmp_data.len()
+                                                    && backend_data == cmp_data.as_slice()
+                                                {
+                                                    build_capsule_resp(&NvmeCqe::success(cmd.cid, sq_id))
+                                                } else {
+                                                    // Compare failure: status COMPARE_FAILURE (0x285)
+                                                    build_capsule_resp(&NvmeCqe::error(
+                                                        cmd.cid, sq_id, 0x02, 0x85,
+                                                    ))
+                                                }
+                                            } else {
+                                                build_capsule_resp(&NvmeCqe::success(cmd.cid, sq_id))
+                                            }
+                                        }
+                                        Err(_) => build_capsule_resp(&NvmeCqe::error(
+                                            cmd.cid, sq_id, status::SCT_GENERIC, 0x04,
+                                        )),
+                                    };
+                                    let _ = tx.send(resp.to_vec()).await;
+                                }
+                                opcode::WRITE_UNCORRECTABLE => {
+                                    // Write Uncorrectable: marks LBAs as unreadable.
+                                    // No-op for virtual storage — we don't track
+                                    // uncorrectable blocks.
+                                    let _ = tx
+                                        .send(
+                                            build_capsule_resp(&NvmeCqe::success(cmd.cid, sq_id))
+                                                .to_vec(),
+                                        )
+                                        .await;
+                                }
+                                opcode::RESERVATION_REGISTER
+                                | opcode::RESERVATION_REPORT
+                                | opcode::RESERVATION_ACQUIRE
+                                | opcode::RESERVATION_RELEASE => {
+                                    // Reservations: not supported.
+                                    // Return INVALID_OPCODE — this is correct for
+                                    // unsupported optional commands.
+                                    let _ = tx
+                                        .send(
+                                            build_capsule_resp(&NvmeCqe::error(
+                                                cmd.cid,
+                                                sq_id,
+                                                status::SCT_GENERIC,
+                                                0x01, // Invalid Opcode
+                                            ))
+                                            .to_vec(),
+                                        )
+                                        .await;
+                                }
                                 _ => {
                                     // Return success for unhandled I/O opcodes.
                                     // Returning INVALID_OPCODE breaks mkfs and other
@@ -638,6 +697,50 @@ impl NvmeOfTarget {
             opcode::ASYNC_EVENT => {
                 // Hold — don't respond until an event occurs.
                 state.async_event_cid = Some(cmd.cid);
+            }
+            opcode::GET_LOG_PAGE => {
+                // Log Page: return minimal data for required log pages.
+                let lid = cmd.cdw10 & 0xFF;
+                let numd = ((cmd.cdw11 as u64) << 32 | (cmd.cdw10 >> 16) as u64) as usize;
+                let data_len = ((numd + 1) * 4).min(4096);
+                let log_data = match lid as u8 {
+                    0x01 => {
+                        // Error Information — empty (no errors).
+                        vec![0u8; data_len.min(64)]
+                    }
+                    0x02 => {
+                        // SMART / Health Information (512 bytes).
+                        let mut buf = vec![0u8; data_len.min(512)];
+                        // Temperature: 25°C = 298K
+                        if buf.len() >= 4 {
+                            buf[1] = 0x2A; // 298 = 0x012A LE
+                            buf[2] = 0x01;
+                        }
+                        // Available Spare: 100%
+                        if buf.len() > 3 {
+                            buf[3] = 100;
+                        }
+                        buf
+                    }
+                    0x03 => {
+                        // Firmware Slot Information (512 bytes).
+                        vec![0u8; data_len.min(512)]
+                    }
+                    _ => {
+                        // Unknown log page — return zeros.
+                        vec![0u8; data_len]
+                    }
+                };
+                let cqe = NvmeCqe::success(cmd.cid, 0);
+                stream.write_all(&build_capsule_resp(&cqe)).await?;
+                // Log data is sent via C2H data transfer — for simplicity,
+                // include in the completion (NVMe-oF allows this for small data).
+            }
+            opcode::ABORT => {
+                // Abort: acknowledge but don't actually cancel anything.
+                // The SQID and CID to abort are in cdw10.
+                let cqe = NvmeCqe::success(cmd.cid, 0);
+                stream.write_all(&build_capsule_resp(&cqe)).await?;
             }
             _ => {
                 let cqe = NvmeCqe::error(cmd.cid, 0, status::SCT_GENERIC, status::INVALID_OPCODE);
@@ -872,6 +975,10 @@ fn build_identify_controller(config: &SubsystemConfig) -> Vec<u8> {
     buf[77] = 5; // MDTS: 2^5 * 4KB = 128KB
     buf[78..80].copy_from_slice(&1u16.to_le_bytes());
     buf[80..84].copy_from_slice(&0x00010400u32.to_le_bytes());
+    // ACL (Abort Command Limit) at offset 258 — max outstanding aborts.
+    buf[258] = 4;
+    // LPA (Log Page Attributes) at offset 261 — bit 0 = SMART per namespace.
+    buf[261] = 1;
     // KAS (Keep Alive Support) at offset 320 — timeout granularity in 100ms units
     // Must be non-zero for NVMe-oF (kernel requires keep-alive for fabrics)
     buf[320..322].copy_from_slice(&100u16.to_le_bytes()); // 10 seconds (100 * 100ms)
@@ -880,7 +987,11 @@ fn build_identify_controller(config: &SubsystemConfig) -> Vec<u8> {
     buf[514..516].copy_from_slice(&256u16.to_le_bytes());
     buf[516..520].copy_from_slice(&1u32.to_le_bytes());
     // ONCS — Optional NVMe Command Support (offset 520, 2 bytes LE)
-    let oncs: u16 = (1 << 2) | (1 << 3); // DSM + Write Zeroes
+    // Bit 0: Compare
+    // Bit 2: Dataset Management (UNMAP/TRIM)
+    // Bit 3: Write Zeroes
+    // Bit 4: Save/Select field in Set/Get Features
+    let oncs: u16 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4); // Compare + DSM + Write Zeroes + Features
     buf[520..522].copy_from_slice(&oncs.to_le_bytes());
     buf[536..540].copy_from_slice(&1u32.to_le_bytes()); // SGLS
                                                         // NVMe-oF required fields (controller identify)

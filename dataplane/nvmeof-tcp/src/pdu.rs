@@ -340,6 +340,7 @@ pub mod opcode {
     pub const DELETE_CQ: u8 = 0x04;
     pub const CREATE_CQ: u8 = 0x05;
     pub const IDENTIFY: u8 = 0x06;
+    pub const GET_LOG_PAGE: u8 = 0x02;
     pub const ABORT: u8 = 0x08;
     pub const SET_FEATURES: u8 = 0x09;
     pub const GET_FEATURES: u8 = 0x0A;
@@ -350,8 +351,15 @@ pub mod opcode {
     pub const FLUSH: u8 = 0x00;
     pub const WRITE: u8 = 0x01;
     pub const READ: u8 = 0x02;
+    pub const WRITE_UNCORRECTABLE: u8 = 0x04;
+    pub const COMPARE: u8 = 0x05;
     pub const WRITE_ZEROES: u8 = 0x08;
     pub const DATASET_MGMT: u8 = 0x09; // Trim/Deallocate
+    pub const COPY: u8 = 0x19;
+    pub const RESERVATION_REGISTER: u8 = 0x0D;
+    pub const RESERVATION_REPORT: u8 = 0x0E;
+    pub const RESERVATION_ACQUIRE: u8 = 0x11;
+    pub const RESERVATION_RELEASE: u8 = 0x15;
 
     // Fabric commands
     pub const FABRIC: u8 = 0x7F;
