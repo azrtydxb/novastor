@@ -329,8 +329,8 @@ pub unsafe fn send_read(
 }
 
 /// Send an NDP write request on the reactor. Returns true if queued.
-/// Only handles writes up to 8KB (header + data must fit in one TCP send).
-/// Larger writes fall through to tokio to avoid partial write corruption.
+/// Handles partial writes by buffering unsent bytes in the peer's send_buf.
+/// The poller drains send_buf on subsequent iterations.
 pub unsafe fn send_write(
     peer_addr: &str,
     volume_hash: u64,
@@ -338,11 +338,6 @@ pub unsafe fn send_write(
     data: &[u8],
     bdev_io: *mut c_void,
 ) -> bool {
-    // Skip large writes — SPDK socket writev can't guarantee atomic send
-    // for payloads > TCP buffer. Partial writes corrupt the NDP stream.
-    if data.len() > 8192 {
-        return false;
-    }
     let cell = match REACTOR_NDP.get() {
         Some(c) => c,
         None => return false,
@@ -353,40 +348,102 @@ pub unsafe fn send_write(
         None => return false,
     };
 
-    let peer = match state.peers.get_mut(peer_addr) {
-        Some(p) => p,
-        None => return false,
-    };
+    // Lazy-connect if needed.
+    if !state.peers.contains_key(peer_addr) {
+        if let Some((ip, port_str)) = peer_addr.rsplit_once(':') {
+            if let Ok(port) = port_str.parse::<u16>() {
+                let addr_c = match CString::new(ip) {
+                    Ok(c) => c,
+                    Err(_) => return false,
+                };
+                let sock = ffi::spdk_sock_connect(addr_c.as_ptr(), port as c_int, std::ptr::null());
+                if sock.is_null() {
+                    return false;
+                }
+                let rc = ffi::spdk_sock_group_add_sock(
+                    state.sock_group,
+                    sock,
+                    Some(ndp_sock_cb),
+                    std::ptr::null_mut(),
+                );
+                if rc != 0 {
+                    let mut s = sock;
+                    ffi::spdk_sock_close(&mut s);
+                    return false;
+                }
+                info!("reactor_ndp: lazy-connected to {} (write)", peer_addr);
+                state.peers.insert(
+                    peer_addr.to_string(),
+                    ReactorNdpPeer {
+                        sock,
+                        addr: ip.to_string(),
+                        port,
+                        pending: Vec::with_capacity(MAX_INFLIGHT),
+                        recv_buf: Vec::with_capacity(NDP_HEADER_SIZE + 65536),
+                        send_buf: Vec::new(),
+                    },
+                );
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    let peer = state.peers.get_mut(peer_addr).unwrap();
 
     if peer.pending.len() >= MAX_INFLIGHT {
         return false;
     }
 
-    // Build NDP write request header + data.
+    // If there's already unsent data in send_buf, queue this message
+    // after it (FIFO ordering). The poller will drain it.
+    if !peer.send_buf.is_empty() {
+        let header = NdpHeader::request(NdpOp::Write, 0, volume_hash, offset, data.len() as u32);
+        let mut hdr = [0u8; NDP_HEADER_SIZE];
+        header.encode(&mut hdr);
+        peer.send_buf.extend_from_slice(&hdr);
+        peer.send_buf.extend_from_slice(data);
+        peer.pending.push(PendingRequest {
+            bdev_io,
+            expected_op: NdpOp::WriteResp,
+            iovs: None,
+            buf_offset: 0,
+            total_len: 0,
+        });
+        return true;
+    }
+
+    // Build full message: header + data.
     let header = NdpHeader::request(NdpOp::Write, 0, volume_hash, offset, data.len() as u32);
     let mut header_bytes = [0u8; NDP_HEADER_SIZE];
     header.encode(&mut header_bytes);
 
-    // Send header + data as two iovecs.
-    let mut iovs = [
-        libc::iovec {
-            iov_base: header_bytes.as_ptr() as *mut c_void,
-            iov_len: NDP_HEADER_SIZE,
-        },
-        libc::iovec {
-            iov_base: data.as_ptr() as *mut c_void,
-            iov_len: data.len(),
-        },
-    ];
+    // Assemble into contiguous buffer for atomic-or-buffered send.
+    let mut msg = Vec::with_capacity(NDP_HEADER_SIZE + data.len());
+    msg.extend_from_slice(&header_bytes);
+    msg.extend_from_slice(data);
 
-    let total = NDP_HEADER_SIZE + data.len();
-    let written = ffi::spdk_sock_writev(peer.sock, iovs.as_mut_ptr(), 2);
-    if written < 0 || written as usize != total {
-        warn!(
-            "reactor_ndp: partial write to {}, written={}/{}",
-            peer_addr, written, total
-        );
+    let mut iov = libc::iovec {
+        iov_base: msg.as_ptr() as *mut c_void,
+        iov_len: msg.len(),
+    };
+
+    let written = ffi::spdk_sock_writev(peer.sock, &mut iov, 1);
+    if written < 0 {
+        // Connection error — remove peer.
+        if let Some(mut dead) = state.peers.remove(peer_addr) {
+            ffi::spdk_sock_group_remove_sock(state.sock_group, dead.sock);
+            ffi::spdk_sock_close(&mut dead.sock);
+        }
         return false;
+    }
+
+    let written = written as usize;
+    if written < msg.len() {
+        // Partial write — buffer the remainder for the poller to drain.
+        peer.send_buf.extend_from_slice(&msg[written..]);
     }
 
     peer.pending.push(PendingRequest {
@@ -413,16 +470,56 @@ pub fn is_connected(peer_addr: &str) -> bool {
     guard.is_some() // Initialized = available. Lazy connect on first use.
 }
 
-/// Poller function — called by SPDK reactor on every iteration.
+/// Poller function — called by SPDK reactor at 50μs intervals.
+/// Polls for incoming responses AND drains any pending send buffers.
 unsafe extern "C" fn ndp_poller_fn(arg: *mut c_void) -> c_int {
     let sock_group = arg; // spdk_sock_group*
+
+    // Poll for incoming data (responses from backends).
     let rc = ffi::spdk_sock_group_poll(sock_group);
-    if rc < 0 {
-        // Error — but don't spam logs. Errors are handled per-socket.
-        0
-    } else {
-        rc
+
+    // Drain pending send buffers for all peers.
+    let cell = match REACTOR_NDP.get() {
+        Some(c) => c,
+        None => return rc.max(0),
+    };
+    if let Ok(mut guard) = cell.try_lock() {
+        if let Some(state) = guard.as_mut() {
+            let mut dead_peers: Vec<String> = Vec::new();
+            for (addr, peer) in state.peers.iter_mut() {
+                if peer.send_buf.is_empty() {
+                    continue;
+                }
+                let mut iov = libc::iovec {
+                    iov_base: peer.send_buf.as_ptr() as *mut c_void,
+                    iov_len: peer.send_buf.len(),
+                };
+                let written = ffi::spdk_sock_writev(peer.sock, &mut iov, 1);
+                if written < 0 {
+                    // Connection dead.
+                    dead_peers.push(addr.clone());
+                    continue;
+                }
+                let written = written as usize;
+                if written > 0 {
+                    peer.send_buf.drain(..written);
+                }
+            }
+            // Clean up dead peers.
+            for addr in dead_peers {
+                if let Some(mut dead) = state.peers.remove(&addr) {
+                    ffi::spdk_sock_group_remove_sock(state.sock_group, dead.sock);
+                    ffi::spdk_sock_close(&mut dead.sock);
+                    for req in dead.pending {
+                        ffi::spdk_bdev_io_complete(req.bdev_io, -1i32 /* FAILED */);
+                    }
+                    warn!("reactor_ndp: peer {} died during send drain", addr);
+                }
+            }
+        }
     }
+
+    rc.max(0)
 }
 
 /// Socket callback — invoked when a socket has data ready.

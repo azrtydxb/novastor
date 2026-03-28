@@ -2115,11 +2115,10 @@ unsafe extern "C" fn bdev_submit_request_cb(
                         return;
                     }
 
-                    // Reactor NDP writes disabled — partial sends corrupt the
-                    // NDP TCP stream. Tokio NDP with retry is reliable.
-                    // TODO: implement proper partial write buffering in reactor_ndp.
+                    // Try reactor NDP write — zero thread crossing.
+                    // Partial writes are buffered and drained by the poller.
                     #[cfg(feature = "spdk-sys")]
-                    if false {
+                    {
                         let chunk_idx = sub_block::chunk_index(offset) as usize;
                         let chunk_key = format!("{}:{}", volume_name, chunk_idx);
                         let prot = engine.protection();

@@ -105,12 +105,9 @@ unsafe extern "C" fn spdk_startup_cb(arg: *mut std::os::raw::c_void) {
     // Pre-allocate DMA buffer pool for bdev I/O (eliminates per-I/O malloc).
     super::reactor_dispatch::init_dma_pool();
 
-    // Reactor-native NDP disabled — SPDK socket connections interfere with
-    // the tokio NDP server, causing I/O errors during mkfs. The reactor NDP
-    // module exists but needs proper connection lifecycle management before
-    // it can be enabled. See project_reactor_ndp_status.md.
-    // #[cfg(feature = "spdk-sys")]
-    // crate::chunk::reactor_ndp::init();
+    // Reactor-native NDP client — 50μs poller, partial write buffering.
+    #[cfg(feature = "spdk-sys")]
+    crate::chunk::reactor_ndp::init();
 
     // Recover the startup data passed through the arg pointer.
     let data = Box::from_raw(arg as *mut SpdkStartupData);
