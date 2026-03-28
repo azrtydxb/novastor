@@ -857,7 +857,7 @@ impl ChunkEngine {
             )));
         }
 
-        log::trace!(
+        log::info!(
             "sub_block_read: vol={} offset={} len={} chunk={} placements={:?} self={}",
             volume_id,
             offset,

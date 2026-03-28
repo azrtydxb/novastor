@@ -188,6 +188,12 @@ async fn handle_read(header: &NdpHeader) -> NdpMessage {
     };
 
     // Use the existing sub_block_read path.
+    let base_off =
+        crate::bdev::novastor_bdev::get_volume_base_offset(&volume_name).unwrap_or(u64::MAX);
+    info!(
+        "NDP read: vol={} offset={} len={} base_off={}",
+        volume_name, header.offset, header.data_length, base_off
+    );
     match crate::bdev::novastor_bdev::sub_block_read_local(
         &volume_name,
         header.offset,
@@ -255,6 +261,15 @@ async fn handle_write(header: &NdpHeader, data: Option<Vec<u8>>) -> NdpMessage {
         }
     };
 
+    let base_off =
+        crate::bdev::novastor_bdev::get_volume_base_offset(&volume_name).unwrap_or(u64::MAX);
+    info!(
+        "NDP write: vol={} offset={} len={} base_off={}",
+        volume_name,
+        header.offset,
+        write_data.len(),
+        base_off
+    );
     match crate::bdev::novastor_bdev::sub_block_write_local(
         &volume_name,
         header.offset,
