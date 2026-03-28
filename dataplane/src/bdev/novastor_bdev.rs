@@ -2115,10 +2115,10 @@ unsafe extern "C" fn bdev_submit_request_cb(
                         return;
                     }
 
-                    // Try reactor NDP write — zero thread crossing.
-                    // Partial writes are buffered and drained by the poller.
+                    // Reactor NDP write — temporarily disabled for A/B testing.
+                    // Writes go through tokio fallback. Reads still use reactor NDP.
                     #[cfg(feature = "spdk-sys")]
-                    {
+                    if false {
                         let chunk_idx = sub_block::chunk_index(offset) as usize;
                         let chunk_key = format!("{}:{}", volume_name, chunk_idx);
                         let prot = engine.protection();
