@@ -702,10 +702,38 @@ pub async fn sub_block_read_local(volume_name: &str, offset: u64, length: u64) -
     // ---------------------------------------------------------------
     // Phase 2: issue I/O — batch contiguous sub-blocks when possible,
     //          read exact size for single sub-block accesses.
+    //          For unwritten sub-blocks (dirty bit = 0), return zeros.
     // ---------------------------------------------------------------
+
+    // Snapshot dirty bitmaps (Send-safe Vec<u64>) to detect unwritten sub-blocks.
+    let dirty_bitmaps: Vec<u64> = {
+        let registry = bdev_registry().lock().unwrap();
+        if let Some(entry) = registry.get(volume_name) {
+            let ctx = unsafe { &*(entry.ctx_ptr as *const BdevCtx) };
+            ctx.dirty_bitmaps
+                .iter()
+                .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    };
+
     let mut i = 0;
     while i < descs.len() {
         let d = &descs[i];
+
+        // Unwritten sub-blocks return zeros (not stale NVMe data).
+        let is_written = if d.chunk_idx < dirty_bitmaps.len() {
+            bitmap_is_set(dirty_bitmaps[d.chunk_idx], d.sb_idx)
+        } else {
+            false
+        };
+        if !is_written {
+            result.extend(std::iter::repeat(0u8).take(d.read_len));
+            i += 1;
+            continue;
+        }
 
         // Check if we can batch contiguous sub-blocks in the same chunk.
         // Batching is only beneficial when consecutive sub-blocks line up.
