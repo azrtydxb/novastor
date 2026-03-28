@@ -82,6 +82,8 @@ const MAX_INFLIGHT: usize = 64;
 
 /// A pending NDP request waiting for a response.
 struct PendingRequest {
+    /// Unique request ID — matches response's request_id field.
+    request_id: u64,
     /// The bdev_io to complete when response arrives (opaque *mut spdk_bdev_io).
     bdev_io: *mut c_void,
     /// Expected operation type in response.
@@ -92,6 +94,13 @@ struct PendingRequest {
     buf_offset: usize,
     /// Total bytes requested (reads only).
     total_len: usize,
+}
+
+/// Global request ID counter — monotonically increasing, unique per reactor.
+static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_request_id() -> u64 {
+    NEXT_REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 // SAFETY: Only accessed from single SPDK reactor thread.
@@ -295,8 +304,9 @@ pub unsafe fn send_read(
         return false;
     }
 
-    // Build NDP read request header.
-    let header = NdpHeader::request(NdpOp::Read, 0, volume_hash, offset, length);
+    // Build NDP read request header with unique request_id.
+    let rid = next_request_id();
+    let header = NdpHeader::request(NdpOp::Read, rid, volume_hash, offset, length);
     let mut header_bytes = [0u8; NDP_HEADER_SIZE];
     header.encode(&mut header_bytes);
 
@@ -316,8 +326,9 @@ pub unsafe fn send_read(
         return false;
     }
 
-    // Queue pending request.
+    // Queue pending request with request_id for response matching.
     peer.pending.push(PendingRequest {
+        request_id: rid,
         bdev_io,
         expected_op: NdpOp::ReadResp,
         iovs: Some(iovs),
@@ -397,15 +408,18 @@ pub unsafe fn send_write(
         return false;
     }
 
+    let rid = next_request_id();
+
     // If there's already unsent data in send_buf, queue this message
     // after it (FIFO ordering). The poller will drain it.
     if !peer.send_buf.is_empty() {
-        let header = NdpHeader::request(NdpOp::Write, 0, volume_hash, offset, data.len() as u32);
+        let header = NdpHeader::request(NdpOp::Write, rid, volume_hash, offset, data.len() as u32);
         let mut hdr = [0u8; NDP_HEADER_SIZE];
         header.encode(&mut hdr);
         peer.send_buf.extend_from_slice(&hdr);
         peer.send_buf.extend_from_slice(data);
         peer.pending.push(PendingRequest {
+            request_id: rid,
             bdev_io,
             expected_op: NdpOp::WriteResp,
             iovs: None,
@@ -416,7 +430,7 @@ pub unsafe fn send_write(
     }
 
     // Build full message: header + data.
-    let header = NdpHeader::request(NdpOp::Write, 0, volume_hash, offset, data.len() as u32);
+    let header = NdpHeader::request(NdpOp::Write, rid, volume_hash, offset, data.len() as u32);
     let mut header_bytes = [0u8; NDP_HEADER_SIZE];
     header.encode(&mut header_bytes);
 
@@ -447,6 +461,7 @@ pub unsafe fn send_write(
     }
 
     peer.pending.push(PendingRequest {
+        request_id: rid,
         bdev_io,
         expected_op: NdpOp::WriteResp,
         iovs: None,
@@ -635,20 +650,23 @@ unsafe extern "C" fn ndp_sock_cb(
         // Remove processed bytes.
         peer.recv_buf.drain(..total_msg_len);
 
-        // Match to pending request (FIFO order).
-        if let Some(req) = peer.pending.first() {
+        // Match response to pending request by request_id.
+        // The NDP server processes requests concurrently, so responses
+        // may arrive out of order. request_id ensures correct matching.
+        let resp_rid = header.request_id;
+        let req_idx = peer.pending.iter().position(|r| r.request_id == resp_rid);
+
+        if let Some(idx) = req_idx {
+            let req = peer.pending.remove(idx);
             let bdev_io = req.bdev_io;
 
             if header.status != 0 {
-                // Error response — complete bdev_io with failure.
-                peer.pending.remove(0);
-                ffi::spdk_bdev_io_complete(bdev_io, -1i32 /* SPDK_BDEV_IO_STATUS_FAILED */);
+                ffi::spdk_bdev_io_complete(bdev_io, -1i32 /* FAILED */);
                 continue;
             }
 
             match header.op {
                 NdpOp::ReadResp => {
-                    // Copy data to iovs.
                     if let Some(ref data) = data {
                         if let Some(ref iovs) = req.iovs {
                             let mut src_off = req.buf_offset;
@@ -666,25 +684,21 @@ unsafe extern "C" fn ndp_sock_cb(
                             }
                         }
                     }
-                    peer.pending.remove(0);
-                    ffi::spdk_bdev_io_complete(
-                        bdev_io, 0i32, /* SPDK_BDEV_IO_STATUS_SUCCESS */
-                    );
+                    ffi::spdk_bdev_io_complete(bdev_io, 0i32 /* SUCCESS */);
                 }
                 NdpOp::WriteResp => {
-                    peer.pending.remove(0);
-                    ffi::spdk_bdev_io_complete(
-                        bdev_io, 0i32, /* SPDK_BDEV_IO_STATUS_SUCCESS */
-                    );
+                    ffi::spdk_bdev_io_complete(bdev_io, 0i32 /* SUCCESS */);
                 }
                 _ => {
-                    // Unexpected response type.
-                    peer.pending.remove(0);
-                    ffi::spdk_bdev_io_complete(
-                        bdev_io, -1i32, /* SPDK_BDEV_IO_STATUS_FAILED */
-                    );
+                    ffi::spdk_bdev_io_complete(bdev_io, -1i32 /* FAILED */);
                 }
             }
+        } else {
+            // No matching pending request — stale response, ignore.
+            warn!(
+                "reactor_ndp: unmatched response rid={} op={:?}",
+                resp_rid, header.op
+            );
         }
     }
 }
