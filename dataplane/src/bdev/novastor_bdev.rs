@@ -706,16 +706,29 @@ pub async fn sub_block_read_local(volume_name: &str, offset: u64, length: u64) -
     // ---------------------------------------------------------------
 
     // Snapshot dirty bitmaps (Send-safe Vec<u64>) to detect unwritten sub-blocks.
+    // Check BdevCtx first (frontend has per-volume bdev), then volume_chunk_maps
+    // as fallback (backend nodes update chunk maps via NDP write path).
     let dirty_bitmaps: Vec<u64> = {
+        let bdev_key = format!("novastor_{}", volume_name);
         let registry = bdev_registry().lock().unwrap();
-        if let Some(entry) = registry.get(volume_name) {
+        if let Some(entry) = registry.get(&bdev_key) {
             let ctx = unsafe { &*(entry.ctx_ptr as *const BdevCtx) };
             ctx.dirty_bitmaps
                 .iter()
                 .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
                 .collect()
         } else {
-            Vec::new()
+            // Fallback: check volume_chunk_maps (updated by NDP write path on backends).
+            drop(registry); // release bdev_registry lock first
+            let maps = volume_chunk_maps().read().unwrap();
+            if let Some(chunk_map) = maps.get(volume_name) {
+                chunk_map
+                    .iter()
+                    .map(|entry| entry.as_ref().map(|e| e.dirty_bitmap).unwrap_or(0))
+                    .collect()
+            } else {
+                Vec::new()
+            }
         }
     };
 
