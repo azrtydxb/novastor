@@ -1477,9 +1477,9 @@ impl DataplaneService for DataplaneServiceImpl {
                 ndp_pool.warm_connections(&peer_addrs_clone).await;
             });
 
-            // Reactor NDP connections disabled for A/B isolation test.
+            // Connect reactor NDP peers (testing connections only, no I/O).
             #[cfg(feature = "spdk-sys")]
-            if false {
+            {
                 let addrs = peer_addrs;
                 crate::spdk::reactor_dispatch::send_to_reactor(move || {
                     for addr in &addrs {
