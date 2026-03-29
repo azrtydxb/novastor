@@ -1939,9 +1939,9 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 return;
             }
 
-            // Reactor NDP fallback — try remote read via SPDK sockets (zero crossing).
+            // Reactor NDP reads — disabled for A/B test isolation.
             #[cfg(feature = "spdk-sys")]
-            if !reactor_handled
+            if false
                 && length > 0
                 && offset / CHUNK_SIZE as u64 == (offset + length - 1) / CHUNK_SIZE as u64
             {
