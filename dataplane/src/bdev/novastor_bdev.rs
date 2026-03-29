@@ -1939,9 +1939,9 @@ unsafe extern "C" fn bdev_submit_request_cb(
                 return;
             }
 
-            // Reactor NDP reads — disabled for A/B test isolation.
+            // Reactor NDP reads — zero crossing for remote reads.
             #[cfg(feature = "spdk-sys")]
-            if false
+            if !reactor_handled
                 && length > 0
                 && offset / CHUNK_SIZE as u64 == (offset + length - 1) / CHUNK_SIZE as u64
             {
