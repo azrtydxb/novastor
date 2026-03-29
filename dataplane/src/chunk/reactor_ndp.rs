@@ -487,11 +487,11 @@ pub fn is_connected(peer_addr: &str) -> bool {
 
 /// Poller function — called by SPDK reactor at 50μs intervals.
 /// Polls for incoming responses AND drains any pending send buffers.
-unsafe extern "C" fn ndp_poller_fn(arg: *mut c_void) -> c_int {
-    let sock_group = arg; // spdk_sock_group*
-
-    // Poll for incoming data (responses from backends).
-    let rc = ffi::spdk_sock_group_poll(sock_group);
+/// Reads directly from each peer socket instead of relying on sock_group
+/// callback — avoids callback delivery issues.
+unsafe extern "C" fn ndp_poller_fn(_arg: *mut c_void) -> c_int {
+    // Don't use spdk_sock_group_poll — read directly from each peer.
+    let rc: c_int = 0;
 
     // Drain pending send buffers for all peers.
     let cell = match REACTOR_NDP.get() {
@@ -520,15 +520,124 @@ unsafe extern "C" fn ndp_poller_fn(arg: *mut c_void) -> c_int {
                     peer.send_buf.drain(..written);
                 }
             }
-            // Clean up dead peers.
-            for addr in dead_peers {
-                if let Some(mut dead) = state.peers.remove(&addr) {
+            // Clean up dead peers from send drain.
+            for addr in &dead_peers {
+                if let Some(mut dead) = state.peers.remove(addr) {
                     ffi::spdk_sock_group_remove_sock(state.sock_group, dead.sock);
                     ffi::spdk_sock_close(&mut dead.sock);
                     for req in dead.pending {
                         ffi::spdk_bdev_io_complete(req.bdev_io, -1i32 /* FAILED */);
                     }
                     warn!("reactor_ndp: peer {} died during send drain", addr);
+                }
+            }
+
+            // Direct read from each peer socket — don't rely on sock_group callback.
+            let mut read_dead: Vec<String> = Vec::new();
+            let peer_addrs: Vec<String> = state.peers.keys().cloned().collect();
+            for addr in &peer_addrs {
+                if dead_peers.contains(addr) {
+                    continue;
+                }
+                let peer = match state.peers.get_mut(addr) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                // Only read if there are pending requests.
+                if peer.pending.is_empty() {
+                    continue;
+                }
+                let mut buf = [0u8; 65536 + NDP_HEADER_SIZE];
+                let mut iov = libc::iovec {
+                    iov_base: buf.as_mut_ptr() as *mut c_void,
+                    iov_len: buf.len(),
+                };
+                let n = ffi::spdk_sock_readv(peer.sock, &mut iov, 1);
+                if n > 0 {
+                    peer.recv_buf.extend_from_slice(&buf[..n as usize]);
+                    // Process complete messages from recv_buf.
+                    loop {
+                        if peer.recv_buf.len() < NDP_HEADER_SIZE {
+                            break;
+                        }
+                        let header_arr: &[u8; NDP_HEADER_SIZE] =
+                            match peer.recv_buf[..NDP_HEADER_SIZE].try_into() {
+                                Ok(a) => a,
+                                Err(_) => break,
+                            };
+                        let header = match NdpHeader::decode(header_arr) {
+                            Ok(h) => h,
+                            Err(_) => {
+                                peer.recv_buf.clear();
+                                break;
+                            }
+                        };
+                        let total_msg_len = NDP_HEADER_SIZE + header.data_length as usize;
+                        if peer.recv_buf.len() < total_msg_len {
+                            break;
+                        }
+                        let data = if header.data_length > 0 {
+                            Some(peer.recv_buf[NDP_HEADER_SIZE..total_msg_len].to_vec())
+                        } else {
+                            None
+                        };
+                        peer.recv_buf.drain(..total_msg_len);
+
+                        // Match by request_id.
+                        let resp_rid = header.request_id;
+                        let req_idx = peer.pending.iter().position(|r| r.request_id == resp_rid);
+                        if let Some(idx) = req_idx {
+                            let req = peer.pending.remove(idx);
+                            if header.status != 0 {
+                                ffi::spdk_bdev_io_complete(req.bdev_io, -1i32);
+                                continue;
+                            }
+                            match header.op {
+                                NdpOp::ReadResp => {
+                                    if let Some(ref data) = data {
+                                        if let Some(ref iovs) = req.iovs {
+                                            let mut src_off = req.buf_offset;
+                                            for &(base, len) in iovs {
+                                                let to_copy = std::cmp::min(
+                                                    len,
+                                                    data.len().saturating_sub(src_off),
+                                                );
+                                                if to_copy > 0 {
+                                                    std::ptr::copy_nonoverlapping(
+                                                        data[src_off..].as_ptr(),
+                                                        base as *mut u8,
+                                                        to_copy,
+                                                    );
+                                                }
+                                                src_off += to_copy;
+                                            }
+                                        }
+                                    }
+                                    ffi::spdk_bdev_io_complete(req.bdev_io, 0i32);
+                                }
+                                NdpOp::WriteResp => {
+                                    ffi::spdk_bdev_io_complete(req.bdev_io, 0i32);
+                                }
+                                _ => {
+                                    ffi::spdk_bdev_io_complete(req.bdev_io, -1i32);
+                                }
+                            }
+                        }
+                    }
+                } else if n == 0 {
+                    // EOF — peer closed.
+                    read_dead.push(addr.clone());
+                }
+                // n < 0: EAGAIN, no data yet — that's fine.
+            }
+            for addr in read_dead {
+                if let Some(mut dead) = state.peers.remove(&addr) {
+                    ffi::spdk_sock_group_remove_sock(state.sock_group, dead.sock);
+                    ffi::spdk_sock_close(&mut dead.sock);
+                    for req in dead.pending {
+                        ffi::spdk_bdev_io_complete(req.bdev_io, -1i32);
+                    }
+                    warn!("reactor_ndp: peer {} EOF during read poll", addr);
                 }
             }
         }
