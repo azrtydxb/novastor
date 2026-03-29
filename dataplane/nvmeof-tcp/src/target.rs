@@ -73,17 +73,25 @@ impl NvmeOfTarget {
         let subsystem = Arc::new(Subsystem {
             config,
             backend: Box::new(backend),
-            // Start cntlid from a random value to avoid collisions across
-            // different NVMe-oF targets serving the same NQN. The kernel
-            // rejects duplicate cntlid on the same subsystem NQN.
+            // Unique cntlid offset per process using NQN + PID + timestamp.
+            // PID is unique per node, timestamp adds uniqueness across restarts.
+            // Each connection increments from this offset.
             next_cntlid: AtomicU16::new({
-                use std::hash::{Hash, Hasher};
-                let mut h = std::collections::hash_map::DefaultHasher::new();
-                config.nqn.hash(&mut h);
-                config.serial.hash(&mut h);
-                // Mix in a random seed from the address of the config on stack.
-                (&config as *const _ as u64).hash(&mut h);
-                ((h.finish() % 65000) as u16).max(1)
+                let pid = std::process::id() as u64;
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64;
+                let mut h: u64 = 0xcbf29ce484222325;
+                for b in config.nqn.as_bytes() {
+                    h ^= *b as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+                h ^= pid;
+                h = h.wrapping_mul(0x100000001b3);
+                h ^= ts;
+                h = h.wrapping_mul(0x100000001b3);
+                ((h % 65000) as u16).max(1)
             }),
         });
         // Use try_write to avoid blocking; in practice this is called from async context.
