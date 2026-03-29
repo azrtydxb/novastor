@@ -73,16 +73,15 @@ impl NvmeOfTarget {
         let subsystem = Arc::new(Subsystem {
             config,
             backend: Box::new(backend),
-            // Use machine-id or hostname to get a per-node seed, then add
-            // a per-subsystem offset. This ensures different nodes NEVER
-            // produce the same cntlid for the same NQN.
+            // Use hostname for per-node seed — unique per container/node.
+            // /etc/machine-id doesn't exist in containers, PID=1 for all.
             next_cntlid: {
                 static NODE_SEED: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
                 let seed = *NODE_SEED.get_or_init(|| {
-                    let mid = std::fs::read_to_string("/etc/machine-id")
+                    let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")
                         .unwrap_or_else(|_| format!("{}", std::process::id()));
                     let mut h: u64 = 0xcbf29ce484222325;
-                    for b in mid.trim().as_bytes() {
+                    for b in hostname.as_bytes() {
                         h ^= *b as u64;
                         h = h.wrapping_mul(0x100000001b3);
                     }
