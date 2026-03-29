@@ -73,7 +73,18 @@ impl NvmeOfTarget {
         let subsystem = Arc::new(Subsystem {
             config,
             backend: Box::new(backend),
-            next_cntlid: AtomicU16::new(1),
+            // Start cntlid from a random value to avoid collisions across
+            // different NVMe-oF targets serving the same NQN. The kernel
+            // rejects duplicate cntlid on the same subsystem NQN.
+            next_cntlid: AtomicU16::new({
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                config.nqn.hash(&mut h);
+                config.serial.hash(&mut h);
+                // Mix in a random seed from the address of the config on stack.
+                (&config as *const _ as u64).hash(&mut h);
+                ((h.finish() % 65000) as u16).max(1)
+            }),
         });
         // Use try_write to avoid blocking; in practice this is called from async context.
         if let Ok(mut subs) = self.subsystems.try_write() {
@@ -1040,13 +1051,19 @@ fn build_identify_namespace(backend: &dyn NvmeOfBackend, nqn: &str) -> Vec<u8> {
 /// Derive a 16-byte NGUID from the NQN string. Same NQN → same NGUID,
 /// so all multipath targets for the same volume return the same namespace ID.
 fn nqn_to_nguid(nqn: &str) -> [u8; 16] {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    nqn.hash(&mut hasher);
-    let h1 = hasher.finish();
-    // Hash again for the second half
-    h1.hash(&mut hasher);
-    let h2 = hasher.finish();
+    // Use FNV-1a (deterministic, no random seed — unlike DefaultHasher).
+    // Same NQN → same nguid across ALL processes, required for NVMe multipath.
+    let mut h1: u64 = 0xcbf29ce484222325; // FNV offset basis
+    for byte in nqn.as_bytes() {
+        h1 ^= *byte as u64;
+        h1 = h1.wrapping_mul(0x100000001b3); // FNV prime
+    }
+    // Second hash for bytes 8-15.
+    let mut h2: u64 = h1;
+    for byte in b"nguid-salt" {
+        h2 ^= *byte as u64;
+        h2 = h2.wrapping_mul(0x100000001b3);
+    }
     let mut nguid = [0u8; 16];
     nguid[0..8].copy_from_slice(&h1.to_le_bytes());
     nguid[8..16].copy_from_slice(&h2.to_le_bytes());
