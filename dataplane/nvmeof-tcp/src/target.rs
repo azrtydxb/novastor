@@ -73,26 +73,25 @@ impl NvmeOfTarget {
         let subsystem = Arc::new(Subsystem {
             config,
             backend: Box::new(backend),
-            // Unique cntlid offset per process using NQN + PID + timestamp.
-            // PID is unique per node, timestamp adds uniqueness across restarts.
-            // Each connection increments from this offset.
-            next_cntlid: AtomicU16::new({
-                let pid = std::process::id() as u64;
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos() as u64;
-                let mut h: u64 = 0xcbf29ce484222325;
-                for b in config.nqn.as_bytes() {
-                    h ^= *b as u64;
-                    h = h.wrapping_mul(0x100000001b3);
-                }
-                h ^= pid;
-                h = h.wrapping_mul(0x100000001b3);
-                h ^= ts;
-                h = h.wrapping_mul(0x100000001b3);
-                ((h % 65000) as u16).max(1)
-            }),
+            // Use machine-id or hostname to get a per-node seed, then add
+            // a per-subsystem offset. This ensures different nodes NEVER
+            // produce the same cntlid for the same NQN.
+            next_cntlid: {
+                static NODE_SEED: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+                let seed = *NODE_SEED.get_or_init(|| {
+                    let mid = std::fs::read_to_string("/etc/machine-id")
+                        .unwrap_or_else(|_| format!("{}", std::process::id()));
+                    let mut h: u64 = 0xcbf29ce484222325;
+                    for b in mid.trim().as_bytes() {
+                        h ^= *b as u64;
+                        h = h.wrapping_mul(0x100000001b3);
+                    }
+                    ((h % 60000) as u16).max(1)
+                });
+                static SUBSYS_COUNTER: AtomicU16 = AtomicU16::new(0);
+                let offset = SUBSYS_COUNTER.fetch_add(8, Ordering::Relaxed); // 8 connections per subsystem
+                AtomicU16::new(seed.wrapping_add(offset))
+            },
         });
         // Use try_write to avoid blocking; in practice this is called from async context.
         if let Ok(mut subs) = self.subsystems.try_write() {
