@@ -3,7 +3,7 @@
 # ============================================================
 # Build stage
 # ============================================================
-FROM golang:1.26.1-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 
 LABEL stage=builder
 
@@ -54,7 +54,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
 # image that contains only the novastor-agent binary and the minimal
 # losetup/util-linux dependencies needed for NVMe-oF, or an even more
 # minimal Alpine variant, once that image is available and validated.
-FROM alpine:3.20
+FROM alpine:3.24
 
 LABEL org.opencontainers.image.title="novastor-agent" \
       org.opencontainers.image.description="NovaStor node chunk storage agent (DaemonSet)" \
