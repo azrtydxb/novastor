@@ -24,13 +24,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lvm2 thin-provisioning-tools
 
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
-
-      - name: Checkout code
-        uses: actions/checkout@v4
 
       - name: Setup loop devices
         run: |
