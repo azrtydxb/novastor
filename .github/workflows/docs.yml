@@ -20,7 +20,7 @@ concurrency:
 jobs:
   build:
     name: Build Docs
-    runs-on: qnap-nas
+    runs-on: arc-azrtydxb-amd64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,7 +42,7 @@ jobs:
   deploy:
     name: Deploy Docs
     needs: build
-    runs-on: qnap-nas
+    runs-on: arc-azrtydxb-amd64
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

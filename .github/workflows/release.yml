@@ -12,7 +12,7 @@ permissions:
 jobs:
   build-binaries:
     name: Build Binaries
-    runs-on: qnap-nas
+    runs-on: arc-azrtydxb-amd64
     strategy:
       matrix:
         goos: [linux]
@@ -52,7 +52,7 @@ jobs:
   create-release:
     name: Create Release
     needs: build-binaries
-    runs-on: qnap-nas
+    runs-on: arc-azrtydxb-amd64
     steps:
       - uses: actions/checkout@v4
       - name: Download all artifacts
@@ -79,7 +79,7 @@ jobs:
       matrix:
         arch:
           - name: amd64
-            runner: qnap-nas
+            runner: arc-azrtydxb-amd64
           - name: arm64
             runner: ubuntu-24.04-arm
         image:
@@ -132,7 +132,7 @@ jobs:
 
   docker-manifest:
     name: "Docker Manifest ${{ matrix.image }}"
-    runs-on: qnap-nas
+    runs-on: arc-azrtydxb-amd64
     needs: docker-images
     steps:
       - name: Extract version tags

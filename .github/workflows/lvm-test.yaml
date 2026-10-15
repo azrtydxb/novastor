@@ -9,7 +9,10 @@ on:
 jobs:
   lvm-tests:
     name: LVM Store Tests
-    runs-on: qnap-nas
+    # Needs a full VM: it loads dm-thin kernel modules and attaches loop
+    # devices, which an ARC runner pod cannot do. GitHub-hosted runners can
+    # (this job ran there before the qnap-nas runner, which no longer exists).
+    runs-on: ubuntu-latest
     steps:
       - name: Load dm-thin-pool kernel module
         run: |
