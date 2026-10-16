@@ -12,7 +12,7 @@ permissions:
 jobs:
   nightly-build:
     name: Nightly Build
-    runs-on: qnap-nas
+    runs-on: arc-azrtydxb-amd64
     strategy:
       matrix:
         goos: [linux]
@@ -54,7 +54,7 @@ jobs:
   nightly-release:
     name: Nightly Release
     needs: nightly-build
-    runs-on: qnap-nas
+    runs-on: arc-azrtydxb-amd64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -114,7 +114,7 @@ jobs:
       matrix:
         arch:
           - name: amd64
-            runner: qnap-nas
+            runner: arc-azrtydxb-amd64
           - name: arm64
             runner: ubuntu-24.04-arm
         image:
@@ -154,7 +154,7 @@ jobs:
 
   nightly-docker-manifest:
     name: "Docker Manifest ${{ matrix.image }}"
-    runs-on: qnap-nas
+    runs-on: arc-azrtydxb-amd64
     needs: nightly-docker
     strategy:
       matrix:

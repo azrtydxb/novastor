@@ -9,7 +9,9 @@ on:
 jobs:
   lvm-tests:
     name: LVM Store Tests
-    runs-on: qnap-nas
+    # disabled: needs an LVM-capable host; no runner in the fleet exposes LVM (see azrty-infra/oci/runners/README.md)
+    if: false
+    runs-on: arc-azrtydxb-amd64
     steps:
       - name: Load dm-thin-pool kernel module
         run: |
