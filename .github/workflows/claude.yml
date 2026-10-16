@@ -15,7 +15,7 @@ jobs:
   claude:
     name: Claude Code
     if: contains(github.event.comment.body, '@claude')
-    runs-on: qnap-nas
+    runs-on: arc-azrtydxb-amd64
     steps:
       - uses: actions/checkout@v4
         with:

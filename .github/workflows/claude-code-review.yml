@@ -13,7 +13,7 @@ jobs:
   review:
     name: Code Review
     if: github.event.pull_request.draft == false
-    runs-on: qnap-nas
+    runs-on: arc-azrtydxb-amd64
     steps:
       - uses: actions/checkout@v4
         with:
