@@ -108,8 +108,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install C toolchain (needed by -race)
+        run: command -v gcc >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gcc; }
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
+        env:
+          CGO_ENABLED: "1"
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -172,6 +176,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install C toolchain (needed by -race)
+        run: command -v gcc >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gcc; }
       - name: Run E2E tests
         run: go test -tags e2e -race -count=1 ./test/e2e/...
 
