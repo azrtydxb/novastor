@@ -46,7 +46,7 @@ opentelemetry_sdk = { version = "0.30", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.30", features = ["grpc-tonic"] }
 
 [build-dependencies]
-bindgen = "0.71"
+bindgen = "0.73"
 cc = "1"
 pkg-config = "0.3"
 tonic-build = "0.13"
