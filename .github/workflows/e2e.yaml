@@ -9,7 +9,7 @@ on:
 jobs:
   e2e:
     name: E2E Controller Tests
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     timeout-minutes: 30
     steps:
       - name: Checkout code
