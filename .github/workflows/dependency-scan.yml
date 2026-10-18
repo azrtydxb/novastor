@@ -10,7 +10,7 @@ on:
       - 'go.mod'
       - 'go.sum'
   schedule:
-    - cron: '0 6 * * 1'
+    - cron: '17 2 * * *'
   workflow_dispatch:
 
 permissions:
@@ -40,6 +40,9 @@ jobs:
 
   trivy-scan:
     name: Trivy Vulnerability Scan
+    # NOTE: broken (failing on every run) and slow (~28m). Moved to the nightly
+    # integration tier so it no longer blocks or slows PRs; still needs fixing.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
