@@ -1,10 +1,18 @@
 name: CI
 
+# Three-tier test model (azrtydxb CI standard §Test tiers):
+#   unit        = pull_request / push main: Detect Changes, Lint, Security, Test, Build,
+#                 Helm Lint, Protobuf Sync, Docs Build
+#   integration = nightly cron + manual: Integration Tests, E2E Tests (+ unit jobs above)
+#   full        = v* release tags: handled by release.yml (build + multi-arch images)
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -44,7 +52,10 @@ jobs:
   lint:
     name: Lint
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    # Unit tier on PR (path-filtered); also runs on every non-PR event so the
+    # nightly integration run always has lint signal (paths-filter on `schedule`
+    # only diffs the last commit, so it cannot be trusted to select jobs).
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' }}
     runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
@@ -100,7 +111,8 @@ jobs:
   test:
     name: Test
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    # Unit tier on PR (path-filtered); also runs on every non-PR event (see `lint`).
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' }}
     runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
@@ -150,7 +162,8 @@ jobs:
   integration-tests:
     name: Integration Tests
     needs: [changes, test]
-    if: needs.changes.outputs.go == 'true'
+    # Heavy, service-backed: integration tier (nightly/manual) only, never on PR.
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: arc-azrtydxb
     timeout-minutes: 10
     steps:
@@ -167,7 +180,8 @@ jobs:
   e2e-tests:
     name: E2E Tests
     needs: [changes, test]
-    if: needs.changes.outputs.go == 'true'
+    # Heavy, needs cluster/services: integration tier (nightly/manual) only, never on PR.
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: arc-azrtydxb
     timeout-minutes: 10
     steps:

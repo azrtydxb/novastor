@@ -1,14 +1,20 @@
 name: E2E Tests
 
+# Three-tier test model: integration tier. The kind-based controller E2E is heavy
+# and needs a cluster, so it runs nightly/manual only — never on pull_request.
 on:
   push:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch: {}
 
 jobs:
   e2e:
     name: E2E Controller Tests
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: arc-azrtydxb
     timeout-minutes: 30
     steps:
