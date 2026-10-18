@@ -22,17 +22,25 @@ jobs:
   dependency-review:
     name: Dependency Review
     if: github.event_name == 'pull_request'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
-          allow-licenses: Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, CC0-1.0, Unlicense
+          # Go/k8s deps report compound SPDX expressions; allow the individual
+          # permissive parts and the Scancode LicenseRefs so the standard
+          # golang.org/x and k8s.io modules are not flagged.
+          allow-licenses: >-
+            Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, CC0-1.0, Unlicense,
+            LicenseRef-scancode-google-patent-license-golang,
+            LicenseRef-bad-apache-2.0-bsd-3-clause,
+            LicenseRef-bad-apache-2.0-bsd-3-clause-mit,
+            BSD-3-Clause AND LicenseRef-scancode-google-patent-license-golang
 
   trivy-scan:
     name: Trivy Vulnerability Scan
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
       - name: Run Trivy filesystem scan
@@ -53,10 +61,10 @@ jobs:
   outdated-check:
     name: Outdated Dependencies
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true

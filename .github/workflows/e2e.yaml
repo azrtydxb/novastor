@@ -9,20 +9,23 @@ on:
 jobs:
   e2e:
     name: E2E Controller Tests
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install make
+        run: command -v make >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq make; }
+
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Setup kind
-        uses: helm/kind-action@v1.8.0
+        uses: helm/kind-action@v1.15.1
         with:
           cluster_name: kind
           version: v0.20.0

@@ -11,7 +11,7 @@ jobs:
     name: LVM Store Tests
     # disabled: needs an LVM-capable host; no runner in the fleet exposes LVM (see azrty-infra/oci/runners/README.md)
     if: false
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     steps:
       - name: Load dm-thin-pool kernel module
         run: |
@@ -24,7 +24,7 @@ jobs:
           sudo apt-get install -y lvm2 thin-provisioning-tools
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
 

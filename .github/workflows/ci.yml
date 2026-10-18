@@ -15,7 +15,7 @@ permissions:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     outputs:
       go: ${{ steps.filter.outputs.go }}
       helm: ${{ steps.filter.outputs.helm }}
@@ -45,10 +45,10 @@ jobs:
     name: Lint
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -77,12 +77,12 @@ jobs:
     name: Security
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -101,15 +101,19 @@ jobs:
     name: Test
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install C toolchain (needed by -race)
+        run: command -v gcc >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gcc; }
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
+        env:
+          CGO_ENABLED: "1"
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -121,7 +125,7 @@ jobs:
     name: Build
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     strategy:
       matrix:
         binary:
@@ -134,7 +138,7 @@ jobs:
           - cli
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -147,11 +151,13 @@ jobs:
     name: Integration Tests
     needs: [changes, test]
     if: needs.changes.outputs.go == 'true'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Install make
+        run: command -v make >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq make; }
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -162,14 +168,16 @@ jobs:
     name: E2E Tests
     needs: [changes, test]
     if: needs.changes.outputs.go == 'true'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install C toolchain (needed by -race)
+        run: command -v gcc >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gcc; }
       - name: Run E2E tests
         run: go test -tags e2e -race -count=1 ./test/e2e/...
 
@@ -177,7 +185,7 @@ jobs:
     name: Helm Lint
     needs: changes
     if: needs.changes.outputs.helm == 'true'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
@@ -218,10 +226,12 @@ jobs:
     name: Protobuf Sync
     needs: changes
     if: needs.changes.outputs.proto == 'true'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Install make
+        run: command -v make >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq make; }
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -264,7 +274,7 @@ jobs:
     name: Docs Build
     needs: changes
     if: needs.changes.outputs.docs == 'true'
-    runs-on: arc-azrtydxb-amd64
+    runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
         with:

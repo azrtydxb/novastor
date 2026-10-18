@@ -17,7 +17,7 @@ env_logger = "0.11"
 async-trait = "0.1"
 crc32c = "0.6"
 tonic = { version = "0.13", features = ["transport"] }
-prost = "0.13"
+prost = "0.14"
 socket2 = "0.5"
 tokio-stream = "0.1"
 
