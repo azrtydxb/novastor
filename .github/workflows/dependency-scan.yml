@@ -57,6 +57,9 @@ jobs:
           scan-type: fs
           scan-ref: .
           severity: CRITICAL,HIGH
+          # Without this the SARIF run reports every severity and exit-code 1
+          # fired on three LOW/MEDIUM Rust advisories, not the CRITICAL/HIGH gate.
+          limit-severities-for-sarif: true
           exit-code: 1
           format: sarif
           output: trivy-results.sarif
