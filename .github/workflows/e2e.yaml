@@ -16,10 +16,14 @@ jobs:
     name: E2E Controller Tests
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: arc-azrtydxb
+    permissions:
+      contents: read
+      id-token: write # Kuvryn Ant OIDC (azrtydxb/ant-setup-action)
     timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - uses: azrtydxb/ant-setup-action@7c6f1b8ca34a0a127b43040f4e16bbafdbd83791 # v1
 
       - name: Install make
         run: command -v make >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq make; }

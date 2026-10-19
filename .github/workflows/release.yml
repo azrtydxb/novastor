@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write # Kuvryn Ant OIDC (azrtydxb/ant-setup-action)
 
 jobs:
   build-binaries:
@@ -27,6 +28,7 @@ jobs:
           - cli
     steps:
       - uses: actions/checkout@v4
+      - uses: azrtydxb/ant-setup-action@7c6f1b8ca34a0a127b43040f4e16bbafdbd83791 # v1
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -98,6 +100,8 @@ jobs:
     runs-on: ${{ matrix.arch.runner }}
     steps:
       - uses: actions/checkout@v4
+      - uses: azrtydxb/ant-setup-action@7c6f1b8ca34a0a127b43040f4e16bbafdbd83791 # v1
+        if: startsWith(matrix.arch.runner, 'arc-azrtydxb') # GitHub-hosted arm64 legs keep the public upstreams
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
