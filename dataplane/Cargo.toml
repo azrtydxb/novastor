@@ -34,7 +34,7 @@ rand = { version = "0.8", features = ["small_rng"] }
 base64 = "0.22"
 tonic = { version = "0.14", features = ["tls-ring", "transport"] }
 prost = "0.14"
-prost-types = "0.13"
+prost-types = "0.14"
 tokio-stream = "0.1"
 async-stream = "0.3"
 threadpool = "1"
