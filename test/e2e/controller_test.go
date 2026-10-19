@@ -76,7 +76,11 @@ func TestControllerDeployment(t *testing.T) {
 			},
 		},
 	}
-	if err := k8sClient.Create(ctx, ns); err != nil && !errors.IsAlreadyExists(err) {
+	if err := k8sClient.Create(ctx, ns); errors.IsForbidden(err) {
+		// In-cluster config on a CI runner whose service account may not create namespaces:
+		// there is no cluster to test against (the kind workflow, e2e.yaml, provides one).
+		t.Skipf("skipping: not permitted to create namespaces: %v", err)
+	} else if err != nil && !errors.IsAlreadyExists(err) {
 		t.Fatalf("failed to create test namespace: %v", err)
 	}
 	defer cleanupNamespace(t, ctx, k8sClient, ns.Name)
