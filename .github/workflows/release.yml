@@ -28,7 +28,7 @@ jobs:
           - cli
     steps:
       - uses: actions/checkout@v4
-      - uses: azrtydxb/ant-setup-action@7c6f1b8ca34a0a127b43040f4e16bbafdbd83791 # v1
+      - uses: azrtydxb/ant-setup-action@549f7472cf26b0885441ed9f9a7fab0277545000 # v1
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -100,8 +100,17 @@ jobs:
     runs-on: ${{ matrix.arch.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: azrtydxb/ant-setup-action@7c6f1b8ca34a0a127b43040f4e16bbafdbd83791 # v1
-        if: startsWith(matrix.arch.runner, 'arc-azrtydxb') # GitHub-hosted arm64 legs keep the public upstreams
+      # GitHub-hosted arm64 legs keep the public package upstreams but use the Ant build cache.
+      - id: ant
+        uses: azrtydxb/ant-setup-action@549f7472cf26b0885441ed9f9a7fab0277545000 # v1
+        with:
+          build-cache: "true"
+          cache-name: ${{ matrix.image.name }}
+          arch-suffix: ${{ matrix.arch.name }}
+          go: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
+          npm: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
+          cargo: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
+          pip: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -131,8 +140,8 @@ jobs:
             ghcr.io/azrtydxb/novastor/novastor-${{ matrix.image.name }}:v${{ steps.version.outputs.full }}-${{ matrix.arch.name }}
             ghcr.io/azrtydxb/novastor/novastor-${{ matrix.image.name }}:v${{ steps.version.outputs.minor }}-${{ matrix.arch.name }}
             ghcr.io/azrtydxb/novastor/novastor-${{ matrix.image.name }}:sha-${{ github.sha }}-${{ matrix.arch.name }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: ${{ steps.ant.outputs.cache-from }}
+          cache-to: ${{ steps.ant.outputs.cache-to }}
 
   docker-manifest:
     name: "Docker Manifest ${{ matrix.image }}"
