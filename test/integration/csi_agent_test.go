@@ -7,56 +7,22 @@ import (
 	"context"
 	"crypto/rand"
 	"hash/crc32"
-	"net"
 	"testing"
 
 	"github.com/azrtydxb/novastor/internal/agent"
 	"github.com/azrtydxb/novastor/internal/chunk"
 	"github.com/azrtydxb/novastor/internal/metadata"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
-// setupChunkAgent creates a LocalStore, starts a chunk gRPC server, and returns
-// an agent.Client connected to it. Cleanup is registered with t.Cleanup.
-func setupChunkAgent(t *testing.T) (*chunk.LocalStore, *agent.Client) {
+// setupChunkAgent starts an in-memory chunk gRPC server and returns an
+// agent.Client connected to it.
+func setupChunkAgent(t *testing.T) *agent.Client {
 	t.Helper()
-
-	chunkDir := t.TempDir()
-
-	localStore, err := chunk.NewLocalStore(chunkDir)
-	if err != nil {
-		t.Fatalf("NewLocalStore failed: %v", err)
-	}
-
-	chunkLis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to listen for chunk server: %v", err)
-	}
-	chunkAddr := chunkLis.Addr().String()
-
-	chunkSrv := grpc.NewServer()
-	chunkServer := agent.NewChunkServer(localStore)
-	chunkServer.Register(chunkSrv)
-	t.Cleanup(func() { chunkSrv.GracefulStop() })
-	go func() {
-		_ = chunkSrv.Serve(chunkLis)
-	}()
-
-	agentClient, err := agent.Dial(
-		chunkAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatalf("Failed to dial chunk server: %v", err)
-	}
-	t.Cleanup(func() { agentClient.Close() })
-
-	return localStore, agentClient
+	return startChunkAgent(t)
 }
 
 func TestCSIAgent_WriteReadChunks(t *testing.T) {
-	_, agentClient := setupChunkAgent(t)
+	agentClient := setupChunkAgent(t)
 	ctx := context.Background()
 
 	// Create test data (smaller than 4MB chunk size).
@@ -91,7 +57,7 @@ func TestCSIAgent_WriteReadChunks(t *testing.T) {
 }
 
 func TestCSIAgent_MultipleChunks(t *testing.T) {
-	_, agentClient := setupChunkAgent(t)
+	agentClient := setupChunkAgent(t)
 	ctx := context.Background()
 
 	// Simulate a volume with multiple chunks.
@@ -149,7 +115,7 @@ func TestCSIAgent_MultipleChunks(t *testing.T) {
 }
 
 func TestCSIAgent_DeleteChunks(t *testing.T) {
-	_, agentClient := setupChunkAgent(t)
+	agentClient := setupChunkAgent(t)
 	ctx := context.Background()
 
 	// Write a chunk.
@@ -187,7 +153,7 @@ func TestCSIAgent_DeleteChunks(t *testing.T) {
 }
 
 func TestCSIAgent_VolumeChunkLifecycle(t *testing.T) {
-	_, agentClient := setupChunkAgent(t)
+	agentClient := setupChunkAgent(t)
 	_, metaClient := setupMetadataService(t)
 	ctx := context.Background()
 
@@ -261,7 +227,7 @@ func TestCSIAgent_VolumeChunkLifecycle(t *testing.T) {
 }
 
 func TestCSIAgent_LocalChunkStore(t *testing.T) {
-	_, agentClient := setupChunkAgent(t)
+	agentClient := setupChunkAgent(t)
 	ctx := context.Background()
 
 	// Test using LocalChunkStore adapter (used by S3 gateway).

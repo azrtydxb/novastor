@@ -11,21 +11,20 @@ import (
 	"time"
 
 	"github.com/azrtydxb/novastor/internal/agent"
-	"github.com/azrtydxb/novastor/internal/chunk"
 	"github.com/azrtydxb/novastor/internal/metadata"
+	"github.com/azrtydxb/novastor/test/internal/memchunk"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 // testCluster sets up a minimal NovaStor cluster for testing.
 // It bootstraps a single-node Raft metadata store, starts a chunk agent
-// backed by a LocalStore, and provides gRPC clients for both.
+// backed by an in-memory chunk service, and provides gRPC clients for both.
 type testCluster struct {
 	metaStore   *metadata.RaftStore
 	metaServer  *grpc.Server
 	metaClient  *metadata.GRPCClient
 	metaAddr    string
-	chunkStore  chunk.Store
 	chunkServer *grpc.Server
 	agentClient *agent.Client
 	chunkAddr   string
@@ -105,15 +104,10 @@ func newTestCluster(t *testing.T) *testCluster {
 	}()
 
 	// 6. Create and start chunk agent gRPC server.
-	localStore, err := chunk.NewLocalStore(chunkDir)
-	if err != nil {
-		tc.Close()
-		t.Fatalf("Failed to create LocalStore: %v", err)
-	}
-	tc.chunkStore = localStore
-
+	// Chunk I/O is served by the Rust data-plane in production; Go e2e uses an
+	// in-memory ChunkService.
 	chunkSrv := grpc.NewServer()
-	chunkServer := agent.NewChunkServer(localStore)
+	chunkServer := memchunk.New()
 	chunkServer.Register(chunkSrv)
 	tc.chunkServer = chunkSrv
 	tc.cleanups = append(tc.cleanups, func() {

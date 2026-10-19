@@ -4,22 +4,17 @@ package integration
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"encoding/xml"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 
 	"github.com/azrtydxb/novastor/internal/agent"
-	"github.com/azrtydxb/novastor/internal/chunk"
 	s3gw "github.com/azrtydxb/novastor/internal/s3"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -37,35 +32,7 @@ func setupS3Gateway(t *testing.T) *httptest.Server {
 	_, metaClient := setupMetadataService(t)
 
 	// Start chunk agent.
-	chunkDir := t.TempDir()
-	localStore, err := chunk.NewLocalStore(chunkDir)
-	if err != nil {
-		t.Fatalf("NewLocalStore failed: %v", err)
-	}
-
-	chunkLc := net.ListenConfig{}
-	chunkLis, err := chunkLc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to listen for chunk server: %v", err)
-	}
-	chunkAddr := chunkLis.Addr().String()
-
-	chunkSrv := grpc.NewServer()
-	chunkServer := agent.NewChunkServer(localStore)
-	chunkServer.Register(chunkSrv)
-	t.Cleanup(func() { chunkSrv.GracefulStop() })
-	go func() {
-		_ = chunkSrv.Serve(chunkLis)
-	}()
-
-	agentClient, err := agent.Dial(
-		chunkAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatalf("Failed to dial chunk server: %v", err)
-	}
-	t.Cleanup(func() { agentClient.Close() })
+	agentClient := startChunkAgent(t)
 
 	// Create S3 adapters.
 	metaAdapter := s3gw.NewMetadataAdapter(metaClient)

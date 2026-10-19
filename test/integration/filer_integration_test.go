@@ -5,14 +5,9 @@ package integration
 import (
 	"bytes"
 	"context"
-	"net"
 	"testing"
 
-	"github.com/azrtydxb/novastor/internal/agent"
-	"github.com/azrtydxb/novastor/internal/chunk"
 	"github.com/azrtydxb/novastor/internal/filer"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // setupFilerWithDeps creates an in-process metadata store, chunk agent, and
@@ -25,34 +20,7 @@ func setupFilerWithDeps(t *testing.T) *filer.FileSystem {
 	_, metaClient := setupMetadataService(t)
 
 	// Start chunk agent.
-	chunkDir := t.TempDir()
-	localStore, err := chunk.NewLocalStore(chunkDir)
-	if err != nil {
-		t.Fatalf("NewLocalStore failed: %v", err)
-	}
-
-	chunkLis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to listen for chunk server: %v", err)
-	}
-	chunkAddr := chunkLis.Addr().String()
-
-	chunkSrv := grpc.NewServer()
-	chunkServer := agent.NewChunkServer(localStore)
-	chunkServer.Register(chunkSrv)
-	t.Cleanup(func() { chunkSrv.GracefulStop() })
-	go func() {
-		_ = chunkSrv.Serve(chunkLis)
-	}()
-
-	agentClient, err := agent.Dial(
-		chunkAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatalf("Failed to dial chunk server: %v", err)
-	}
-	t.Cleanup(func() { agentClient.Close() })
+	agentClient := startChunkAgent(t)
 
 	// Create filer adapters.
 	metaAdapter := filer.NewMetadataAdapter(metaClient)

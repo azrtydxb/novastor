@@ -110,13 +110,8 @@ func testStoragePool(t *testing.T, ctx context.Context, k8sClient client.Client)
 					"novastor.io/storage-tier": "nvme",
 				},
 			},
-			DataProtection: novastorv1alpha1.DataProtectionSpec{
-				Mode: "replication",
-				Replication: &novastorv1alpha1.ReplicationSpec{
-					Factor:      3,
-					WriteQuorum: 2,
-				},
-			},
+			BackendType: "file",
+			FileBackend: &novastorv1alpha1.FileBackendSpec{Path: "/var/lib/novastor/file"},
 		},
 	}
 
@@ -130,8 +125,8 @@ func testStoragePool(t *testing.T, ctx context.Context, k8sClient client.Client)
 	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: pool.Namespace, Name: pool.Name}, &fetchedPool); err != nil {
 		t.Fatalf("failed to get StoragePool: %v", err)
 	}
-	t.Logf("StoragePool created successfully: name=%s, protection=%s",
-		fetchedPool.Name, fetchedPool.Spec.DataProtection.Mode)
+	t.Logf("StoragePool created successfully: name=%s, backend=%s",
+		fetchedPool.Name, fetchedPool.Spec.BackendType)
 }
 
 func testBlockVolume(t *testing.T, ctx context.Context, k8sClient client.Client) {
