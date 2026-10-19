@@ -181,7 +181,9 @@ jobs:
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/novastor/novastor-${{ matrix.image }}
         run: |
-          docker manifest create ${IMAGE}:nightly \
-            --amend ${IMAGE}:nightly-amd64 \
-            --amend ${IMAGE}:nightly-arm64
-          docker manifest push ${IMAGE}:nightly
+          # imagetools, not `docker manifest`: build-push-action pushes each arch
+          # as an index (with its attestation), which `docker manifest create`
+          # refuses to nest ("... is a manifest list").
+          docker buildx imagetools create -t "${IMAGE}:nightly" \
+            "${IMAGE}:nightly-amd64" \
+            "${IMAGE}:nightly-arm64"
