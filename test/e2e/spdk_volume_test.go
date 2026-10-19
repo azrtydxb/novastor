@@ -5,7 +5,6 @@ package e2e
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -23,6 +22,7 @@ const (
 	testVolumeID  = "e2e-test-vol-001"
 	testListenIP  = "127.0.0.1"
 	testPort      = "4430"
+	testPortNum   = uint32(4430)
 )
 
 // TestSPDKVolumeLifecycle tests the complete lifecycle of a chunk-backed volume
@@ -49,7 +49,7 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 	defer client.Close()
 
 	// Verify the data-plane is reachable.
-	ver, err := client.GetVersion()
+	ver, _, err := client.GetVersion()
 	if err != nil {
 		t.Fatalf("failed to get data-plane version: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestSPDKVolumeLifecycle(t *testing.T) {
 
 	// Step 4: Create an NVMe-oF target exposing the chunk volume bdev.
 	t.Log("creating NVMe-oF target")
-	nqn, err := client.CreateNvmfTarget(testVolumeID, bdevName, testListenIP, testPort, "optimized", 1)
+	nqn, err := client.CreateNvmfTarget(testVolumeID, bdevName, testListenIP, testPortNum, "optimized", 1)
 	if err != nil {
 		t.Fatalf("CreateNvmfTarget failed: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestSPDKReplicaBdev(t *testing.T) {
 	}
 
 	t.Log("creating replica bdev")
-	if err := client.CreateReplicaBdev("e2e-replica", targets, 1073741824, "round-robin"); err != nil {
+	if _, err := client.CreateReplicaBdev("e2e-replica", targets, 1073741824, "round-robin"); err != nil {
 		t.Fatalf("CreateReplicaBdev failed: %v", err)
 	}
 
