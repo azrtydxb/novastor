@@ -37,7 +37,7 @@ func TestBlockStorage_ProvisionWriteReadDelete(t *testing.T) {
 	createResp, err := ctrl.CreateVolume(ctx, &csipb.CreateVolumeRequest{
 		Name: "test-volume-1",
 		CapacityRange: &csipb.CapacityRange{
-			RequiredBytes: 8 * 1024 * 1024, // 8 MiB = 2 chunks
+			RequiredBytes: 8 * 1024 * 1024, // 8 MiB
 		},
 		VolumeCapabilities: []*csipb.VolumeCapability{
 			{
@@ -75,8 +75,9 @@ func TestBlockStorage_ProvisionWriteReadDelete(t *testing.T) {
 	if volMeta.SizeBytes != 8*1024*1024 {
 		t.Errorf("Expected size 8 MiB, got %d", volMeta.SizeBytes)
 	}
-	if len(volMeta.ChunkIDs) != 2 {
-		t.Errorf("Expected 2 chunk IDs, got %d", len(volMeta.ChunkIDs))
+	// The controller allocates chunks lazily (on first write), so a new volume has none.
+	if len(volMeta.ChunkIDs) != 0 {
+		t.Errorf("Expected no chunk IDs on a new volume (lazy allocation), got %d", len(volMeta.ChunkIDs))
 	}
 	t.Logf("Volume metadata verified: %d chunks", len(volMeta.ChunkIDs))
 

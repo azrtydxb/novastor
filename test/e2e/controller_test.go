@@ -76,7 +76,11 @@ func TestControllerDeployment(t *testing.T) {
 			},
 		},
 	}
-	if err := k8sClient.Create(ctx, ns); err != nil && !errors.IsAlreadyExists(err) {
+	if err := k8sClient.Create(ctx, ns); errors.IsForbidden(err) {
+		// In-cluster config on a CI runner whose service account may not create namespaces:
+		// there is no cluster to test against (the kind workflow, e2e.yaml, provides one).
+		t.Skipf("skipping: not permitted to create namespaces: %v", err)
+	} else if err != nil && !errors.IsAlreadyExists(err) {
 		t.Fatalf("failed to create test namespace: %v", err)
 	}
 	defer cleanupNamespace(t, ctx, k8sClient, ns.Name)
@@ -136,9 +140,10 @@ func testBlockVolume(t *testing.T, ctx context.Context, k8sClient client.Client)
 			Namespace: "novastor-e2e-test",
 		},
 		Spec: novastorv1alpha1.BlockVolumeSpec{
-			Pool:       "e2e-test-pool",
-			Size:       "10Gi",
-			AccessMode: "ReadWriteOnce",
+			Pool:           "e2e-test-pool",
+			Size:           "10Gi",
+			AccessMode:     "ReadWriteOnce",
+			DataProtection: e2eDataProtection(),
 		},
 	}
 
@@ -163,9 +168,10 @@ func testSharedFilesystem(t *testing.T, ctx context.Context, k8sClient client.Cl
 			Namespace: "novastor-e2e-test",
 		},
 		Spec: novastorv1alpha1.SharedFilesystemSpec{
-			Pool:       "e2e-test-pool",
-			Capacity:   "50Gi",
-			AccessMode: "ReadWriteMany",
+			Pool:           "e2e-test-pool",
+			Capacity:       "50Gi",
+			AccessMode:     "ReadWriteMany",
+			DataProtection: e2eDataProtection(),
 			Export: &novastorv1alpha1.ExportSpec{
 				Protocol: "nfs",
 			},
@@ -193,7 +199,8 @@ func testObjectStore(t *testing.T, ctx context.Context, k8sClient client.Client)
 			Namespace: "novastor-e2e-test",
 		},
 		Spec: novastorv1alpha1.ObjectStoreSpec{
-			Pool: "e2e-test-pool",
+			Pool:           "e2e-test-pool",
+			DataProtection: e2eDataProtection(),
 			Endpoint: novastorv1alpha1.ObjectEndpointSpec{
 				Service: novastorv1alpha1.ObjectServiceSpec{
 					Port: 9000,
@@ -225,5 +232,17 @@ func cleanupNamespace(t *testing.T, ctx context.Context, k8sClient client.Client
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if err := k8sClient.Delete(ctx, ns); err != nil && !errors.IsNotFound(err) {
 		t.Logf("Warning: failed to delete namespace: %v", err)
+	}
+}
+
+// e2eDataProtection is the replication spec every volume-like resource must now carry
+// (spec.dataProtection is required by the CRDs).
+func e2eDataProtection() novastorv1alpha1.DataProtectionSpec {
+	return novastorv1alpha1.DataProtectionSpec{
+		Mode: "replication",
+		Replication: &novastorv1alpha1.ReplicationSpec{
+			Factor:      3,
+			WriteQuorum: 2,
+		},
 	}
 }
