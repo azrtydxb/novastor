@@ -19,6 +19,22 @@ linters:
     # Code quality (limited set - noisy ones disabled)
     - misspell
     - wastedassign
+  # v2 reads exclusions here (they sat under issues.exclude-rules, which v2 ignores).
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [bodyclose, noctx, ineffassign]
+      # Main functions use net.Listen without context (acceptable for entry points)
+      - path: cmd/
+        linters: [noctx]
+      # LVM store uses exec.Command without context (LVM commands are synchronous)
+      - path: internal/chunk/
+        linters: [noctx]
+      # NFS handler functions return errors via reply messages, not Go errors
+      - path: internal/filer/nfs_v3\.go
+        linters: [nilerr]
+      - path: internal/filer/nfs_mount\.go
+        linters: [nilerr]
 
 formatters:
   enable:
@@ -30,32 +46,3 @@ formatters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude:
-    - "exported: type name will be used as.*by other packages, and that stutters"  # Accept package.TypeName style
-    - "var-naming: avoid package names that conflict with Go standard library package names"  # Allow 'metrics' package
-  exclude-rules:
-    # Exclude issues in test files
-    - path: _test\.go
-      linters:
-        - bodyclose
-        - noctx
-        - ineffassign
-    # Main functions use net.Listen without context (acceptable for entry points)
-    - path: cmd/
-      linters:
-        - noctx
-    # LVM store uses exec.Command without context (LVM commands are synchronous)
-    - path: internal/chunk/
-      linters:
-        - noctx
-    # NFS handler functions return errors via reply messages, not Go errors
-    - path: internal/filer/nfs_v3\.go
-      linters:
-        - nilerr
-    - path: internal/filer/nfs_mount\.go
-      linters:
-        - nilerr
-  settings:
-    staticcheck:
-      checks:
-        - "all"
