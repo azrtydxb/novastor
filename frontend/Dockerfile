@@ -6,7 +6,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1 — Build
 # ---------------------------------------------------------------------------
-FROM rust:1.98-bookworm AS builder
+FROM rust:1.99-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
