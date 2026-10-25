@@ -115,7 +115,7 @@ jobs:
       # leg keeps a docker-container builder on its own Docker daemon.
       - id: builder
         if: startsWith(matrix.arch.runner, 'arc-azrtydxb')
-        uses: azrtydxb/.github/actions/setup-builder@d021f2ca9fa3d6682085a7d069b7c8b1dc7b9b80 # main
+        uses: azrtydxb/.github/actions/setup-builder@a6fb8e66bd50b411a1f20b826567ef320aec469b # main
       - name: Set up Docker Buildx
         id: buildx
         if: ${{ !startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
