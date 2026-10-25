@@ -65,6 +65,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
+          # Only the binaries: build-push-action also uploads *.dockerbuild build records to
+          # this run, and download-artifact fails on those (failing since 2026-10-21).
+          pattern: novastor-*
           merge-multiple: true
       - name: Generate checksums
         run: |

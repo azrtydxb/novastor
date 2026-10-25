@@ -61,6 +61,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
+          # Only the binaries, not build-push-action's *.dockerbuild records (see nightly.yml).
+          pattern: novastor-*
           merge-multiple: true
       - name: Generate checksums
         run: |
