@@ -1,0 +1,7 @@
+# actionlint cannot know about self-hosted runners, so without this every
+# `runs-on:` here reads as an unknown label. These are the ARC v2 scale sets,
+# registered to the azrtydxb ORG; each runner carries exactly ONE label.
+self-hosted-runner:
+  labels:
+    - arc-azrtydxb
+    - arc-azrtydxb-amd64

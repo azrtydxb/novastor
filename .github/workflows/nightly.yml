@@ -146,7 +146,14 @@ jobs:
           npm: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
           cargo: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
           pip: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
+      # ARC legs build on the runner pod's BuildKit sidecar; the GitHub-hosted arm64
+      # leg keeps a docker-container builder on its own Docker daemon.
+      - id: builder
+        if: startsWith(matrix.arch.runner, 'arc-azrtydxb')
+        uses: azrtydxb/.github/actions/setup-builder@d021f2ca9fa3d6682085a7d069b7c8b1dc7b9b80 # main
       - name: Set up Docker Buildx
+        id: buildx
+        if: ${{ !startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
         uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -159,6 +166,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.image.dockerfile }}
+          builder: ${{ steps.builder.outputs.name || steps.buildx.outputs.name }}
           platforms: linux/${{ matrix.arch.name }}
           push: true
           tags: ghcr.io/azrtydxb/novastor/novastor-${{ matrix.image.name }}:nightly-${{ matrix.arch.name }}
