@@ -215,7 +215,7 @@ jobs:
     runs-on: arc-azrtydxb
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Lint Helm chart
         run: helm lint deploy/helm/novastor/
       - name: Verify CRD sync
