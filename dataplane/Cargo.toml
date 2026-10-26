@@ -29,7 +29,7 @@ hex = "0.4"
 ring = "0.17"
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 anyerror = "0.1"
-redb = "3"
+redb = "4"
 rand = { version = "0.8", features = ["small_rng"] }
 base64 = "0.22"
 tonic = { version = "0.14", features = ["tls-ring", "transport"] }
