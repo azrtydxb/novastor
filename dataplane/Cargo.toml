@@ -31,7 +31,7 @@ openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 anyerror = "0.1"
 redb = "3"
 rand = { version = "0.9", features = ["small_rng"] }
-base64 = "0.22"
+base64 = "0.23"
 tonic = { version = "0.14", features = ["tls-ring", "transport"] }
 prost = "0.14"
 prost-types = "0.14"
