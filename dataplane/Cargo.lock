@@ -1347,7 +1347,7 @@ dependencies = [
  "anyerror",
  "async-stream",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bindgen",
  "cc",
  "clap",
