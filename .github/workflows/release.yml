@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-binaries:
     name: Build Binaries
-    runs-on: arc-azrtydxb-amd64
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         goos: [linux]
@@ -54,7 +54,7 @@ jobs:
   create-release:
     name: Create Release
     needs: build-binaries
-    runs-on: arc-azrtydxb-amd64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Download all artifacts
@@ -83,7 +83,7 @@ jobs:
       matrix:
         arch:
           - name: amd64
-            runner: arc-azrtydxb-amd64
+            runner: ubuntu-latest
           - name: arm64
             runner: ubuntu-24.04-arm
         image:
@@ -102,26 +102,20 @@ jobs:
     runs-on: ${{ matrix.arch.runner }}
     steps:
       - uses: actions/checkout@v4
-      # GitHub-hosted arm64 legs keep the public package upstreams but use the Ant build cache.
+      # Public package upstreams; only the Ant build cache is used.
       - id: ant
         uses: azrtydxb/ant-setup-action@v1
         with:
           build-cache: "true"
           cache-name: ${{ matrix.image.name }}
           arch-suffix: ${{ matrix.arch.name }}
-          go: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
-          npm: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
-          cargo: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
-          pip: ${{ startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
-      # ARC legs build on the runner pod's BuildKit sidecar; the GitHub-hosted arm64
-      # leg keeps a docker-container builder on its own Docker daemon.
-      - id: builder
-        if: startsWith(matrix.arch.runner, 'arc-azrtydxb')
-        uses: azrtydxb/.github/actions/setup-builder@main
+          go: "false"
+          npm: "false"
+          cargo: "false"
+          pip: "false"
       - name: Set up Docker Buildx
         id: buildx
-        if: ${{ !startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -143,7 +137,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.image.dockerfile }}
-          builder: ${{ steps.builder.outputs.name || steps.buildx.outputs.name }}
+          builder: ${{ steps.buildx.outputs.name }}
           platforms: linux/${{ matrix.arch.name }}
           push: true
           tags: |
@@ -155,7 +149,7 @@ jobs:
 
   docker-manifest:
     name: "Docker Manifest ${{ matrix.image }}"
-    runs-on: arc-azrtydxb-amd64
+    runs-on: ubuntu-latest
     needs: docker-images
     steps:
       - name: Extract version tags

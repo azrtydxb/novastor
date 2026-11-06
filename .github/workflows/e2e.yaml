@@ -15,7 +15,7 @@ jobs:
   e2e:
     name: E2E Controller Tests
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write # Kuvryn Ant OIDC (azrtydxb/ant-setup-action)

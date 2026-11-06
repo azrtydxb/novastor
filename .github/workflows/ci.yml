@@ -24,7 +24,7 @@ permissions:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     outputs:
       go: ${{ steps.filter.outputs.go }}
       helm: ${{ steps.filter.outputs.helm }}
@@ -57,7 +57,7 @@ jobs:
     # nightly integration run always has lint signal (paths-filter on `schedule`
     # only diffs the last commit, so it cannot be trusted to select jobs).
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' }}
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azrtydxb/ant-setup-action@v1
@@ -90,7 +90,7 @@ jobs:
     name: Security
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,7 +117,7 @@ jobs:
     needs: changes
     # Unit tier on PR (path-filtered); also runs on every non-PR event (see `lint`).
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' }}
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azrtydxb/ant-setup-action@v1
@@ -142,7 +142,7 @@ jobs:
     name: Build
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         binary:
@@ -170,7 +170,7 @@ jobs:
     needs: [changes, test]
     # Heavy, service-backed: integration tier (nightly/manual) only, never on PR.
     if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -194,7 +194,7 @@ jobs:
     needs: [changes, test]
     # Heavy, needs cluster/services: integration tier (nightly/manual) only, never on PR.
     if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -212,7 +212,7 @@ jobs:
     name: Helm Lint
     needs: changes
     if: needs.changes.outputs.helm == 'true'
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
@@ -253,7 +253,7 @@ jobs:
     name: Protobuf Sync
     needs: changes
     if: needs.changes.outputs.proto == 'true'
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azrtydxb/ant-setup-action@v1
@@ -302,7 +302,7 @@ jobs:
     name: Docs Build
     needs: changes
     if: needs.changes.outputs.docs == 'true'
-    runs-on: arc-azrtydxb
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:

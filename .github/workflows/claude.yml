@@ -15,7 +15,7 @@ jobs:
   claude:
     name: Claude Code
     if: contains(github.event.comment.body, '@claude')
-    runs-on: arc-azrtydxb-amd64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
