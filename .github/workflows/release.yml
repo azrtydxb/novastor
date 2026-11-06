@@ -28,7 +28,7 @@ jobs:
           - cli
     steps:
       - uses: actions/checkout@v4
-      - uses: azrtydxb/ant-setup-action@549f7472cf26b0885441ed9f9a7fab0277545000 # v1
+      - uses: azrtydxb/ant-setup-action@v1
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -104,7 +104,7 @@ jobs:
       - uses: actions/checkout@v4
       # GitHub-hosted arm64 legs keep the public package upstreams but use the Ant build cache.
       - id: ant
-        uses: azrtydxb/ant-setup-action@549f7472cf26b0885441ed9f9a7fab0277545000 # v1
+        uses: azrtydxb/ant-setup-action@v1
         with:
           build-cache: "true"
           cache-name: ${{ matrix.image.name }}
@@ -117,7 +117,7 @@ jobs:
       # leg keeps a docker-container builder on its own Docker daemon.
       - id: builder
         if: startsWith(matrix.arch.runner, 'arc-azrtydxb')
-        uses: azrtydxb/.github/actions/setup-builder@a6fb8e66bd50b411a1f20b826567ef320aec469b # main
+        uses: azrtydxb/.github/actions/setup-builder@main
       - name: Set up Docker Buildx
         id: buildx
         if: ${{ !startsWith(matrix.arch.runner, 'arc-azrtydxb') }}
