@@ -35,7 +35,7 @@ jobs:
           cache: true
 
       - name: Setup kind
-        uses: helm/kind-action@v1.15.1
+        uses: helm/kind-action@v1.15.2
         with:
           cluster_name: kind
           version: v0.20.0
