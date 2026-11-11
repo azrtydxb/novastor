@@ -7,7 +7,7 @@
 # --------------------------------------------------------------------------
 # Stage 1: SPDK builder
 # --------------------------------------------------------------------------
-FROM ubuntu:22.04 AS spdk-builder
+FROM ubuntu:25.10 AS spdk-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git ca-certificates python3 python3-pip python3-dev \
