@@ -189,7 +189,7 @@ csi:
         memory: 256Mi
   provisioner:
     timeout: "1800s"            # Large timeout: chunk-level provisioning takes ~300ms/chunk (10Gi=2560 chunks≈13min)
-    image: registry.k8s.io/sig-storage/csi-provisioner:v5.0.1
+    image: registry.k8s.io/sig-storage/csi-provisioner:v6.4.0
     resources:
       requests:
         cpu: 50m
