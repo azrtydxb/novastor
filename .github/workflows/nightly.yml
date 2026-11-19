@@ -27,7 +27,7 @@ jobs:
           - s3gw
           - cli
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: azrtydxb/ant-setup-action@v1
@@ -58,7 +58,7 @@ jobs:
     needs: nightly-build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Download all artifacts
@@ -137,7 +137,7 @@ jobs:
             dockerfile: build/Dockerfile.s3gw
     runs-on: ${{ matrix.arch.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Public package upstreams; only the Ant build cache is used.
       - id: ant
         uses: azrtydxb/ant-setup-action@v1
